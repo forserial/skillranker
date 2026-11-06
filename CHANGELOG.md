@@ -4,6 +4,13 @@
 
 ### Added
 
+- Windows builds. Ranking, roster discovery, Claude transcript and session reads
+  run on Windows through a no-follow, handle-pinned file layer; components that
+  need an owner-only private store (cache, ledger, enforced allowance, private
+  exports and replay files) and cass sessions fail closed there. `HOME` falls
+  back to `USERPROFILE` on Windows only. A tag-triggered GitHub Actions workflow
+  builds Linux, macOS and Windows release archives.
+
 - An offline corpus-to-frame exporter connects validated adjudicated primary
   cases and explicitly recorded outcomes to `sr eval`. It preserves failures
   and unknown judgments, checks case/roster/split bindings, and publishes private

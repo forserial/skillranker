@@ -1,30 +1,45 @@
 //! Private, local cache directory admission. All opens walk trusted descriptors.
 
+#[cfg(unix)]
 use super::platform::{DirectoryIdentity, local_filesystem, storage_path};
+#[cfg(unix)]
 use super::{
     CACHE_FILE, CACHE_QUOTA_BYTES, CacheCapacityReport, MAINTENANCE_RESERVE_BYTES,
     MUTATION_RESERVE_BYTES, StoreError, check_work,
 };
+#[cfg(unix)]
 use crate::runtime::EntryClock;
+#[cfg(unix)]
 use asupersync::Cx;
+#[cfg(unix)]
 use nix::dir::Dir;
+#[cfg(unix)]
 use nix::errno::Errno;
+#[cfg(unix)]
 use nix::fcntl::{AtFlags, OFlag, open, openat};
+#[cfg(unix)]
 use nix::sys::stat::{FileStat, Mode, SFlag, fstat, fstatat, mkdirat};
+#[cfg(unix)]
 use nix::sys::statfs::fstatfs;
+#[cfg(unix)]
 use nix::sys::statvfs::fstatvfs;
+#[cfg(unix)]
 use std::fs::File;
-use std::path::{Component, Path, PathBuf};
+#[cfg(unix)]
+use std::path::Component;
+use std::path::{Path, PathBuf};
 
 // Bound metadata work even when many empty files consume no byte quota. The
 // normal cache has only its database and SQLite sidecars. No file is removed
 // when this limit is exceeded; optional caching is refused instead.
+#[cfg(unix)]
 const MAX_CACHE_DIRECTORY_ENTRIES: usize = 4096;
 
 /// Inspect the held directory, not a second pathname that may name a different
 /// directory. Open a fresh directory stream: dup/try_clone would share an offset
 /// with the held descriptor and concurrent or repeated scans could skip files.
 /// Names remain OS bytes all the way from readdir to no-follow fstatat.
+#[cfg(unix)]
 fn inspect_directory(
     handle: &File,
     max_entries: usize,
@@ -72,12 +87,14 @@ fn inspect_directory(
     }
 }
 
+#[cfg(unix)]
 pub(super) struct PrivateDirectory {
     pub path: PathBuf,
     handle: File,
     identity: DirectoryIdentity,
 }
 
+#[cfg(unix)]
 fn io_error(error: Errno) -> StoreError {
     match error {
         Errno::ENOENT => StoreError::Missing,
@@ -87,6 +104,7 @@ fn io_error(error: Errno) -> StoreError {
     }
 }
 
+#[cfg(unix)]
 fn owned_regular(stat: &FileStat, uid: u32) -> Result<(), StoreError> {
     if SFlag::from_bits_truncate(stat.st_mode) != SFlag::S_IFREG || stat.st_nlink != 1 {
         return Err(StoreError::UnsafePath);
@@ -97,6 +115,7 @@ fn owned_regular(stat: &FileStat, uid: u32) -> Result<(), StoreError> {
     Ok(())
 }
 
+#[cfg(unix)]
 fn trusted_ancestor(stat: &FileStat, uid: u32, leaf: bool) -> Result<(), StoreError> {
     if SFlag::from_bits_truncate(stat.st_mode) != SFlag::S_IFDIR {
         return Err(StoreError::UnsafePath);
@@ -187,6 +206,7 @@ impl PermissionRefusal {
 /// Names the first path in the chain that fails the owner-only rules, or `None` when the chain is
 /// fine and the refusal came from somewhere else — a read-only filesystem, for instance. `None` is
 /// not a claim that nothing is wrong; it means this is not the thing that was wrong.
+#[cfg(unix)]
 pub fn diagnose_owner_only(path: &Path) -> Option<PermissionRefusal> {
     use std::os::unix::fs::MetadataExt;
     let uid = nix::unistd::getuid().as_raw();
@@ -260,6 +280,7 @@ pub fn diagnose_owner_only(path: &Path) -> Option<PermissionRefusal> {
     None
 }
 
+#[cfg(unix)]
 fn recording_capacity(bytes: u64, available: u128) -> Result<(), StoreError> {
     if bytes > CACHE_QUOTA_BYTES - MAINTENANCE_RESERVE_BYTES - MUTATION_RESERVE_BYTES {
         return Err(StoreError::Quota);
@@ -270,6 +291,7 @@ fn recording_capacity(bytes: u64, available: u128) -> Result<(), StoreError> {
     Ok(())
 }
 
+#[cfg(unix)]
 impl PrivateDirectory {
     pub fn open(
         path: PathBuf,
@@ -476,6 +498,82 @@ impl PrivateDirectory {
         }
         Ok(())
     }
+}
+
+/// Windows: the cache's owner-only directory admission (descriptor-relative
+/// opens, exact `0700`/`0600` modes, single-link files and an admitted local
+/// filesystem) has no audited equivalent here, so no private directory can be
+/// admitted. Opening reports `UnsupportedFilesystem`, which callers already
+/// treat as an unqualified store: optional caching degrades visibly and
+/// required storage fails. The value is uninhabited, so no other method can
+/// run against an unverified directory.
+#[cfg(not(unix))]
+#[allow(dead_code)] // Mirrors the Unix surface; uninhabited here.
+pub(super) struct PrivateDirectory {
+    pub path: PathBuf,
+    never: std::convert::Infallible,
+}
+
+#[cfg(not(unix))]
+#[allow(dead_code)] // Mirrors the Unix surface; uninhabited here.
+impl PrivateDirectory {
+    pub fn open(
+        _: PathBuf,
+        _: bool,
+        _: crate::runtime::EntryClock,
+        _: &asupersync::Cx,
+    ) -> Result<Self, super::StoreError> {
+        Err(super::StoreError::UnsupportedFilesystem)
+    }
+
+    pub fn database_path(&self) -> PathBuf {
+        match self.never {}
+    }
+
+    pub fn revalidate(
+        &self,
+        _: crate::runtime::EntryClock,
+        _: &asupersync::Cx,
+    ) -> Result<(), super::StoreError> {
+        match self.never {}
+    }
+
+    pub fn inspect_files(&self) -> Result<u64, super::StoreError> {
+        match self.never {}
+    }
+
+    pub fn capacity_report(&self) -> Result<super::CacheCapacityReport, super::StoreError> {
+        match self.never {}
+    }
+
+    pub fn admit_space(&self) -> Result<(), super::StoreError> {
+        match self.never {}
+    }
+
+    pub fn open_database_file(
+        &self,
+        _: bool,
+        _: crate::runtime::EntryClock,
+        _: &asupersync::Cx,
+    ) -> Result<std::fs::File, super::StoreError> {
+        match self.never {}
+    }
+
+    pub fn verify_database_file(
+        &self,
+        _: &std::fs::File,
+        _: crate::runtime::EntryClock,
+        _: &asupersync::Cx,
+    ) -> Result<(), super::StoreError> {
+        match self.never {}
+    }
+}
+
+/// No owner-only chain is checked on this platform, so there is nothing to
+/// point at; `None` is the documented "not this" answer.
+#[cfg(not(unix))]
+pub fn diagnose_owner_only(_: &Path) -> Option<PermissionRefusal> {
+    None
 }
 
 #[cfg(test)]

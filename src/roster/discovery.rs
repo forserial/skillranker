@@ -15,14 +15,20 @@ use crate::authorized_read::{AuthorizedRoot, FileIdentity, ReadError};
 use crate::identity::{HarnessId, IdentityError, SourceId};
 use crate::limits::{DISCOVERY_FILES, DISCOVERY_PARSED_BYTES, ResourceLimit, SKILL_FILE_BYTES};
 use crate::roster::{LocalPath, Visibility};
+#[cfg(unix)]
 use nix::dir::{Dir, Type};
+#[cfg(unix)]
 use nix::errno::Errno;
+#[cfg(unix)]
 use nix::fcntl::{AtFlags, OFlag, openat};
+#[cfg(unix)]
 use nix::sys::stat::{Mode, SFlag, fstatat};
 use std::collections::VecDeque;
 use std::ffi::{OsStr, OsString};
 use std::fmt;
+#[cfg(unix)]
 use std::os::fd::{AsFd, BorrowedFd};
+#[cfg(unix)]
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 
@@ -497,6 +503,7 @@ impl Discovery {
 
     // A failed readdir need not advance its stream. Abandon that directory
     // after one error rather than retrying forever outside the entry budget.
+    #[cfg(unix)]
     fn next_entry<T>(&mut self, next: Option<Result<T, Errno>>, source: &SourceId) -> Option<T> {
         match next {
             Some(Ok(entry)) => Some(entry),
@@ -508,6 +515,7 @@ impl Discovery {
         }
     }
 
+    #[cfg(unix)]
     fn walk_roots<E>(
         &mut self,
         planned_roots: &[PlannedRoot],
@@ -664,6 +672,7 @@ impl Discovery {
     // `dev_t`/`ino_t` widths differ by platform: the casts below are identity
     // on Linux and widening on macOS.
     #[allow(clippy::unnecessary_cast)]
+    #[cfg(unix)]
     fn push_candidate(
         &mut self,
         planned: &PlannedRoot,
@@ -728,6 +737,7 @@ impl Discovery {
     }
 }
 
+#[cfg(unix)]
 fn sflag_to_type(mode: nix::sys::stat::mode_t) -> Type {
     let bits = SFlag::from_bits_truncate(mode) & SFlag::S_IFMT;
     match bits {
@@ -738,6 +748,209 @@ fn sflag_to_type(mode: nix::sys::stat::mode_t) -> Type {
         SFlag::S_IFCHR => Type::CharacterDevice,
         SFlag::S_IFBLK => Type::BlockDevice,
         _ => Type::File,
+    }
+}
+
+/// Windows walk. Windows has no `openat`/`readdir` pair, so each visited
+/// directory is reached by path from its pinned root, with every directory on
+/// that path held open without `FILE_SHARE_DELETE` while it is listed: none
+/// can be renamed or replaced (for example by a junction) mid-listing. Links
+/// (symbolic links and junctions) are classified, never descended, exactly as
+/// the Unix walk skips symlinked directories. Budgets, ordering, checkpoints
+/// and diagnostics match the Unix walk.
+#[cfg(windows)]
+impl Discovery {
+    fn walk_roots<E>(
+        &mut self,
+        planned_roots: &[PlannedRoot],
+        limits: DiscoveryLimits,
+        checkpoint: &mut impl FnMut() -> Result<(), E>,
+    ) -> Result<(), E> {
+        use crate::authorized_read::{FileKind, open_windows, stat_windows, valid_component};
+        checkpoint()?;
+        let mut queue = VecDeque::new();
+        for planned in planned_roots {
+            checkpoint()?;
+            if let Some(root) = planned.root.as_ref() {
+                queue.push_back((planned, root, PathBuf::new(), 0usize));
+            } else {
+                self.note(Diagnostic::RootUnreadable(planned.spec.source.clone()));
+            }
+        }
+        while let Some((planned, root, relative, depth)) = queue.pop_front() {
+            checkpoint()?;
+            // Hold the chain from the pinned root to this directory.
+            let mut path = root.windows_handle().path().to_path_buf();
+            let mut held = Vec::new();
+            let mut outcome = Ok(());
+            for component in relative.components() {
+                checkpoint()?;
+                path.push(component.as_os_str());
+                let opened = open_windows(&path, false, true)
+                    .map_err(|_| false)
+                    .and_then(|file| {
+                        stat_windows(&file)
+                            .map(|stat| (file, stat))
+                            .map_err(|_| false)
+                    });
+                match opened {
+                    Ok((file, stat)) if stat.kind() == FileKind::Directory => held.push(file),
+                    Ok((_, stat)) if stat.kind() == FileKind::Symlink => {
+                        outcome = Err(true);
+                        break;
+                    }
+                    _ => {
+                        outcome = Err(false);
+                        break;
+                    }
+                }
+            }
+            checkpoint()?;
+            match outcome {
+                Ok(()) => {}
+                Err(true) => {
+                    self.note(Diagnostic::SymlinkedDirectorySkipped(
+                        planned.spec.source.clone(),
+                    ));
+                    continue;
+                }
+                Err(false) => {
+                    self.note(Diagnostic::DirectoryUnreadable(planned.spec.source.clone()));
+                    continue;
+                }
+            }
+            let Ok(listing) = std::fs::read_dir(&path) else {
+                self.note(Diagnostic::DirectoryUnreadable(planned.spec.source.clone()));
+                continue;
+            };
+            let mut holds_skill_file = false;
+            let mut subdirectories = Vec::new();
+            for entry in listing {
+                checkpoint()?;
+                let Ok(entry) = entry else {
+                    self.note(Diagnostic::EntryUnreadable(planned.spec.source.clone()));
+                    continue;
+                };
+                let name = entry.file_name();
+                self.entries_examined = self.entries_examined.saturating_add(1);
+                if limits.entries.check(self.entries_examined).is_err() {
+                    self.stop(Diagnostic::EntryLimitReached);
+                    return Ok(());
+                }
+                if !valid_component(&name) {
+                    // Win32 would resolve this name to a different object.
+                    self.note(Diagnostic::EntryUnreadable(planned.spec.source.clone()));
+                    continue;
+                }
+                // From the directory listing itself: a reparse-point link is
+                // reported as a symlink here and is not followed.
+                let Ok(kind) = entry.file_type() else {
+                    self.note(Diagnostic::EntryUnreadable(planned.spec.source.clone()));
+                    continue;
+                };
+                checkpoint()?;
+                if name == planned.spec.skill_file
+                    && !(relative.as_os_str().is_empty() && kind.is_dir())
+                {
+                    holds_skill_file = true;
+                    self.push_candidate(
+                        planned,
+                        &path,
+                        &relative,
+                        &name,
+                        kind.is_symlink(),
+                        limits,
+                    );
+                } else if kind.is_symlink() {
+                    self.note(Diagnostic::SymlinkedDirectorySkipped(
+                        planned.spec.source.clone(),
+                    ));
+                } else if kind.is_dir() {
+                    subdirectories.push(name);
+                }
+                checkpoint()?;
+                if self.stopped {
+                    return Ok(());
+                }
+            }
+            drop(held);
+            if holds_skill_file && !relative.as_os_str().is_empty() {
+                continue;
+            }
+            // Directory enumeration order is filesystem-defined on Windows;
+            // sort so the queue, and so which entries a budget admits, is
+            // deterministic across runs.
+            subdirectories.sort();
+            for name in subdirectories {
+                if depth + 1 > limits.depth {
+                    self.note(Diagnostic::DepthLimitReached(planned.spec.source.clone()));
+                    continue;
+                }
+                queue.push_back((planned, root, relative.join(name), depth + 1));
+            }
+        }
+        checkpoint()?;
+        Ok(())
+    }
+
+    fn push_candidate(
+        &mut self,
+        planned: &PlannedRoot,
+        directory: &Path,
+        relative: &Path,
+        name: &OsStr,
+        via_symlink: bool,
+        limits: DiscoveryLimits,
+    ) {
+        use crate::authorized_read::{FileKind, open_windows, stat_windows};
+        let Some(root) = planned.root.as_ref() else {
+            return;
+        };
+        let full = relative.join(name);
+        // Follow a linked candidate only far enough to learn size and
+        // identity; the authorized read repeats every containment check.
+        let opened = open_windows(&directory.join(name), via_symlink, false)
+            .ok()
+            .and_then(|file| {
+                let stat = stat_windows(&file).ok()?;
+                let len = file.metadata().ok()?.len();
+                Some((stat, len))
+            });
+        let Some((stat, size)) = opened else {
+            self.note(Diagnostic::EntryUnreadable(planned.spec.source.clone()));
+            return;
+        };
+        if stat.kind() != FileKind::Regular {
+            if via_symlink && relative.as_os_str().is_empty() && stat.kind() == FileKind::Directory
+            {
+                self.note(Diagnostic::SymlinkedDirectorySkipped(
+                    planned.spec.source.clone(),
+                ));
+            }
+            self.reject(planned, full, CandidateProblem::NotRegularFile);
+            return;
+        }
+        if size > SKILL_FILE_BYTES.max() as u64 {
+            self.reject(planned, full, CandidateProblem::Oversized);
+            return;
+        }
+        let next = self.bytes_examined.saturating_add(size);
+        if usize::try_from(next).map_or(true, |total| limits.bytes.check(total).is_err()) {
+            self.stop(Diagnostic::ByteLimitReached);
+            return;
+        }
+        self.bytes_examined = next;
+        self.candidates.push(Candidate {
+            source: planned.spec.source.clone(),
+            kind: planned.spec.kind,
+            priority: planned.spec.priority,
+            visibility: planned.spec.visibility.clone(),
+            path: LocalPath::new(root.absolute_path().join(&full)),
+            relative: full,
+            identity: stat.identity(),
+            size,
+            via_symlink,
+        });
     }
 }
 
@@ -872,7 +1085,7 @@ fn append_configured_roots(
         }
         let source = SourceId::new(format!(
             "configured.{}",
-            blake3::hash(declared.as_os_str().as_bytes()).to_hex()
+            blake3::hash(declared.as_os_str().as_encoded_bytes()).to_hex()
         ))
         .map_err(DiscoveryError::Identity)?;
         let spec = RootSpec::new(

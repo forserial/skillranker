@@ -17,7 +17,6 @@ use crate::runtime::EntryClock;
 use asupersync::Cx;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
-use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -420,7 +419,7 @@ pub(crate) fn claude_invocation(kind: SourceKind, relative: &Path) -> Option<Inv
 /// explicit import assign equal stable IDs to equal records.
 pub(crate) fn path_logical_key(path: &Path) -> Result<LogicalSkillKey, ResolutionError> {
     LogicalSkillKey::new(
-        blake3::hash(path.as_os_str().as_bytes())
+        blake3::hash(path.as_os_str().as_encoded_bytes())
             .to_hex()
             .to_string(),
     )

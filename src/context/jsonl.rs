@@ -19,12 +19,10 @@ use crate::limits::{
 };
 use crate::runtime::{ProcessInvocation, RuntimeError};
 use asupersync::Cx;
-use nix::errno::Errno;
-use nix::fcntl::{OFlag, open};
-use nix::sys::stat::{Mode, SFlag, fstat};
 use serde_json::Value;
 use std::fs::{self, File};
 use std::io::{Read, Seek, SeekFrom};
+#[cfg(unix)]
 use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 
@@ -79,10 +77,28 @@ impl FileIdentity {
         Self { dev, ino }
     }
 
+    #[cfg(unix)]
     pub fn from_metadata(meta: &fs::Metadata) -> Self {
         Self {
             dev: meta.dev(),
             ino: meta.ino(),
+        }
+    }
+
+    /// Identity of the file `path` names, following links as `fs::metadata`
+    /// does. `None` when it cannot be inspected.
+    pub fn of_path(path: &Path) -> Option<Self> {
+        #[cfg(unix)]
+        {
+            fs::metadata(path)
+                .ok()
+                .map(|meta| Self::from_metadata(&meta))
+        }
+        #[cfg(windows)]
+        {
+            let file = crate::authorized_read::open_windows(path, true, false).ok()?;
+            let identity = crate::authorized_read::stat_windows(&file).ok()?.identity();
+            Some(Self::new(identity.device(), identity.inode()))
         }
     }
 }
@@ -158,6 +174,62 @@ impl From<RuntimeError> for JsonlError {
     }
 }
 
+/// Open the regular file `path` names without following a final link, and
+/// return it with its identity and snapshot length. The opened object must be
+/// the one `link_meta` described, so a swap between the two is refused.
+#[cfg(unix)]
+fn open_regular_no_follow(
+    path: &Path,
+    link_meta: &fs::Metadata,
+) -> Result<(File, FileIdentity, u64), JsonlError> {
+    use nix::errno::Errno;
+    use nix::fcntl::{OFlag, open};
+    use nix::sys::stat::{Mode, SFlag, fstat};
+    let flags = OFlag::O_RDONLY | OFlag::O_CLOEXEC | OFlag::O_NOFOLLOW;
+    let fd = match open(path, flags, Mode::empty()) {
+        Ok(fd) => fd,
+        Err(Errno::ELOOP | Errno::EMLINK) => return Err(JsonlError::UnsafePath),
+        Err(Errno::ENOENT | Errno::EACCES | Errno::EPERM) => return Err(JsonlError::Io),
+        Err(_) => return Err(JsonlError::Io),
+    };
+    let stat = fstat(&fd).map_err(|_| JsonlError::Io)?;
+    let bits = SFlag::from_bits_truncate(stat.st_mode) & SFlag::S_IFMT;
+    if bits != SFlag::S_IFREG {
+        return Err(JsonlError::UnsafePath);
+    }
+    if link_meta.dev() != stat.st_dev as u64 || link_meta.ino() != stat.st_ino as u64 {
+        return Err(JsonlError::UnsafePath);
+    }
+    let identity = FileIdentity {
+        dev: stat.st_dev as u64,
+        ino: stat.st_ino as u64,
+    };
+    Ok((File::from(fd), identity, stat.st_size as u64))
+}
+
+/// Windows: the handle is opened with `FILE_FLAG_OPEN_REPARSE_POINT`, so a
+/// link is classified rather than followed, and only a regular file is read.
+/// The handle itself supplies identity and length, so a name swapped after
+/// `link_meta` was taken cannot redirect the read.
+#[cfg(windows)]
+fn open_regular_no_follow(
+    path: &Path,
+    _link_meta: &fs::Metadata,
+) -> Result<(File, FileIdentity, u64), JsonlError> {
+    use crate::authorized_read::{FileKind, open_windows, stat_windows};
+    let file = open_windows(path, false, false).map_err(|_| JsonlError::Io)?;
+    let stat = stat_windows(&file).map_err(|_| JsonlError::Io)?;
+    if stat.kind() != FileKind::Regular {
+        return Err(JsonlError::UnsafePath);
+    }
+    let len = file.metadata().map_err(|_| JsonlError::Io)?.len();
+    let identity = FileIdentity {
+        dev: stat.identity().device(),
+        ino: stat.identity().inode(),
+    };
+    Ok((file, identity, len))
+}
+
 /// Snapshot `path` at its current length and read complete records only.
 pub fn snapshot_jsonl(
     invocation: &ProcessInvocation,
@@ -193,28 +265,8 @@ fn read_snapshot(
     if link_meta.file_type().is_symlink() || !link_meta.file_type().is_file() {
         return Err(JsonlError::UnsafePath);
     }
-    let flags = OFlag::O_RDONLY | OFlag::O_CLOEXEC | OFlag::O_NOFOLLOW;
-    let fd = match open(path, flags, Mode::empty()) {
-        Ok(fd) => fd,
-        Err(Errno::ELOOP | Errno::EMLINK) => return Err(JsonlError::UnsafePath),
-        Err(Errno::ENOENT | Errno::EACCES | Errno::EPERM) => return Err(JsonlError::Io),
-        Err(_) => return Err(JsonlError::Io),
-    };
-    let stat = fstat(&fd).map_err(|_| JsonlError::Io)?;
-    let bits = SFlag::from_bits_truncate(stat.st_mode) & SFlag::S_IFMT;
-    if bits != SFlag::S_IFREG {
-        return Err(JsonlError::UnsafePath);
-    }
-    if link_meta.dev() != stat.st_dev as u64 || link_meta.ino() != stat.st_ino as u64 {
-        return Err(JsonlError::UnsafePath);
-    }
-    let identity = FileIdentity {
-        dev: stat.st_dev as u64,
-        ino: stat.st_ino as u64,
-    };
-    let snapshot_len = stat.st_size as u64;
+    let (mut file, identity, snapshot_len) = open_regular_no_follow(path, &link_meta)?;
     let cap = kind.byte_cap();
-    let mut file = File::from(fd);
 
     let (start, rebuilt, align_to_record) = match previous {
         Some(cursor)

@@ -5,6 +5,8 @@
 //! bookkeeping can touch shared-memory sidecars even during a read-only probe.
 //! Descriptor checks exclude other-user path replacement, not a hostile process
 //! already running as this user. This is not filesystem/release qualification.
+// Off Unix every open is refused, so the admission helpers are unreachable.
+#![cfg_attr(not(unix), allow(dead_code, unused_imports))]
 
 use super::MAX_BREAKER_BYTES;
 use rusqlite::{Connection, OpenFlags, OptionalExtension, TransactionBehavior, config::DbConfig};

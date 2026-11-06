@@ -1,6 +1,8 @@
 # Installing SkillRanker
 
-Installation supports Linux and macOS. On macOS, keep private runtime state on
+The installer supports Linux and macOS. Windows releases are a `.zip` holding
+`sr.exe`, installed manually; Windows runs without private state (see
+[the platform boundary](platform-boundary.md#windows-stateless-ranking)). On macOS, keep private runtime state on
 local APFS or HFS+ storage with Unix permissions; network filesystems, FUSE, and
 exFAT are not admitted for cache and ledger storage. The system `/tmp` and `/var`
 aliases are supported without permitting arbitrary symlink traversal. The

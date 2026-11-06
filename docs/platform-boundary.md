@@ -84,3 +84,62 @@ non-native checks returned explicit failures before compilation. The new Rust
 identity, error-adapter, alias-policy, and native symlink tests were added but not
 executed there. Neither the isolated Cargo invocation nor full/native checks are
 claimed as passed by this document.
+
+## Windows: stateless ranking
+
+Windows builds compile the same library and binary. Ranking, roster
+discovery, Claude transcript and session reads, `doctor`, `capabilities`,
+`demo` and hook installation work. Every component that depends on an
+owner-only private store fails closed instead of being emulated:
+
+| Component | Windows behavior |
+|---|---|
+| Response cache, ledger, coordinator leases | Store open reports `UnsupportedFilesystem`; optional caching is skipped visibly and commands that require the ledger (`observe`, `feedback`, `stats`, `ledger`, …) fail with their storage error |
+| Enforced request allowance | An absent guard means no allowance is configured, as on Unix; an existing guard, accounting store or `sr budget --apply` is refused, which withholds provider requests |
+| Hook invocation counter | Never written (it lives beside a ledger) |
+| Owner-only exports and replay case files | Refused: Windows ACLs are not inspected, so owner-only access cannot be established |
+| cass sessions (`--session`), Git `dirty_paths` | Unsupported source mode / omitted signal: subprocesses are Linux/macOS only |
+
+### File access without `openat`
+
+`authorized_read` keeps one shared walk; only its four primitives differ by
+platform (`sys` module). On Windows each directory on the walk is held open
+without `FILE_SHARE_DELETE`, so it cannot be renamed, deleted or replaced by
+a junction while held, and the next child's path still names a child of the
+checked object. Components are opened with `FILE_FLAG_OPEN_REPARSE_POINT`,
+mirroring `O_NOFOLLOW`; only name-surrogate reparse points (symbolic links,
+junctions) are links, so cloud placeholders remain ordinary files. Link
+targets are resolved by the same walk inside authorized roots; a verbatim
+`\\?\C:\` prefix is rewritten to its drive form, and every other prefix fails
+root matching. Names Win32 would reinterpret are refused before any open:
+alternate data streams (`a:b`), trailing dots or spaces, reserved device names
+(`CON`, `nul.txt`, `COM1`, …), and reserved characters.
+
+File identity is the volume serial number and file index, read through the
+safe `winapi-util` API (already in the Windows dependency graph through
+`same-file`), so `#![forbid(unsafe_code)]` is unchanged. Roster discovery,
+discovery-scope proofs, roster import, transcript snapshots and session
+discovery use the same primitives. Locks for hook installation and snoozes use
+`File::try_lock` (`LockFileEx`).
+
+`HOME` remains authoritative when set. Windows normally sets only
+`USERPROFILE`, which Claude Code uses for `%USERPROFILE%\.claude`, so it is
+the fallback there; Unix still reads only `HOME`.
+
+### Residual limits
+
+- The root of a walk is opened by its trusted absolute path; renaming one of
+  its ancestors is not prevented by the held handles.
+- Windows releases are not native-qualified: no test suite has run on real
+  Windows, and the Claude Code `UserPromptSubmit` hook on Windows has not been
+  exercised end to end.
+- A full storage port needs an audited owner-only ACL check and an admitted
+  filesystem list (NTFS, ReFS) before cache or ledger can be enabled.
+
+### Evidence
+
+Cross-compiled for `x86_64-pc-windows-gnu` (MinGW-w64): `cargo check` and
+`cargo clippy -- -D warnings` for the library and binary pass with no warnings.
+Linux `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings` pass.
+Windows tests (`--all-targets`) are not compiled: the existing suites use Unix
+fixtures (modes, symlinks, FIFOs) and are not yet gated per platform.

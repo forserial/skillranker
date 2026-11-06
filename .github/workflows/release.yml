@@ -1,17 +1,17 @@
-# Build `sr` release archives for Linux and macOS and attach them to a GitHub
-# Release.
+# Build `sr` release archives for Linux, macOS and Windows and attach them to a
+# GitHub Release.
 #
-# Windows is not built: the storage layer and its `nix`/POSIX file-descriptor
-# checks are Unix-only, so `cargo check --target x86_64-pc-windows-gnu` fails
-# (~290 errors, mostly in `storage`). Add a Windows matrix entry once that
-# boundary is ported. Windows users can run the Linux build under WSL.
+# The Windows build ranks statelessly: its stores report an unqualified
+# filesystem, so caching, the ledger and enforced allowances are unavailable
+# there (see docs/platform-boundary.md).
 #
 # Trigger: push a tag like `v0.1.0` (must match Cargo.toml's version), or run
 # manually from the Actions tab with an existing tag name.
 #
 # Archive layout follows docs/installation.md: `skillranker-vVERSION-TARGET`
-# containing a root-level `sr`, LICENSE and README.md, plus an
-# adjacent `.sha256` sidecar holding one `HASH  ARCHIVE_NAME` record.
+# containing a root-level `sr` (`sr.exe` in a .zip on Windows), LICENSE and
+# README.md, plus an adjacent `.sha256` sidecar holding one
+# `HASH  ARCHIVE_NAME` record.
 name: release
 
 on:
@@ -45,6 +45,7 @@ jobs:
           - { target: aarch64-unknown-linux-musl, os: ubuntu-latest,  zigbuild: true }
           - { target: x86_64-apple-darwin,        os: macos-latest }
           - { target: aarch64-apple-darwin,       os: macos-latest }
+          - { target: x86_64-pc-windows-msvc,     os: windows-latest }
     steps:
       - uses: actions/checkout@v4
         with:
@@ -96,8 +97,10 @@ jobs:
         shell: bash
         run: |
           bin=target/${{ matrix.target }}/release/sr
+          [[ -f "$bin.exe" ]] && bin="$bin.exe"
           "$bin" --version
           "$bin" capabilities --json > /dev/null
+          "$bin" demo --case useful --json > /dev/null
 
       - name: Package
         shell: bash
@@ -106,10 +109,16 @@ jobs:
           stage="$RUNNER_TEMP/$name"
           mkdir -p "$stage" dist
           cp LICENSE README.md "$stage/"
-          cp "target/${{ matrix.target }}/release/sr" "$stage/"
-          chmod 755 "$stage/sr"
-          archive="$name.tar.gz"
-          tar -C "$stage" -czf "dist/$archive" sr LICENSE README.md
+          if [[ "${{ matrix.target }}" == *windows* ]]; then
+            cp "target/${{ matrix.target }}/release/sr.exe" "$stage/"
+            archive="$name.zip"
+            (cd "$stage" && 7z a -tzip "$GITHUB_WORKSPACE/dist/$archive" sr.exe LICENSE README.md > /dev/null)
+          else
+            cp "target/${{ matrix.target }}/release/sr" "$stage/"
+            chmod 755 "$stage/sr"
+            archive="$name.tar.gz"
+            tar -C "$stage" -czf "dist/$archive" sr LICENSE README.md
+          fi
           cd dist
           if command -v sha256sum > /dev/null; then
             sha256sum "$archive" > "$archive.sha256"

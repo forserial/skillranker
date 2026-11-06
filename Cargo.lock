@@ -1987,6 +1987,7 @@ dependencies = [
  "serde_json",
  "time",
  "toml",
+ "winapi-util",
 ]
 
 [[package]]

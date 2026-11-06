@@ -41,6 +41,7 @@ pub const MAX_COOLDOWN_MS: u64 = 300_000;
 /// it, but one malformed or hostile header must not cool the endpoint down
 /// for days, or in effect forever.
 pub const MAX_RETRY_AFTER_MS: u64 = 3_600_000;
+#[cfg_attr(not(unix), allow(dead_code))] // Read by the Unix-only store admission.
 const MAX_BREAKER_BYTES: i64 = 1024 * 1024;
 
 static COUNTER: AtomicU64 = AtomicU64::new(0);

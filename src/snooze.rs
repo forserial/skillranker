@@ -440,7 +440,11 @@ pub fn plan(
 /// Serializes cooperating writers with an advisory `flock` on a persistent
 /// sibling lock file, as hook installation does.
 struct SnoozeLock {
+    #[cfg(unix)]
     _flock: nix::fcntl::Flock<File>,
+    /// Windows: an exclusive `LockFileEx` lock, released when the file closes.
+    #[cfg(windows)]
+    _locked: File,
 }
 
 impl SnoozeLock {
@@ -452,9 +456,18 @@ impl SnoozeLock {
             .write(true)
             .open(&lock_path)
             .map_err(|e| SnoozeError::Io(e.kind().to_string()))?;
-        let flock = nix::fcntl::Flock::lock(handle, nix::fcntl::FlockArg::LockExclusiveNonblock)
-            .map_err(|_| SnoozeError::LockBusy)?;
-        Ok(Self { _flock: flock })
+        #[cfg(unix)]
+        {
+            let flock =
+                nix::fcntl::Flock::lock(handle, nix::fcntl::FlockArg::LockExclusiveNonblock)
+                    .map_err(|_| SnoozeError::LockBusy)?;
+            Ok(Self { _flock: flock })
+        }
+        #[cfg(windows)]
+        {
+            handle.try_lock().map_err(|_| SnoozeError::LockBusy)?;
+            Ok(Self { _locked: handle })
+        }
     }
 }
 

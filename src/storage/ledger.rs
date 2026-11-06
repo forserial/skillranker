@@ -7,6 +7,7 @@
 //! Every mutation is fenced by store incarnation, schema generation, and data generation.
 
 use super::hook_entries::HookCounter;
+#[cfg(unix)]
 use super::platform::{DirectoryIdentity, local_filesystem, storage_path};
 use crate::blocking::{
     BlockingLeafKind, remaining_busy_wait, run_blocking_leaf, run_blocking_leaf_with_clock,
@@ -16,10 +17,15 @@ use crate::limits::MonotonicMillis;
 use crate::runtime::{EntryClock, ProcessInvocation};
 use crate::storage::{EngineIdentity, StoreError, check_work, linked_engine};
 use asupersync::Cx;
+#[cfg(unix)]
 use nix::errno::Errno;
+#[cfg(unix)]
 use nix::fcntl::{AtFlags, OFlag, open, openat};
+#[cfg(unix)]
 use nix::sys::stat::{FileStat, Mode, SFlag, fstat, fstatat, mkdirat};
+#[cfg(unix)]
 use nix::sys::statfs::fstatfs;
+#[cfg(unix)]
 use nix::sys::statvfs::fstatvfs;
 use rusqlite::{
     Connection, ErrorCode, OpenFlags, OptionalExtension, TransactionBehavior, config::DbConfig,
@@ -28,7 +34,9 @@ use rusqlite::{
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::fs::File;
-use std::path::{Component, Path, PathBuf};
+#[cfg(unix)]
+use std::path::Component;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 pub const LEDGER_FILE: &str = "ledger.sqlite3";
@@ -1987,6 +1995,7 @@ pub(crate) fn generate_random_hex(byte_count: usize) -> String {
 // Directory Handling
 // -----------------------------------------------------------------------------
 
+#[cfg(unix)]
 fn io_error(error: Errno) -> StoreError {
     match error {
         Errno::ENOENT => StoreError::Missing,
@@ -1996,6 +2005,7 @@ fn io_error(error: Errno) -> StoreError {
     }
 }
 
+#[cfg(unix)]
 fn owned_regular(stat: &FileStat, uid: u32) -> Result<(), StoreError> {
     if SFlag::from_bits_truncate(stat.st_mode) != SFlag::S_IFREG || stat.st_nlink != 1 {
         return Err(StoreError::UnsafePath);
@@ -2006,6 +2016,7 @@ fn owned_regular(stat: &FileStat, uid: u32) -> Result<(), StoreError> {
     Ok(())
 }
 
+#[cfg(unix)]
 fn trusted_ancestor(stat: &FileStat, uid: u32, leaf: bool) -> Result<(), StoreError> {
     if SFlag::from_bits_truncate(stat.st_mode) != SFlag::S_IFDIR {
         return Err(StoreError::UnsafePath);
@@ -2022,6 +2033,7 @@ fn trusted_ancestor(stat: &FileStat, uid: u32, leaf: bool) -> Result<(), StoreEr
     Ok(())
 }
 
+#[cfg(unix)]
 fn recording_capacity(bytes: u64, available: u128) -> Result<(), StoreError> {
     if bytes > LEDGER_QUOTA_BYTES - LEDGER_MAINTENANCE_RESERVE_BYTES - LEDGER_MUTATION_RESERVE_BYTES
     {
@@ -2033,6 +2045,7 @@ fn recording_capacity(bytes: u64, available: u128) -> Result<(), StoreError> {
     Ok(())
 }
 
+#[cfg(unix)]
 pub(crate) struct PrivateLedgerDirectory {
     pub path: PathBuf,
     handle: File,
@@ -2040,6 +2053,7 @@ pub(crate) struct PrivateLedgerDirectory {
     simulated_available_disk_bytes: Option<u64>,
 }
 
+#[cfg(unix)]
 impl PrivateLedgerDirectory {
     pub fn open(
         path: PathBuf,
@@ -2330,6 +2344,61 @@ impl PrivateLedgerDirectory {
     }
 }
 
+/// Windows: no ledger directory can be admitted (see the cache's
+/// `PrivateDirectory`). Opening reports `UnsupportedFilesystem`; required
+/// ledger commands fail with their storage error and optional recording is
+/// skipped visibly. The value is uninhabited.
+#[cfg(not(unix))]
+#[allow(dead_code)] // Mirrors the Unix surface; uninhabited here.
+pub(crate) struct PrivateLedgerDirectory {
+    pub path: PathBuf,
+    never: std::convert::Infallible,
+}
+
+#[cfg(not(unix))]
+#[allow(dead_code)] // Mirrors the Unix surface; uninhabited here.
+impl PrivateLedgerDirectory {
+    pub fn open(_: PathBuf, _: bool, _: EntryClock, _: &Cx) -> Result<Self, StoreError> {
+        Err(StoreError::UnsupportedFilesystem)
+    }
+
+    pub fn set_simulated_available_disk_bytes(&mut self, _: Option<u64>) {
+        match self.never {}
+    }
+
+    pub fn available_disk_bytes(&self) -> Result<u64, StoreError> {
+        match self.never {}
+    }
+
+    pub fn capacity_report(&self) -> Result<LedgerCapacityReport, StoreError> {
+        match self.never {}
+    }
+
+    pub fn database_path(&self) -> PathBuf {
+        match self.never {}
+    }
+
+    fn verify_database_file(&self, _: &File, _: EntryClock, _: &Cx) -> Result<(), StoreError> {
+        match self.never {}
+    }
+
+    pub fn revalidate(&self, _: EntryClock, _: &Cx) -> Result<(), StoreError> {
+        match self.never {}
+    }
+
+    pub fn inspect_files(&self) -> Result<u64, StoreError> {
+        match self.never {}
+    }
+
+    pub fn admit_space(&self) -> Result<(), StoreError> {
+        match self.never {}
+    }
+
+    pub fn open_database_file(&self, _: bool, _: EntryClock, _: &Cx) -> Result<File, StoreError> {
+        match self.never {}
+    }
+}
+
 // -----------------------------------------------------------------------------
 // Database Connection Configuration & Verification
 // -----------------------------------------------------------------------------
@@ -2506,8 +2575,8 @@ pub fn default_ledger_directory() -> Result<PathBuf, StoreError> {
             return Ok(p.join("sr"));
         }
     }
-    if let Some(home) = std::env::var_os("HOME") {
-        let p = PathBuf::from(home);
+    if let Some(home) = crate::platform_path::home_dir() {
+        let p = home;
         if p.is_absolute() {
             return Ok(p.join(".local").join("share").join("sr"));
         }
@@ -3010,39 +3079,49 @@ impl LedgerStore {
 
     /// Estimates worst-case additional bytes needed on disk for the given maintenance operation.
     pub fn worst_case_maintenance_bytes(&self, kind: MaintenanceKind) -> Result<u64, StoreError> {
-        let uid = nix::unistd::geteuid().as_raw();
-        let mut db_and_wal_bytes = 0_u64;
-        for suffix in ["", "-wal", "-journal"] {
-            let name = format!("{LEDGER_FILE}{suffix}");
-            match fstatat(
-                &self.directory.handle,
-                name.as_str(),
-                AtFlags::AT_SYMLINK_NOFOLLOW,
-            ) {
-                Ok(stat) => {
-                    owned_regular(&stat, uid)?;
-                    db_and_wal_bytes = db_and_wal_bytes
-                        .checked_add(u64::try_from(stat.st_size).map_err(|_| StoreError::Quota)?)
-                        .ok_or(StoreError::Quota)?;
-                }
-                Err(Errno::ENOENT) => {}
-                Err(error) => return Err(io_error(error)),
-            }
+        #[cfg(not(unix))]
+        {
+            let _ = kind;
+            match self.directory.never {}
         }
-        let min_temp_bytes = 1024 * 1024; // 1 MiB
-        let estimated = match kind {
-            MaintenanceKind::Vacuum => db_and_wal_bytes
-                .checked_add(min_temp_bytes)
-                .ok_or(StoreError::Quota)?,
-            MaintenanceKind::Backup => db_and_wal_bytes
-                .checked_add(64 * 1024)
-                .ok_or(StoreError::Quota)?,
-            MaintenanceKind::Migration => db_and_wal_bytes
-                .checked_add(2 * 1024 * 1024)
-                .ok_or(StoreError::Quota)?,
-            MaintenanceKind::Prune | MaintenanceKind::Clear => 2 * 1024 * 1024,
-        };
-        Ok(estimated)
+        #[cfg(unix)]
+        {
+            let uid = nix::unistd::geteuid().as_raw();
+            let mut db_and_wal_bytes = 0_u64;
+            for suffix in ["", "-wal", "-journal"] {
+                let name = format!("{LEDGER_FILE}{suffix}");
+                match fstatat(
+                    &self.directory.handle,
+                    name.as_str(),
+                    AtFlags::AT_SYMLINK_NOFOLLOW,
+                ) {
+                    Ok(stat) => {
+                        owned_regular(&stat, uid)?;
+                        db_and_wal_bytes = db_and_wal_bytes
+                            .checked_add(
+                                u64::try_from(stat.st_size).map_err(|_| StoreError::Quota)?,
+                            )
+                            .ok_or(StoreError::Quota)?;
+                    }
+                    Err(Errno::ENOENT) => {}
+                    Err(error) => return Err(io_error(error)),
+                }
+            }
+            let min_temp_bytes = 1024 * 1024; // 1 MiB
+            let estimated = match kind {
+                MaintenanceKind::Vacuum => db_and_wal_bytes
+                    .checked_add(min_temp_bytes)
+                    .ok_or(StoreError::Quota)?,
+                MaintenanceKind::Backup => db_and_wal_bytes
+                    .checked_add(64 * 1024)
+                    .ok_or(StoreError::Quota)?,
+                MaintenanceKind::Migration => db_and_wal_bytes
+                    .checked_add(2 * 1024 * 1024)
+                    .ok_or(StoreError::Quota)?,
+                MaintenanceKind::Prune | MaintenanceKind::Clear => 2 * 1024 * 1024,
+            };
+            Ok(estimated)
+        }
     }
 
     /// Preflights maintenance operation worst-case additional bytes against both quota and free disk space.
@@ -3167,8 +3246,11 @@ impl LedgerStore {
         let _ = self.connection.set_limit(Limit::SQLITE_LIMIT_ATTACHED, 0);
         backup_res?;
 
-        use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(dest_path, std::fs::Permissions::from_mode(0o600));
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(dest_path, std::fs::Permissions::from_mode(0o600));
+        }
 
         self.directory.verify_database_file(&self.file, clock, cx)?;
         let meta = std::fs::metadata(dest_path).map_err(|_| StoreError::Io)?;

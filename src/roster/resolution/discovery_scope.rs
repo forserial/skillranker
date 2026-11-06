@@ -12,8 +12,11 @@ use crate::limits::DISCOVERY_FILES;
 use crate::roster::discovery::{CLAUDE_SKILL_FILE, DiscoveryPlan, SourceKind};
 use crate::runtime::EntryClock;
 use asupersync::Cx;
+#[cfg(unix)]
 use nix::errno::Errno;
+#[cfg(unix)]
 use nix::fcntl::{AtFlags, OFlag, openat};
+#[cfg(unix)]
 use nix::sys::stat::{Mode, SFlag, fstatat};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
@@ -104,6 +107,7 @@ fn prove_with_limit(
 /// Directory symlinks are never followed. A dangling SKILL.md link is not an
 /// absence: lstat it first, and follow file links only for an existing binding.
 #[allow(clippy::unnecessary_cast)] // dev_t/ino_t widths differ on macOS.
+#[cfg(unix)]
 fn slot_matches(root: &AuthorizedRoot, name: &str, expected: Option<FileIdentity>) -> bool {
     let directory_stat = match fstatat(root.as_fd(), name, AtFlags::AT_SYMLINK_NOFOLLOW) {
         Ok(stat) => stat,
@@ -139,6 +143,56 @@ fn slot_matches(root: &AuthorizedRoot, name: &str, expected: Option<FileIdentity
     };
     (SFlag::from_bits_truncate(stat.st_mode) & SFlag::S_IFMT) == SFlag::S_IFREG
         && FileIdentity::new(stat.st_dev as u64, stat.st_ino as u64) == expected
+}
+
+/// Windows form of the same proof. The slot directory is held open without
+/// `FILE_SHARE_DELETE` while its skill file is inspected, and both are opened
+/// without following a final link; only an existing file binding follows a
+/// link, as on Unix.
+#[cfg(windows)]
+fn slot_matches(root: &AuthorizedRoot, name: &str, expected: Option<FileIdentity>) -> bool {
+    use crate::authorized_read::{FileKind, open_windows, stat_windows, valid_component};
+    use std::ffi::OsStr;
+    use std::io::ErrorKind;
+    if !valid_component(OsStr::new(name)) {
+        return false;
+    }
+    let directory_path = root.windows_handle().path().join(name);
+    let directory = match open_windows(&directory_path, false, true) {
+        Ok(directory) => directory,
+        Err(error) if error.kind() == ErrorKind::NotFound => return expected.is_none(),
+        Err(_) => return false,
+    };
+    let Ok(directory_stat) = stat_windows(&directory) else {
+        return false;
+    };
+    match directory_stat.kind() {
+        FileKind::Symlink => return false,
+        FileKind::Directory => {}
+        _ => return expected.is_none(),
+    }
+    let file_path = directory_path.join(CLAUDE_SKILL_FILE);
+    let file = match open_windows(&file_path, false, false) {
+        Ok(file) => file,
+        Err(error) if error.kind() == ErrorKind::NotFound => return expected.is_none(),
+        Err(_) => return false,
+    };
+    let Some(expected) = expected else {
+        return false;
+    };
+    let Ok(mut stat) = stat_windows(&file) else {
+        return false;
+    };
+    if stat.kind() == FileKind::Symlink {
+        let Ok(target) = open_windows(&file_path, true, false).and_then(|target| {
+            stat_windows(&target).map_err(|_| std::io::Error::from(ErrorKind::Other))
+        }) else {
+            return false;
+        };
+        stat = target;
+    }
+    drop(directory);
+    stat.kind() == FileKind::Regular && stat.identity() == expected
 }
 
 #[cfg(test)]

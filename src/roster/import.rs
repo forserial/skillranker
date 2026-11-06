@@ -25,7 +25,9 @@ use crate::limits::{
 use crate::output::ErrorKind;
 use crate::runtime::EntryClock;
 use asupersync::Cx;
+#[cfg(unix)]
 use nix::fcntl::AtFlags;
+#[cfg(unix)]
 use nix::sys::stat::{SFlag, fstatat};
 use serde::de::{Deserializer, SeqAccess, Visitor};
 use serde::{Deserialize, de::Error as _};
@@ -382,6 +384,7 @@ pub fn import_authorized(
         // Containment does not rest on this check: a directory swapped for a
         // link afterwards still resolves only inside authorized roots.
         let directory = item.relative.split('/').next().unwrap_or_default();
+        #[cfg(unix)]
         match fstatat(
             opened[item.root].1.as_fd(),
             directory,
@@ -393,6 +396,25 @@ pub fn import_authorized(
             Ok(_) => return Err(record(index, RecordProblem::UnsupportedLayout)),
             Err(nix::errno::Errno::ENOENT) => return Err(record(index, RecordProblem::Missing)),
             Err(_) => return Err(record(index, RecordProblem::Unreadable)),
+        }
+        #[cfg(windows)]
+        {
+            use crate::authorized_read::{FileKind, open_windows, stat_windows, valid_component};
+            if !valid_component(std::ffi::OsStr::new(directory)) {
+                return Err(record(index, RecordProblem::UnsupportedLayout));
+            }
+            let path = opened[item.root].1.windows_handle().path().join(directory);
+            match open_windows(&path, false, true) {
+                Ok(file) => match stat_windows(&file) {
+                    Ok(stat) if stat.kind() == FileKind::Directory => {}
+                    Ok(_) => return Err(record(index, RecordProblem::UnsupportedLayout)),
+                    Err(_) => return Err(record(index, RecordProblem::Unreadable)),
+                },
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    return Err(record(index, RecordProblem::Missing));
+                }
+                Err(_) => return Err(record(index, RecordProblem::Unreadable)),
+            }
         }
         let remaining = DISCOVERY_PARSED_BYTES.max().saturating_sub(total);
         if remaining == 0 {

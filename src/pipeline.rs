@@ -71,7 +71,35 @@ use crate::runtime::{EntryClock, ProcessInvocation, admit_publication};
 use crate::scoring::{Input as ScoringInput, Ranking, Weights, rank};
 use std::sync::{Arc, Mutex};
 
+#[cfg(unix)]
 mod cass_source;
+/// cass is a Unix subprocess adapter; on other platforms `--session` is an
+/// unsupported source mode, reported before any process is started.
+#[cfg(not(unix))]
+mod cass_source {
+    use super::{PipelineFailure, failure};
+    use crate::context::NormalizedContext;
+    use crate::context::source::SourcePolicy;
+    use crate::output::ErrorKind;
+    use crate::runtime::EntryClock;
+    use asupersync::Cx;
+    use std::path::Path;
+
+    pub(super) async fn read(
+        _: &Path,
+        _: Option<&Path>,
+        _: &Path,
+        _: bool,
+        _: SourcePolicy,
+        _: &Cx,
+        _: &EntryClock,
+    ) -> Result<NormalizedContext, PipelineFailure> {
+        Err(failure(
+            ErrorKind::UnsupportedSourceMode,
+            "cass sessions (--session) are not supported on this platform".to_string(),
+        ))
+    }
+}
 mod roster;
 
 /// Failure tuple compatible with CLI error formatting: `(exit_code, kind, message)`.
@@ -4141,6 +4169,8 @@ fn publish_evaluation(
 
 struct CacheSlot {
     store: Option<persistent::Store>,
+    // Only the Linux/macOS store can be lost mid-run.
+    #[cfg_attr(not(any(target_os = "linux", target_os = "macos")), allow(dead_code))]
     lost: bool,
 }
 
@@ -4509,6 +4539,7 @@ mod persistent {
         PublishOutcome, RequestFingerprint, RequestStage,
     };
     use crate::runtime::EntryClock;
+    use crate::storage::StoreError;
     use asupersync::Cx;
     use std::path::Path;
 

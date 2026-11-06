@@ -11,10 +11,11 @@ pub mod hook_entries;
 // private: the CLI needs to explain a refusal, not to make one (sr-488b).
 pub use filesystem::{PermissionRefusal, RequiredMode, diagnose_owner_only};
 pub mod ledger;
+#[cfg(unix)]
 mod platform;
 mod publication;
 mod read_view;
-pub(crate) use platform::storage_path;
+pub(crate) use crate::platform_path::storage_path;
 
 pub use export::{
     DEFAULT_MAX_CASE_BYTES, DEFAULT_MAX_SNAPSHOT_BYTES, ExportConfig, ExportError,

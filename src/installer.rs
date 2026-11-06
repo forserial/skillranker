@@ -16,6 +16,7 @@ use crate::config::HookMode;
 use crate::identity::ContentHash;
 use crate::limits::CONFIG_FILE_BYTES;
 use crate::output::JsonSeed;
+#[cfg(unix)]
 use nix::fcntl::{Flock, FlockArg};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
@@ -237,9 +238,7 @@ pub fn resolve_settings_file(
     }
     match harness {
         HookHarness::Claude => {
-            let home = std::env::var_os("HOME")
-                .filter(|p| !p.is_empty())
-                .map(PathBuf::from)
+            let home = crate::platform_path::home_dir()
                 .ok_or_else(|| {
                     InstallerError::InvalidUsage("HOME environment variable is not set".into())
                 })?;
@@ -271,8 +270,8 @@ pub fn resolve_binary_path(override_path: Option<PathBuf>) -> Result<PathBuf, In
 pub fn resolve_backup_dir() -> Result<PathBuf, InstallerError> {
     let base = if let Some(state) = std::env::var_os("XDG_STATE_HOME").filter(|p| !p.is_empty()) {
         PathBuf::from(state).join("sr/backups")
-    } else if let Some(home) = std::env::var_os("HOME").filter(|p| !p.is_empty()) {
-        PathBuf::from(home).join(".local/state/sr/backups")
+    } else if let Some(home) = crate::platform_path::home_dir() {
+        home.join(".local/state/sr/backups")
     } else {
         PathBuf::from("/tmp/sr-backups")
     };
@@ -480,7 +479,11 @@ fn read_and_parse_settings(path: &Path) -> Result<ParsedSettings, InstallerError
 
 /// RAII lock guard that serializes cooperating installers using `flock`.
 struct SettingsLockGuard {
+    #[cfg(unix)]
     _flock: Flock<File>,
+    /// Windows: an exclusive `LockFileEx` lock, released when the file closes.
+    #[cfg(windows)]
+    _locked: File,
 }
 
 impl SettingsLockGuard {
@@ -496,14 +499,22 @@ impl SettingsLockGuard {
             .truncate(false)
             .open(&lock_path)?;
 
-        let flock = Flock::lock(file, FlockArg::LockExclusiveNonblock).map_err(|_| {
+        let busy = || {
             InstallerError::LockBusy(format!(
                 "concurrent installer holds lock on {}",
                 lock_path.display()
             ))
-        })?;
-
-        Ok(Self { _flock: flock })
+        };
+        #[cfg(unix)]
+        {
+            let flock = Flock::lock(file, FlockArg::LockExclusiveNonblock).map_err(|_| busy())?;
+            Ok(Self { _flock: flock })
+        }
+        #[cfg(windows)]
+        {
+            file.try_lock().map_err(|_| busy())?;
+            Ok(Self { _locked: file })
+        }
     }
 }
 
