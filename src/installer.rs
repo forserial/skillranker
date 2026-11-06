@@ -238,10 +238,9 @@ pub fn resolve_settings_file(
     }
     match harness {
         HookHarness::Claude => {
-            let home = crate::platform_path::home_dir()
-                .ok_or_else(|| {
-                    InstallerError::InvalidUsage("HOME environment variable is not set".into())
-                })?;
+            let home = crate::platform_path::home_dir().ok_or_else(|| {
+                InstallerError::InvalidUsage("HOME environment variable is not set".into())
+            })?;
             Ok(home.join(".claude/settings.json"))
         }
     }
