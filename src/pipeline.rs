@@ -143,7 +143,78 @@ fn visibility_label(visibility: &Visibility) -> &'static str {
 
 /// Trusted executable roots for project-signal tool detection: fixed system
 /// directories, never the process PATH or anything the workspace supplies.
-const TRUSTED_TOOL_ROOTS: [&str; 3] = ["/usr/local/bin", "/usr/bin", "/bin"];
+#[cfg(unix)]
+fn trusted_tool_roots() -> Vec<PathBuf> {
+    ["/usr/local/bin", "/usr/bin", "/bin"]
+        .iter()
+        .map(PathBuf::from)
+        .collect()
+}
+
+/// Windows (sr-winpar.10, the user's choice): fixed, unversioned machine-wide
+/// install directories under `%ProgramFiles%`. Git for Windows' real images
+/// come before its `cmd` launcher, which starts one of them inside the same Job
+/// Object. Never `PATH`, the user's profile, versioned directories, or anything
+/// the workspace supplies; directories that do not exist are left out.
+#[cfg(windows)]
+fn trusted_tool_roots() -> Vec<PathBuf> {
+    const UNDER_PROGRAM_FILES: [&str; 7] = [
+        r"Git\ucrt64\bin",
+        r"Git\mingw64\bin",
+        r"Git\clangarm64\bin",
+        r"Git\cmd",
+        "nodejs",
+        r"Go\bin",
+        r"CMake\bin",
+    ];
+    let Some(base) = std::env::var_os("ProgramFiles")
+        .map(PathBuf::from)
+        .filter(|base| base.is_absolute())
+    else {
+        return Vec::new();
+    };
+    UNDER_PROGRAM_FILES
+        .iter()
+        .map(|relative| base.join(relative))
+        .filter(|root| root.is_dir())
+        .collect()
+}
+
+#[cfg(not(any(unix, windows)))]
+fn trusted_tool_roots() -> Vec<PathBuf> {
+    Vec::new()
+}
+
+#[cfg(all(test, windows))]
+mod tool_root_tests {
+    use super::trusted_tool_roots;
+    use std::path::PathBuf;
+
+    #[test]
+    fn windows_tool_roots_are_existing_program_files_directories_only() {
+        let base = PathBuf::from(std::env::var_os("ProgramFiles").unwrap());
+        let profile = std::env::var_os("USERPROFILE").map(PathBuf::from);
+        let roots = trusted_tool_roots();
+        for root in &roots {
+            assert!(
+                root.is_dir() && root.starts_with(&base),
+                "{}",
+                root.display()
+            );
+            if let Some(profile) = &profile {
+                assert!(!root.starts_with(profile), "{}", root.display());
+            }
+        }
+        // Real Git images come before the cmd launcher.
+        let launcher = roots.iter().position(|r| r.ends_with(r"Git\cmd"));
+        let image = roots
+            .iter()
+            .position(|r| r.ends_with(r"Git\ucrt64\bin") || r.ends_with(r"Git\mingw64\bin"));
+        if let (Some(launcher), Some(image)) = (launcher, image) {
+            assert!(image < launcher);
+        }
+    }
+}
 
 /// Parameters for running the ranking pipeline.
 #[derive(Clone, Debug)]
@@ -1782,7 +1853,7 @@ async fn rank_once(
                 directive.kind == crate::context::anchor::AnchorDirectiveKind::Require
             })
         });
-    let tool_roots: Vec<PathBuf> = TRUSTED_TOOL_ROOTS.iter().map(PathBuf::from).collect();
+    let tool_roots = trusted_tool_roots();
     let (roster, captured_signals) = if needs_explicit {
         (roster_source.load_concurrent(cx, clock).await?, None)
     } else {

@@ -99,7 +99,7 @@ owner-only private store fails closed instead of being emulated:
 | Hook invocation counter | Never written (it lives beside a ledger) |
 | Shadow-mode hooks | Skip ranking before any provider request, since nothing could be recorded; one stderr line says why. Advisory mode ranks and publishes |
 | Owner-only exports, roster snapshots and replay case files | Refused: Windows ACLs are not inspected, so owner-only access cannot be established |
-| cass sessions (`--session`), Git `dirty_paths` | Unsupported source mode / omitted signal. The owned-subprocess boundary they need runs on Windows (see below); their callers are not ported yet (sr-winpar.11, sr-winpar.10) |
+| cass sessions (`--session`) | Unsupported source mode. The owned-subprocess boundary it needs runs on Windows (see below); the cass adapter is not ported yet (sr-winpar.11) |
 | Hook installer backups, calibration policy files | Written without owner-only protection (sr-winpar.7 for backups) |
 | `sr gaps` without `--input` | Reads no ledger and reports zero events |
 
@@ -166,6 +166,34 @@ directory is passed to the program itself (Git's `-C`), never through a shell.
 output limit, the deadline, cancellation, a grandchild holding the pipes,
 a child that never reads its input, the exact environment, and refusal of
 scripts, relative paths and other directories.
+
+### Git dirty_paths and the tool inventory
+
+Project signals find tools only in fixed trusted roots, never `PATH`, the user's
+profile or the workspace. On Windows (the user's choice for sr-winpar.10) these are
+unversioned machine-wide install directories under `%ProgramFiles%`, in this order:
+`Git\ucrt64\bin`, `Git\mingw64\bin`, `Git\clangarm64\bin` (Git for Windows' real
+`git.exe`), `Git\cmd` (its 44 KB launcher, which starts the real image inside the
+same Job Object), `nodejs`, `Go\bin` and `CMake\bin`. Directories that do not exist
+are left out; `ProgramFiles` comes from the user's environment, never from the
+repository. A tool counts only as a regular `<tool>.exe` that is not a reparse
+point and whose canonical path is outside the workspace, so `npm.cmd` and
+versioned or per-user installs (Rust under `.cargo`, Python, Java) are not
+reported.
+
+Git runs through the owned-subprocess boundary with the Unix protections
+(`--no-optional-locks`, `core.fsmonitor=false`, `core.untrackedCache=false`,
+porcelain v1 `-z`). Its environment is `LC_ALL=C` plus `SystemRoot`, which is
+all Git for Windows needed here. It gets the workspace through `-C`, because
+the child starts in `sr`'s current directory. Paths come back repository
+relative with `/` separators, and non-ASCII names as UTF-8 (`-z` disables
+`core.quotepath` quoting). A
+missing Git is an omission, a root inside the workspace (directly or through a
+junction) is refused as `InvalidAuthority`, and a repository's fsmonitor hook
+never runs. Alone on the evidence machine, `git --version` plus `git status`
+took 43 ms (p50) and 69 ms (p95) with the real image, and 84 and 111 ms through
+the launcher, inside the stage's 250 ms; under heavy parallel spawning the stage
+can run out and report `Budget`, as on any loaded host.
 
 ### Other Windows differences
 

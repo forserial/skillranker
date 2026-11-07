@@ -155,9 +155,9 @@ fn omitted(error: SubprocessError) -> Omission {
 }
 
 // `platform_support::GIT_SIGNALS` reports whether Git can be found here.
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 const _: () = assert!(crate::platform_support::GIT_SIGNALS);
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 const _: () = assert!(!crate::platform_support::GIT_SIGNALS);
 
 #[cfg(unix)]
@@ -165,9 +165,29 @@ fn executable(path: &Path) -> bool {
     use std::os::unix::fs::PermissionsExt;
     std::fs::metadata(path).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
 }
-#[cfg(not(unix))]
+/// A regular `.exe` that is not itself a reparse point: the owned-subprocess
+/// boundary runs only `.exe` images, and a resolved target is never a link.
+#[cfg(windows)]
+fn executable(path: &Path) -> bool {
+    use std::os::windows::fs::MetadataExt;
+    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+    path.extension()
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("exe"))
+        && std::fs::symlink_metadata(path)
+            .is_ok_and(|m| m.is_file() && m.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT == 0)
+}
+#[cfg(not(any(unix, windows)))]
 fn executable(_path: &Path) -> bool {
     false
+}
+
+/// The file a tool's name refers to in a trusted root.
+fn tool_file(tool: &str) -> std::borrow::Cow<'_, str> {
+    if cfg!(windows) {
+        format!("{tool}.exe").into()
+    } else {
+        tool.into()
+    }
 }
 
 /// Fixed bounded filename metadata and trusted executable presence. PATH roots
@@ -253,7 +273,7 @@ async fn gather(
     for &tool in TOOLS {
         for root in &roots {
             live(cx, parent, stage)?;
-            let candidate = root.join(tool);
+            let candidate = root.join(tool_file(tool).as_ref());
             let Ok(canonical) = candidate.canonicalize() else {
                 continue;
             };
@@ -282,37 +302,52 @@ async fn gather(
         stdout_limit,
         stderr_limit: 4096,
     };
+    // Windows children start in sr's current directory (the exact-image spawn
+    // cannot set one), so Git gets the workspace through `-C` there instead.
+    #[cfg(windows)]
+    let (neutral, status_directory, prefix) = {
+        let current = std::env::current_dir().map_err(|_| Omission::Unavailable)?;
+        (
+            current.clone(),
+            current,
+            vec![
+                std::ffi::OsString::from("-C"),
+                workspace.clone().into_os_string(),
+            ],
+        )
+    };
+    #[cfg(not(windows))]
+    let (neutral, status_directory, prefix): (PathBuf, PathBuf, Vec<std::ffi::OsString>) =
+        (PathBuf::from("/"), workspace.clone(), Vec::new());
     // Version detection does not inspect the repository or consult shell PATH.
-    let version = subprocess::run(cx, stage, request(&["--version"], PathBuf::from("/"), 1024))
+    let version = subprocess::run(cx, stage, request(&["--version"], neutral, 1024))
         .await
         .map_err(omitted)?;
     if !version.status.success() || !modern_git(&version.stdout) {
         return Err(Omission::UnsupportedGit);
     }
     live(cx, parent, stage)?;
-    let status = subprocess::run(
-        cx,
-        stage,
-        request(
-            &[
-                "--no-optional-locks",
-                "-c",
-                "core.fsmonitor=false",
-                "-c",
-                "core.untrackedCache=false",
-                "status",
-                "--no-renames",
-                "--untracked-files=no",
-                "--ignore-submodules=all",
-                "--porcelain=v1",
-                "-z",
-            ],
-            workspace,
-            STATUS_BYTES,
-        ),
-    )
-    .await
-    .map_err(omitted)?;
+    let mut status_request = request(
+        &[
+            "--no-optional-locks",
+            "-c",
+            "core.fsmonitor=false",
+            "-c",
+            "core.untrackedCache=false",
+            "status",
+            "--no-renames",
+            "--untracked-files=no",
+            "--ignore-submodules=all",
+            "--porcelain=v1",
+            "-z",
+        ],
+        status_directory,
+        STATUS_BYTES,
+    );
+    status_request.args.splice(0..0, prefix);
+    let status = subprocess::run(cx, stage, status_request)
+        .await
+        .map_err(omitted)?;
     live(cx, parent, stage)?;
     if !status.status.success() {
         return Err(Omission::Unavailable);

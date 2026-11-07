@@ -265,12 +265,16 @@ fn windows_reports_every_unqualified_boundary_as_unavailable() {
         assert_eq!(boundary["available"], ported, "{boundary}");
         assert_eq!(boundary["reason"].is_string(), !ported, "{boundary}");
     }
-    // Their callers, cass (sr-winpar.11) and Git (sr-winpar.10), are not ported.
+    // Of their components only Git dirty_paths is ported (sr-winpar.10);
+    // cass sessions still wait on sr-winpar.11.
+    let ported = ["git-dirty-paths"];
     for component in platform["components"].as_array().unwrap() {
-        assert_eq!(component["available"], false, "{component}");
+        let expected = ported.contains(&component["name"].as_str().unwrap());
+        assert_eq!(component["available"], expected, "{component}");
     }
     for mode in platform["modes"].as_array().unwrap() {
-        assert_eq!(mode["available"], false, "{mode}");
+        let expected = ported.contains(&mode["component"].as_str().unwrap());
+        assert_eq!(mode["available"], expected, "{mode}");
     }
 }
 

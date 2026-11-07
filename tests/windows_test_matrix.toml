@@ -833,8 +833,8 @@ issue = "sr-winpar.25"
 file = "tests/project_signals.rs"
 item = "*"
 gate = "cfg(unix)"
-reason = "subprocess"
-issue = "sr-winpar.10"
+reason = "platform-twin"
+issue = "permanent: Unix Git paths, modes and non-UTF-8 names; the Windows twin is tests/project_signals_windows.rs"
 
 [[gate]]
 file = "tests/provider_configuration.rs"

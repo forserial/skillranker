@@ -4,6 +4,11 @@
 
 ### Added
 
+- Windows collects Git `dirty_paths` and the project tool inventory. Tools are
+  found only as regular `.exe` files in fixed roots under `%ProgramFiles%` (Git for
+  Windows' images and its `cmd` launcher, Node.js, Go, CMake), never `PATH`, the
+  user's profile or the workspace; Git runs with `-C <workspace>` and the same
+  fsmonitor, untracked-cache and optional-lock protections as on Unix.
 - Windows runs owned subprocesses. `subprocess::run` spawns an exact `.exe` in a
   kill-on-close Job Object through asupersync's `ExactImageCommand`, services its
   blocking pipes on worker threads that are always joined before it returns, and

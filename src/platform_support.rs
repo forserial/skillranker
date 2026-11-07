@@ -38,8 +38,8 @@ pub const ENFORCED_ALLOWANCE: bool = cfg!(unix);
 /// Components can also wait on their own port after their boundary exists.
 /// cass sessions (`pipeline::cass_source`) run only on Unix; sr-winpar.11.
 pub const CASS_SESSIONS: bool = cfg!(unix);
-/// Git `dirty_paths` (`context::signals`) finds Git only on Unix; sr-winpar.10.
-pub const GIT_SIGNALS: bool = cfg!(unix);
+/// Git `dirty_paths` (`context::signals`): Unix, and Windows since sr-winpar.10.
+pub const GIT_SIGNALS: bool = cfg!(any(unix, windows));
 
 impl Boundary {
     pub const ALL: [Self; 4] = [
