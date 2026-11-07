@@ -155,13 +155,6 @@ reason = "linux-only"
 issue = "permanent: Linux-only mechanism (tmpfs, /proc, pidfd or statfs magic) with no Windows counterpart"
 
 [[gate]]
-file = "src/jev/client.rs"
-item = "mod tests"
-gate = "cfg(all(test, unix))"
-reason = "provider-stub"
-issue = "sr-winpar.24"
-
-[[gate]]
 file = "src/lib.rs"
 item = "mod filesystem_policy"
 gate = "cfg(unix)"
@@ -252,7 +245,6 @@ item = "*"
 gate = "cfg(any(target_os = \"linux\", target_os = \"macos\"))"
 reason = "private-storage"
 issue = "sr-winpar.5"
-also = ["sr-winpar.24"]
 
 [[gate]]
 file = "tests/allowance_filesystem_contract.rs"
@@ -370,7 +362,6 @@ item = "*"
 gate = "cfg(any(target_os = \"linux\", target_os = \"macos\"))"
 reason = "private-storage"
 issue = "sr-winpar.3"
-also = ["sr-winpar.24"]
 note = "shared provider breaker store"
 
 [[gate]]
@@ -608,26 +599,12 @@ issue = "sr-winpar.25"
 note = "non-UTF-8 path bytes; port with unpaired surrogates"
 
 [[gate]]
-file = "tests/jev_retry.rs"
-item = "*"
-gate = "cfg(unix)"
-reason = "provider-stub"
-issue = "sr-winpar.24"
-
-[[gate]]
 file = "tests/jev_smoke.rs"
 item = "*"
 gate = "cfg(unix)"
 reason = "unaudited"
 issue = "sr-winpar.25"
 note = "consented live smoke; skips without credentials"
-
-[[gate]]
-file = "tests/jev_transport.rs"
-item = "*"
-gate = "cfg(unix)"
-reason = "provider-stub"
-issue = "sr-winpar.24"
 
 [[gate]]
 file = "tests/jsonl_snapshot.rs"
@@ -657,7 +634,6 @@ item = "*"
 gate = "cfg(unix)"
 reason = "private-storage"
 issue = "sr-winpar.4"
-also = ["sr-winpar.24"]
 
 [[gate]]
 file = "tests/ledger_attempt_rows.rs"
@@ -686,7 +662,6 @@ item = "*"
 gate = "cfg(any(target_os = \"linux\", target_os = \"macos\"))"
 reason = "private-storage"
 issue = "sr-winpar.4"
-also = ["sr-winpar.24"]
 
 [[gate]]
 file = "tests/ledger_migration_contract.rs"
@@ -745,7 +720,6 @@ item = "*"
 gate = "cfg(any(target_os = \"linux\", target_os = \"macos\"))"
 reason = "private-storage"
 issue = "sr-winpar.4"
-also = ["sr-winpar.24"]
 
 [[gate]]
 file = "tests/owner_only_refusal_names_the_path.rs"
@@ -790,7 +764,6 @@ item = "*"
 gate = "cfg(any(target_os = \"linux\", target_os = \"macos\"))"
 reason = "private-storage"
 issue = "sr-winpar.4"
-also = ["sr-winpar.24"]
 
 [[gate]]
 file = "tests/p6_gate.rs"
@@ -798,7 +771,7 @@ item = "*"
 gate = "cfg(any(target_os = \"linux\", target_os = \"macos\"))"
 reason = "hook-suite"
 issue = "sr-winpar.17"
-also = ["sr-winpar.4", "sr-winpar.5", "sr-winpar.24"]
+also = ["sr-winpar.4", "sr-winpar.5"]
 
 [[gate]]
 file = "tests/p7_gate.rs"
@@ -806,7 +779,7 @@ item = "*"
 gate = "cfg(any(target_os = \"linux\", target_os = \"macos\"))"
 reason = "hook-suite"
 issue = "sr-winpar.17"
-also = ["sr-winpar.4", "sr-winpar.24"]
+also = ["sr-winpar.4"]
 
 [[gate]]
 file = "tests/p8_gate.rs"
@@ -850,7 +823,6 @@ item = "*"
 gate = "cfg(unix)"
 reason = "private-storage"
 issue = "sr-winpar.3"
-also = ["sr-winpar.24"]
 
 [[gate]]
 file = "tests/rank_discovery_gaps.rs"
@@ -911,7 +883,6 @@ item = "*"
 gate = "cfg(unix)"
 reason = "private-storage"
 issue = "sr-winpar.3"
-also = ["sr-winpar.24"]
 note = "coordinator leases"
 
 [[gate]]
@@ -957,7 +928,6 @@ item = "*"
 gate = "cfg(any(target_os = \"linux\", target_os = \"macos\"))"
 reason = "private-storage"
 issue = "sr-winpar.4"
-also = ["sr-winpar.24"]
 
 [[gate]]
 file = "tests/roster_cli.rs"
@@ -1167,7 +1137,6 @@ item = "*"
 gate = "cfg(unix)"
 reason = "private-storage"
 issue = "sr-winpar.6"
-also = ["sr-winpar.24"]
 
 [[gate]]
 file = "tests/session_discovery.rs"
@@ -1189,7 +1158,6 @@ item = "*"
 gate = "cfg(any(target_os = \"linux\", target_os = \"macos\"))"
 reason = "private-storage"
 issue = "sr-winpar.4"
-also = ["sr-winpar.24"]
 
 [[gate]]
 file = "tests/stats_inflight_accounting.rs"
@@ -1272,13 +1240,6 @@ item = "*"
 gate = "cfg(unix)"
 reason = "unaudited"
 issue = "sr-winpar.25"
-
-[[gate]]
-file = "tests/transport_failures.rs"
-item = "*"
-gate = "cfg(unix)"
-reason = "provider-stub"
-issue = "sr-winpar.24"
 
 [[gate]]
 file = "tests/tui_contract.rs"

@@ -8,8 +8,28 @@ import sys
 import time
 
 
-def emit(value):
-    print(json.dumps(value), flush=True)
+if sys.platform == "win32":
+    # A Windows pipe holds about 4 KiB and the tests read reports at the end, so
+    # a blocking write here would stall the server mid-answer (sr-winpar.24).
+    import atexit
+    import queue
+    import threading
+
+    pending = queue.SimpleQueue()
+
+    def report_pending():
+        while (line := pending.get()) is not None:
+            print(line, flush=True)
+
+    reporter = threading.Thread(target=report_pending, daemon=True)
+    reporter.start()
+    atexit.register(lambda: (pending.put(None), reporter.join()))
+
+    def emit(value):
+        pending.put(json.dumps(value))
+else:
+    def emit(value):
+        print(json.dumps(value), flush=True)
 
 
 root = pathlib.Path(__file__).parent
@@ -18,8 +38,16 @@ assert 1 <= len(steps) <= 5
 context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
 context.load_cert_chain(root / "server.pem", root / "server.key")
 context.set_alpn_protocols(["http/1.1"])
-listener = socket.socket()
-listener.bind(("127.0.0.1", 0))
+if sys.platform == "win32":
+    # `localhost` tries ::1 first, and Windows retries a refused connect for two
+    # seconds, which is most of a test deadline. Answer on both families, as
+    # provider_server.py does (sr-winpar.24).
+    listener = socket.socket(socket.AF_INET6)
+    listener.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
+    listener.bind(("::", 0))
+else:
+    listener = socket.socket()
+    listener.bind(("127.0.0.1", 0))
 listener.listen(2)
 listener.settimeout(5)
 emit({"port": listener.getsockname()[1]})

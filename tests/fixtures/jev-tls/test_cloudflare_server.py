@@ -4,6 +4,7 @@
 from contextlib import contextmanager
 import http.client
 import json
+import os
 from pathlib import Path
 import ssl
 import subprocess
@@ -19,7 +20,8 @@ TOKEN = "synthetic-cloudflare-transport-token"
 def peer(steps, protocol="native"):
     child = subprocess.Popen(
         [sys.executable, str(ROOT / "cloudflare_server.py"), json.dumps(steps), protocol],
-        env={},
+        # Empty, except that Windows needs SystemRoot for Winsock (sr-winpar.24).
+        env={"SystemRoot": os.environ["SystemRoot"]} if sys.platform == "win32" else {},
         stdin=subprocess.DEVNULL,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,

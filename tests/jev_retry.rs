@@ -1,6 +1,8 @@
-#![cfg(unix)]
 //! Production retry/admission paths over real local TLS, plus deterministic
 //! scheduling tests. All data and trust roots are public synthetic fixtures.
+
+#[path = "support/stub_python.rs"]
+mod stub_python;
 
 use asupersync::tls::Certificate;
 use asupersync::{CancelKind, Cx};
@@ -22,7 +24,7 @@ use std::ffi::OsString;
 use std::future::{Future, poll_fn};
 use std::io::{BufRead, BufReader};
 use std::net::TcpListener;
-use std::process::{Child, ChildStdout, Command, Stdio};
+use std::process::{Child, ChildStdout, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::task::Poll;
 use std::time::{Duration, SystemTime};
@@ -131,10 +133,9 @@ impl Server {
         ] {
             std::fs::write(directory.join(name), bytes).unwrap();
         }
-        let mut child = Command::new("/usr/bin/python3")
+        let mut child = stub_python::python_command()
             .arg(directory.join("retry_server.py"))
             .arg(serde_json::to_string(steps).unwrap())
-            .env_clear()
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit())

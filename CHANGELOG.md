@@ -4,6 +4,10 @@
 
 ### Added
 
+- The loopback TLS provider stubs run on Windows (shared interpreter lookup in
+  `tests/support/stub_python.rs`, dual-stack listeners, queued reports, a timer
+  watchdog in place of `SIGALRM`), so `jev_retry`, `jev_transport`,
+  `transport_failures` and the library's TLS client tests run natively there.
 - Windows collects Git `dirty_paths` and the project tool inventory. Tools are
   found only as regular `.exe` files in fixed roots under `%ProgramFiles%` (Git for
   Windows' images and its `cmd` launcher, Node.js, Go, CMake), never `PATH`, the

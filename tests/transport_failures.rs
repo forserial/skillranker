@@ -1,4 +1,3 @@
-#![cfg(unix)]
 //! Comprehensive transport failure matrix, shutdown, accounting, and safe error reporting.
 //!
 //! Enforces boundary `p1_transport_failure_matrix` (sr-roadmap-l1i.2.11):
@@ -9,6 +8,9 @@
 //! - HTTP 429 backoff and Retry-After strictly honor attempt budgets and deadlines.
 //! - SIGINT/SIGTERM user cancellation terminates cleanly with zero surviving workers or leaked descriptors.
 //! - Honest success counterparts verify that healthy operations succeed under identical credentials.
+
+#[path = "support/stub_python.rs"]
+mod stub_python;
 
 use asupersync::tls::Certificate;
 use asupersync::{CancelKind, Cx};
@@ -29,7 +31,7 @@ use skillranker::runtime::{EntryClock, ProcessInvocation};
 use std::ffi::OsString;
 use std::io::{BufRead, BufReader};
 use std::net::TcpListener;
-use std::process::{Child, ChildStdout, Command, Stdio};
+use std::process::{Child, ChildStdout, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime};
 
@@ -180,10 +182,9 @@ impl Server {
             std::fs::write(directory.join(name), bytes).unwrap();
         }
 
-        let mut child = Command::new("/usr/bin/python3")
+        let mut child = stub_python::python_command()
             .arg(directory.join("server.py"))
             .arg(mode)
-            .env_clear()
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit())
@@ -226,10 +227,9 @@ impl Server {
             std::fs::write(directory.join(name), bytes).unwrap();
         }
 
-        let mut child = Command::new("/usr/bin/python3")
+        let mut child = stub_python::python_command()
             .arg(directory.join("retry_server.py"))
             .arg(serde_json::to_string(steps).unwrap())
-            .env_clear()
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit())
@@ -312,7 +312,11 @@ fn stalled_dns_or_connection_refusal_fails_safely() {
     let cred = scoped_credential(endpoint.origin(), TRANSPORT_CANARY);
     let client = JevClient::with_additional_roots(endpoint, vec![ca_certificate()]).unwrap();
 
-    let ctx = TestContext::new(2000, 200);
+    // Windows retries a refused loopback connect before reporting it: about
+    // 2,050 ms on the evidence machine (sr-winpar.24), longer than the 1,800 ms
+    // work budget used elsewhere. The refusal itself is what this checks.
+    let total = if cfg!(windows) { 3000 } else { 2000 };
+    let ctx = TestContext::new(total, 200);
     let err = ctx.send(&client, Some(&cred)).err().unwrap();
 
     assert_eq!(err.kind, TransportErrorKind::Connect);

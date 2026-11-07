@@ -7,6 +7,9 @@
 //! turn skips; on Linux and macOS a missing or disabled ledger skips and an
 //! initialized one records. Advisory mode always ranks.
 
+#[path = "support/stub_python.rs"]
+mod stub_python;
+
 use serde_json::{Value, json};
 use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
@@ -134,23 +137,6 @@ fn system_environment(command: &mut Command) {
     let _ = command;
 }
 
-fn python() -> PathBuf {
-    // `python` on PATH may be an install-manager alias that needs the user's
-    // environment; ask it once for the real interpreter, which then runs with
-    // an explicit environment like every other child here.
-    #[cfg(windows)]
-    {
-        let out = Command::new("python")
-            .args(["-c", "import sys; print(sys.executable)"])
-            .output()
-            .expect("the provider stub needs `python` on PATH");
-        assert!(out.status.success(), "{}", describe(&out));
-        PathBuf::from(String::from_utf8(out.stdout).unwrap().trim())
-    }
-    #[cfg(not(windows))]
-    PathBuf::from("/usr/bin/python3")
-}
-
 fn describe(out: &Output) -> String {
     format!(
         "exit {:?}\n{}\n{}",
@@ -208,15 +194,13 @@ impl Provider {
         ] {
             std::fs::write(dir.join(name), bytes).unwrap();
         }
-        let mut command = Command::new(python());
+        let mut command = stub_python::python_command();
         command
             .arg(dir.join("provider_server.py"))
             .arg("useful")
-            .env_clear()
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit());
-        system_environment(&mut command);
         let mut child = command.spawn().unwrap();
         let mut lines = BufReader::new(child.stdout.take().unwrap());
         let mut hello = String::new();

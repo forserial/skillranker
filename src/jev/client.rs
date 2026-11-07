@@ -23,7 +23,7 @@ use std::time::Duration;
 
 const MAX_ADDITIONAL_ROOTS: usize = 8;
 const MAX_ROOT_BYTES: usize = 64 * 1024;
-#[cfg(all(test, unix))]
+#[cfg(test)]
 const CLOUDFLARE_ORIGIN: &str = super::endpoint::CLOUDFLARE_API_ORIGIN;
 
 // Only the native wire details differ. Both protocols must traverse the same
@@ -256,7 +256,7 @@ impl JevClient {
 
     // Private seam for real loopback TLS tests; no public endpoint override can
     // turn Cloudflare credentials into a bearer token for an arbitrary service.
-    #[cfg(all(test, unix))]
+    #[cfg(test)]
     fn cloudflare_at(
         endpoint: EndpointConfig,
         account_id: &str,
@@ -534,5 +534,5 @@ async fn drive_exchange(
     }
 }
 
-#[cfg(all(test, unix))]
+#[cfg(test)]
 mod tests;

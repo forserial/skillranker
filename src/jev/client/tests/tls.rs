@@ -21,15 +21,38 @@ fn read_json(lines: &mut impl BufRead) -> Value {
     serde_json::from_str(&line).unwrap()
 }
 
+/// The stub interpreter with an empty environment plus what the platform
+/// needs (sr-winpar.24): `/usr/bin/python3` on Unix; on Windows the real
+/// interpreter behind `python`, with `SystemRoot` for Winsock.
+fn stub_python() -> Command {
+    #[cfg(windows)]
+    let interpreter = {
+        let output = Command::new("python")
+            .args(["-c", "import sys; print(sys.executable)"])
+            .output()
+            .expect("the provider stub needs `python` on PATH");
+        assert!(output.status.success(), "python failed: {output:?}");
+        std::path::PathBuf::from(String::from_utf8(output.stdout).unwrap().trim())
+    };
+    #[cfg(not(windows))]
+    let interpreter = std::path::PathBuf::from("/usr/bin/python3");
+    let mut command = Command::new(interpreter);
+    command.env_clear();
+    #[cfg(windows)]
+    if let Some(root) = std::env::var_os("SystemRoot") {
+        command.env("SystemRoot", root);
+    }
+    command
+}
+
 impl Server {
     fn new(steps: &[&str], native: bool) -> Self {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("tests/fixtures/jev-tls/cloudflare_server.py");
-        let mut child = Command::new("/usr/bin/python3")
+        let mut child = stub_python()
             .arg(path)
             .arg(serde_json::to_string(steps).unwrap())
             .arg(if native { "native" } else { "typesafe" })
-            .env_clear()
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit())
@@ -217,6 +240,11 @@ fn stateless_pipeline_previews_match_actual_tls_wire_and_evaluation_admission() 
             use std::os::unix::ffi::OsStrExt;
             skill.as_os_str().as_bytes()
         };
+        // Windows hashes the declared path spelled with `/` separators.
+        #[cfg(windows)]
+        let spelled = skill.to_string_lossy().replace('\\', "/");
+        #[cfg(windows)]
+        let path_bytes = spelled.as_bytes();
         let id = SkillId::from_source(
             &SourceId::new("claude_code.project").unwrap(),
             &LogicalSkillKey::new(blake3::hash(path_bytes).to_hex().to_string()).unwrap(),

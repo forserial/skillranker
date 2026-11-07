@@ -301,8 +301,10 @@ rename.
 
 **What the Windows suite leaves out.**
 [`tests/windows_test_matrix.toml`](../tests/windows_test_matrix.toml) is the exact
-inventory. It lists 165 gates (72 whole files, 17 modules, 76 single tests) with a
-reason and the issue that lifts each one, or a justified permanent exclusion;
+inventory and the live source for these numbers: each later child removes or
+reclassifies the entries it ports. When sr-winpar.16 added it, it listed 165 gates
+(72 whole files, 17 modules, 76 single tests), each with a reason and the issue
+that lifts it, or a justified permanent exclusion;
 `tests/windows_test_matrix.rs` scans `src/` and `tests/` and fails when a gate is
 missing from it or an entry is stale. Reconciled with
 `cargo test --locked -- --list` on the commit that added it, Windows lists 975
@@ -313,7 +315,12 @@ private store (sr-winpar.3 to .6), 5 on the hook suites (.17), 6 on subprocesses
 auditing suites (.25, .15); 19 are permanent (FIFOs and devices, POSIX signals
 and rlimits, Linux-only mechanisms, the Linux half of a twin test).
 `tests/authorized_read_windows.rs` and `tests/windows_platform.rs` cover the file
-layer and hook natively. Symbolic-link cases report a skip on a token without the
+layer and hook natively. Since sr-winpar.24 the loopback TLS provider stubs run on
+Windows too (`tests/support/stub_python.rs` finds the interpreter; the stubs listen
+on both address families and report through a queue there), so `jev_retry`,
+`jev_transport`, `transport_failures` and the library's TLS client tests run
+natively. A refused loopback connect takes about 2,050 ms to report on Windows,
+so the refusal test gives it a 3,000 ms context there. Symbolic-link cases report a skip on a token without the
 privilege; here they ran.
 
 **Not established.** A model turn receiving the injected context: `claude -p`

@@ -146,8 +146,18 @@ def main():
         "closed": [], "connection_headers": [], "valid_requests": 0,
         "captured_requests": [],
     }
-    with socket.socket() as listener:
-        listener.bind(("127.0.0.1", 0))
+    if sys.platform == "win32":
+        # `localhost` tries ::1 first, and Windows retries a refused connect for
+        # two seconds; answer on both families as provider_server.py does
+        # (sr-winpar.24).
+        listener = socket.socket(socket.AF_INET6)
+        listener.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
+        address = ("::", 0)
+    else:
+        listener = socket.socket()
+        address = ("127.0.0.1", 0)
+    with listener:
+        listener.bind(address)
         listener.listen(4)
         listener.settimeout(10)
         print(json.dumps({"port": listener.getsockname()[1]}), flush=True)
@@ -209,7 +219,16 @@ def main():
 
 if __name__ == "__main__":
     try:
-        signal.alarm(30)
+        if hasattr(signal, "alarm"):
+            signal.alarm(30)
+        else:
+            # Windows has no SIGALRM: the same 30 s watchdog from a timer thread.
+            import os
+            import threading
+
+            watchdog = threading.Timer(30, os._exit, args=(2,))
+            watchdog.daemon = True
+            watchdog.start()
         main()
     except (AssertionError, OSError, ValueError, KeyError, TypeError):
         # Deliberately omit request bytes, headers and parser exception details.
