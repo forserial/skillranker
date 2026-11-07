@@ -234,7 +234,7 @@ pub const MODES: &[Mode] = &[
     },
     Mode {
         command: "hook",
-        mode: Some("shadow evaluation recording"),
+        mode: Some("shadow ranking and recording"),
         component: "ledger",
         when_unavailable: Fallback::Skipped,
     },

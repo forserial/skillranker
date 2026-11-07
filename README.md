@@ -1705,7 +1705,11 @@ support a global no-match message.
 **The hook never blocks the agent on a recommendation failure.** It emits no
 blocking decision fields and maps errors found before publication to empty
 stdout, a sanitized stderr diagnostic, and exit zero. Shadow mode suppresses both suggestions and
-abstention text while retaining permitted local observations.
+abstention text while retaining permitted local observations. Because a shadow
+turn's only product is its recorded evaluation, a shadow hook that already knows
+nothing can be recorded (`--no-ledger`, `--no-persist`, or a ledger that is
+missing, read-only or cannot be opened) skips ranking before any provider
+request and says why in one stderr line. Advisory mode always ranks.
 
 The complete bounded envelope is rendered before publication. If stdout fails
 partway through, already-written bytes cannot be retracted: delivery remains

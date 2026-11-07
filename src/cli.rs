@@ -5552,6 +5552,30 @@ fn hook_claude_command(clock: &EntryClock, m: &clap::ArgMatches) -> Result<Strin
     timely(clock)?;
     let invocation = crate::runtime::ProcessInvocation::from_clock(*clock)
         .map_err(|_| (6u8, "timeout", "Local runtime unavailable".into()))?;
+    // A shadow hook publishes nothing, so its only product is the recorded
+    // evaluation. When the run can already tell that nothing will be recorded,
+    // it stops here, before any provider admission, allowance debit or breaker
+    // probe (sr-winpar.8). Advisory mode always proceeds.
+    let shadow = m.get_flag("shadow") || initial_mode == crate::config::HookMode::Shadow;
+    if shadow {
+        let location = match &args.ledger_dir {
+            Some(dir) => crate::storage::LedgerLocation::Directory(dir.clone()),
+            None => crate::storage::LedgerLocation::Platform,
+        };
+        if let Some(reason) = shadow_recording_unavailable(&invocation, gate, location) {
+            // Still consume the payload, bounded by size and deadline as the
+            // pipeline would, so the harness never writes into a closed pipe.
+            if let Some(problem) = drain_hook_stdin(clock) {
+                let _ = writeln!(io::stderr().lock(), "sr: {problem}");
+            }
+            let _ = writeln!(
+                io::stderr().lock(),
+                "sr: shadow hook skipped ranking: {reason}"
+            );
+            finish_invocation(invocation, Ok(()))?;
+            return Ok(String::new());
+        }
+    }
     let (reval_workspace, reval_user_root, reval_sources) = (
         args.workspace.clone(),
         args.user_config_root.clone(),
@@ -5654,6 +5678,74 @@ fn hook_claude_command(clock: &EntryClock, m: &clap::ArgMatches) -> Result<Strin
     Ok(String::new())
 }
 
+/// Why a shadow hook run would record nothing, established before any provider
+/// admission. `None` lets the run proceed: the ledger is ready, or its failure
+/// is transient (busy, I/O, cancellation, deadline) and a later write may
+/// still succeed. Only a definite answer skips provider work.
+fn shadow_recording_unavailable(
+    invocation: &crate::runtime::ProcessInvocation,
+    gate: crate::effects::EffectGate,
+    location: crate::storage::LedgerLocation,
+) -> Option<&'static str> {
+    if matches!(gate.ledger(), crate::privacy::StoreAccess::Disabled(_)) {
+        return Some("ledger recording is disabled for this invocation");
+    }
+    let cx = invocation.request_cx().ok()?;
+    shadow_skip_reason(&crate::storage::open_ledger(
+        invocation,
+        &cx,
+        crate::storage::LedgerAccess::ExistingOnly,
+        location,
+    ))
+}
+
+/// Read and discard the hook payload with the pipeline's bounds; the messages
+/// match the pipeline's own stdin diagnostics.
+fn drain_hook_stdin(clock: &EntryClock) -> Option<&'static str> {
+    let mut bytes = Vec::new();
+    let limit = crate::limits::HOOK_STDIN_BYTES.max();
+    match crate::runtime::read_stdin_platform_before_cleanup(clock, limit, &mut bytes) {
+        Ok(()) => None,
+        Err(crate::runtime::RuntimeError::StdinTimeout) => {
+            Some("Hook stdin reached the ranking deadline")
+        }
+        Err(crate::runtime::RuntimeError::Deadline(crate::limits::LimitError::AboveLimit {
+            ..
+        })) => Some("Hook payload on stdin exceeds 1 MiB"),
+        Err(crate::runtime::RuntimeError::UnboundedLeaf) => {
+            Some("Bounded stdin is unavailable on this platform")
+        }
+        Err(_) => Some("Failed to read hook payload from stdin"),
+    }
+}
+
+fn shadow_skip_reason(
+    open: &Result<crate::storage::LedgerOpen, crate::storage::StoreError>,
+) -> Option<&'static str> {
+    use crate::storage::{LedgerOpen, StoreError};
+    match open {
+        Ok(LedgerOpen::Ready(_)) => None,
+        Ok(LedgerOpen::ReadOnly(_)) => Some("the ledger is read-only"),
+        Ok(LedgerOpen::Disabled) => Some("ledger recording is disabled"),
+        Ok(LedgerOpen::Missing) | Err(StoreError::Missing | StoreError::Uninitialized) => {
+            Some("no ledger is initialized; run `sr ledger init`")
+        }
+        Err(StoreError::UnsupportedFilesystem) => {
+            Some("this platform or filesystem cannot host the ledger")
+        }
+        Err(
+            StoreError::UnsafePath
+            | StoreError::Permissions
+            | StoreError::WrongStore
+            | StoreError::IncompatibleSchema
+            | StoreError::NewerSchema { .. }
+            | StoreError::UnqualifiedEngine
+            | StoreError::Corrupt,
+        ) => Some("the ledger cannot be opened for recording"),
+        Err(_) => None,
+    }
+}
+
 /// What a recorded shadow trial still needs, reported and never changed: an
 /// initialized ledger, trusted network consent (a one-shot `--allow-network`
 /// never reaches a hook) and a key in the hook's environment. Nothing private
@@ -5678,14 +5770,17 @@ fn hook_prerequisites(
         });
     let ledger = match ledger {
         _ if !crate::platform_support::PRIVATE_STORAGE => {
-            "unavailable: Windows builds have no ledger, so a recorded trial is not possible"
+            "unavailable: Windows builds have no ledger, so a recorded trial is not possible; \
+             shadow hooks skip ranking and send no provider requests"
                 .to_owned()
         }
         Some(crate::storage::LedgerOpen::Ready(_)) => "initialized".to_owned(),
         Some(crate::storage::LedgerOpen::ReadOnly(_)) => {
             "read-only: a hook cannot record to it".to_owned()
         }
-        _ => "missing: run `sr ledger init` before claiming a recorded trial".to_owned(),
+        _ => "missing: run `sr ledger init` before claiming a recorded trial; \
+              until then shadow hooks skip ranking and send no provider requests"
+            .to_owned(),
     };
     let config = user_root.map_or_else(
         || "your trusted sr/config.toml".to_owned(),
@@ -7461,5 +7556,36 @@ mod documented_flag_tests {
             invocation.is_empty(),
             "unfinished README shell continuation"
         );
+    }
+}
+
+#[cfg(test)]
+mod shadow_skip_tests {
+    use super::shadow_skip_reason;
+    use crate::storage::{LedgerOpen, StoreError};
+
+    #[test]
+    fn definite_ledger_failures_skip_and_transient_ones_proceed() {
+        for definite in [
+            Ok(LedgerOpen::Missing),
+            Ok(LedgerOpen::Disabled),
+            Err(StoreError::Missing),
+            Err(StoreError::Uninitialized),
+            Err(StoreError::UnsupportedFilesystem),
+            Err(StoreError::Permissions),
+            Err(StoreError::UnsafePath),
+            Err(StoreError::NewerSchema { version: 99 }),
+            Err(StoreError::Corrupt),
+        ] {
+            assert!(
+                shadow_skip_reason(&definite).is_some(),
+                "{:?}",
+                definite.err()
+            );
+        }
+        // A later write may still succeed, so these never skip provider work.
+        for transient in [StoreError::Busy, StoreError::Io, StoreError::Cancelled] {
+            assert_eq!(shadow_skip_reason(&Err(transient)), None, "{transient:?}");
+        }
     }
 }

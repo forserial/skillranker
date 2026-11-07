@@ -97,6 +97,7 @@ owner-only private store fails closed instead of being emulated:
 | Response cache, ledger, coordinator leases | Store open reports `UnsupportedFilesystem`; optional caching is skipped visibly and commands that require the ledger (`observe`, `feedback`, `stats`, `ledger`, …) fail with their storage error |
 | Enforced request allowance | An absent guard means no allowance is configured, as on Unix; an existing guard, accounting store or `sr budget --apply` is refused, which withholds provider requests |
 | Hook invocation counter | Never written (it lives beside a ledger) |
+| Shadow-mode hooks | Skip ranking before any provider request, since nothing could be recorded; one stderr line says why. Advisory mode ranks and publishes |
 | Owner-only exports, roster snapshots and replay case files | Refused: Windows ACLs are not inspected, so owner-only access cannot be established |
 | cass sessions (`--session`), Git `dirty_paths` | Unsupported source mode / omitted signal: subprocesses are Linux/macOS only |
 | Hook installer backups, calibration policy files | Written without owner-only protection (sr-winpar.7 for backups) |
@@ -165,9 +166,6 @@ the fallback there; Unix still reads only `HOME`.
   cancelling it would need `unsafe` code the crate forbids.
 - Root matching compares path components case-sensitively. A link target spelled
   with different case than its authorized root is refused, which fails closed.
-- Shadow-mode hooks with network consent send their provider requests and then
-  have no ledger to record them in, so on Windows they spend requests for no
-  stored result. Advisory mode publishes its answer.
 - `sr roster --snapshot` is refused along with other owner-only exports.
   `--diff` reads a saved snapshot, but Windows cannot write one.
 - A full storage port needs an audited owner-only ACL check and an admitted

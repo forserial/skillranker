@@ -28,6 +28,12 @@
 
 ### Fixed
 
+- Shadow-mode hooks no longer spend provider requests when nothing can be
+  recorded. With `--no-ledger`, `--no-persist`, or a ledger that is missing,
+  read-only or cannot be opened (always, on Windows), `sr hook claude` in shadow
+  mode skips ranking before any provider admission, allowance debit or breaker
+  probe, exits 0 with empty stdout and names the reason in one stderr line.
+  Advisory mode and `sr rank` are unchanged.
 - Windows: ranking no longer fails with exit 9 for lack of `/dev/urandom`; keys,
   tokens and sampling seeds use the OS CSPRNG. `install-hook` writes a command
   Git Bash can run. `sr hook claude` and `--context -` read piped stdin. `sr eval`
