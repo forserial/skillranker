@@ -12,6 +12,13 @@
   builds Linux, macOS and Windows release archives.
 - A Windows test suite for the file layer and the `sr` binary, running against real
   symbolic links, junctions, reserved names and Claude Code hook input.
+- `sr capabilities --json` reports platform availability in a new additive
+  `platform` field: which boundaries (private storage, owner-only files, owned
+  subprocesses, enforced allowance) this build has, and which components and
+  command modes are refused, skipped, omitted, reported empty or written without
+  owner-only protection when one is missing. On Windows every boundary is
+  reported unavailable; Linux and macOS report them available. Each refusing
+  implementation asserts its flag at compile time, so the report cannot drift.
 
 - An offline corpus-to-frame exporter connects validated adjudicated primary
   cases and explicitly recorded outcomes to `sr eval`. It preserves failures

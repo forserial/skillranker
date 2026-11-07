@@ -77,6 +77,8 @@ mod cass_source;
 /// unsupported source mode, reported before any process is started.
 #[cfg(not(unix))]
 mod cass_source {
+    // cass runs through `subprocess::run`; see `platform_support::OWNED_SUBPROCESS`.
+    const _: () = assert!(!crate::platform_support::OWNED_SUBPROCESS);
     use super::{PipelineFailure, failure};
     use crate::context::NormalizedContext;
     use crate::context::source::SourcePolicy;

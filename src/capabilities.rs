@@ -169,5 +169,57 @@ pub fn registry() -> Value {
         },
         "limits": limits,
         "exit_codes": {"success": 0, "errors": errors},
+        "platform": platform_availability(),
+    })
+}
+
+/// Which platform boundaries, components and command modes this build can run
+/// on the platform it was compiled for. Every entry is listed on every
+/// platform; `available` comes from `platform_support`, whose flags are the
+/// same predicates the refusing implementations assert.
+pub fn platform_availability() -> Value {
+    use crate::platform_support::{Boundary, COMPONENTS, MODES, component, target_os};
+    let boundaries: Vec<Value> = Boundary::ALL
+        .iter()
+        .map(|boundary| {
+            json!({
+                "name": boundary.name(),
+                "available": boundary.available(),
+                "reason": boundary.unavailable_reason(),
+            })
+        })
+        .collect();
+    let components: Vec<Value> = COMPONENTS
+        .iter()
+        .map(|entry| {
+            json!({
+                "name": entry.name,
+                "requires": entry.requires.name(),
+                "available": entry.requires.available(),
+                "when_unavailable": entry.when_unavailable.name(),
+            })
+        })
+        .collect();
+    let modes: Vec<Value> = MODES
+        .iter()
+        .map(|entry| {
+            let available = component(entry.component)
+                .expect("every mode names a listed component")
+                .requires
+                .available();
+            json!({
+                "command": entry.command,
+                "mode": entry.mode,
+                "component": entry.component,
+                "available": available,
+                "when_unavailable": entry.when_unavailable.name(),
+            })
+        })
+        .collect();
+    json!({
+        "os": target_os(),
+        "boundaries": boundaries,
+        "components": components,
+        "modes": modes,
     })
 }

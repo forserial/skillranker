@@ -41,6 +41,11 @@ mod admission_budget;
 mod guard_file;
 #[cfg(windows)]
 mod unsupported;
+// `platform_support::ENFORCED_ALLOWANCE` reports which state modules this build has.
+#[cfg(unix)]
+const _: () = assert!(crate::platform_support::ENFORCED_ALLOWANCE);
+#[cfg(windows)]
+const _: () = assert!(!crate::platform_support::ENFORCED_ALLOWANCE);
 use admission_budget::AdmissionBudget;
 use guard_file::GuardLock;
 #[cfg(windows)]

@@ -111,6 +111,12 @@ pub fn record_hook_entry(dir: &Path, database_file: &str, counter: HookCounter, 
     let _ = try_record(dir, database_file, counter, now_unix_ms);
 }
 
+// `platform_support::PRIVATE_STORAGE` reports which counter this build has.
+#[cfg(unix)]
+const _: () = assert!(crate::platform_support::PRIVATE_STORAGE);
+#[cfg(not(unix))]
+const _: () = assert!(!crate::platform_support::PRIVATE_STORAGE);
+
 #[cfg(unix)]
 fn try_record(
     dir: &Path,

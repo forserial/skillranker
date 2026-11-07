@@ -146,6 +146,12 @@ fn io_error(error: Errno) -> ExportError {
     ExportError::Io(std::io::Error::from_raw_os_error(error as i32))
 }
 
+// `platform_support::OWNER_ONLY_FILES` reports which export this build has.
+#[cfg(unix)]
+const _: () = assert!(crate::platform_support::OWNER_ONLY_FILES);
+#[cfg(not(unix))]
+const _: () = assert!(!crate::platform_support::OWNER_ONLY_FILES);
+
 /// Publish owner-only data without replacing any existing destination.
 ///
 /// The full parent chain must contain real, trusted directories, with no

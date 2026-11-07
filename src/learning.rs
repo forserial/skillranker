@@ -963,6 +963,12 @@ pub struct PolicyRevisionRecord {
     pub applied_prior_snapshot: Option<SerializedPriorSnapshot>,
 }
 
+// `platform_support::OWNER_ONLY_FILES` reports whether policy files get owner-only modes.
+#[cfg(unix)]
+const _: () = assert!(crate::platform_support::OWNER_ONLY_FILES);
+#[cfg(not(unix))]
+const _: () = assert!(!crate::platform_support::OWNER_ONLY_FILES);
+
 fn ensure_private_dir(path: &Path) -> Result<(), LearningError> {
     #[cfg(unix)]
     {

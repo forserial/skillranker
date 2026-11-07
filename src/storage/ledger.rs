@@ -2050,6 +2050,12 @@ pub(crate) struct PrivateLedgerDirectory {
     simulated_available_disk_bytes: Option<u64>,
 }
 
+// `platform_support::PRIVATE_STORAGE` reports which open this build has.
+#[cfg(unix)]
+const _: () = assert!(crate::platform_support::PRIVATE_STORAGE);
+#[cfg(not(unix))]
+const _: () = assert!(!crate::platform_support::PRIVATE_STORAGE);
+
 #[cfg(unix)]
 impl PrivateLedgerDirectory {
     pub fn open(

@@ -12,6 +12,7 @@
 | `features` | Compiled Cargo features and whether each is implemented (`tui` is implemented and feature-gated on `tui`) |
 | `limits` | Every default resource limit, with its name, unit and maximum |
 | `exit_codes` | Success, plus every error kind with its exit code |
+| `platform` | The target OS, and which platform boundaries, components and command modes this build can run there (see below) |
 
 The command inventory, phases and adapter records come from
 `adapter::foundation_capabilities`. That document stays the pinned P0 fixture,
@@ -24,6 +25,36 @@ The implemented subcommands are `rank`, `roster`, `doctor`, `capabilities`,
 `snooze`, `budget`, `replay`, `eval`, `calibrate`, `ledger`, `gaps`, and `tui`,
 plus help and version. All 19 roadmap commands and `doctor --descriptions` are
 implemented.
+
+## Platform availability
+
+`platform` is an additive `sr.capabilities.v1` field. `src/platform_support.rs`
+is its single source:
+
+| Field | Contents |
+| --- | --- |
+| `os` | `std::env::consts::OS` of the build (`linux`, `macos`, `windows`) |
+| `boundaries` | `private-storage`, `owner-only-files`, `owned-subprocess` and `enforced-allowance`, each with `available` and a `reason` that is null exactly when available |
+| `components` | Each dependent component (`ledger`, `response-cache`, `cass-sessions`, ...), the boundary it `requires`, whether it is `available`, and what happens `when_unavailable` |
+| `modes` | Each command, or command mode such as `budget --apply`, that depends on a component, with the same `available` and `when_unavailable` |
+
+`when_unavailable` is one of `refused` (typed error, nothing written),
+`skipped` (the optional effect is left out and the command continues),
+`omitted` (a context signal is reported as omitted), `empty-report` (`gaps`
+reads no ledger and reports zero events) or `written-unprotected` (installer
+backups and calibration policy files are still written, without owner-only
+protection; a known gap, not a refusal).
+
+Every entry is listed on every platform; consumers filter on `available`. A
+boundary flag says whether the build has an implementation at all. An available
+boundary can still refuse at run time, for example a store on a filesystem
+outside the admitted set.
+
+Each flag is the `cfg` predicate that selects the refusing implementation, and
+every refusing and enabling implementation asserts it at compile time
+(`const _: () = assert!(...)`). Enabling a component on a new platform without
+updating the flag fails the build. On Windows every boundary is unavailable;
+see [the platform boundary](platform-boundary.md#windows-stateless-ranking).
 
 The registry states what this binary runs. It claims no phase acceptance,
 provider availability, native harness support or installed-version
@@ -132,4 +163,7 @@ Behavior that must match the registry:
   planned flags;
 - each planned flag is refused without starting its planned behavior;
 - bare `sr` reaches ranking;
-- limits, error kinds and adapter support match their sources.
+- limits, error kinds and adapter support match their sources;
+- the `platform` entries are complete and consistent, every boundary is
+  unavailable on Windows and available on Linux and macOS, and each refused
+  component's probe command refuses exactly when its entry says unavailable.

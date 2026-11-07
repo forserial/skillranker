@@ -291,6 +291,12 @@ fn recording_capacity(bytes: u64, available: u128) -> Result<(), StoreError> {
     Ok(())
 }
 
+// `platform_support::PRIVATE_STORAGE` reports which open below this build has.
+#[cfg(unix)]
+const _: () = assert!(crate::platform_support::PRIVATE_STORAGE);
+#[cfg(not(unix))]
+const _: () = assert!(!crate::platform_support::PRIVATE_STORAGE);
+
 #[cfg(unix)]
 impl PrivateDirectory {
     pub fn open(

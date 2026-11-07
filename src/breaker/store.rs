@@ -99,6 +99,12 @@ fn configure(connection: &Connection, busy: Duration) -> rusqlite::Result<()> {
     Ok(())
 }
 
+// `platform_support::PRIVATE_STORAGE` reports which `open` this build has.
+#[cfg(unix)]
+const _: () = assert!(crate::platform_support::PRIVATE_STORAGE);
+#[cfg(not(unix))]
+const _: () = assert!(!crate::platform_support::PRIVATE_STORAGE);
+
 // Drop SQLite before the descriptors binding the admitted pathname.
 pub(super) struct Store {
     pub(super) connection: Connection,

@@ -193,3 +193,216 @@ fn limits_exit_codes_adapters_and_features_come_from_their_sources() {
         cfg!(feature = "tui")
     );
 }
+
+#[test]
+fn platform_availability_is_complete_and_internally_consistent() {
+    use skillranker::platform_support::{Boundary, COMPONENTS, MODES};
+    let document = registry();
+    let platform = &document["platform"];
+    assert_eq!(platform["os"], std::env::consts::OS);
+
+    let boundaries = platform["boundaries"].as_array().unwrap();
+    assert_eq!(boundaries.len(), Boundary::ALL.len());
+    for (entry, boundary) in boundaries.iter().zip(Boundary::ALL) {
+        assert_eq!(entry["name"], boundary.name());
+        assert_eq!(entry["available"], boundary.available());
+        // A reason exactly when the boundary is missing.
+        assert_eq!(entry["reason"].is_null(), boundary.available(), "{entry}");
+    }
+
+    let components = platform["components"].as_array().unwrap();
+    assert_eq!(components.len(), COMPONENTS.len());
+    let mut names = std::collections::BTreeSet::new();
+    for entry in components {
+        assert!(names.insert(entry["name"].as_str().unwrap()), "{entry}");
+        let boundary = boundaries
+            .iter()
+            .find(|b| b["name"] == entry["requires"])
+            .unwrap_or_else(|| panic!("unknown boundary in {entry}"));
+        assert_eq!(entry["available"], boundary["available"], "{entry}");
+    }
+
+    let modes = platform["modes"].as_array().unwrap();
+    assert_eq!(modes.len(), MODES.len());
+    let commands = commands(&document);
+    let mut keys = std::collections::BTreeSet::new();
+    for entry in modes {
+        let component = components
+            .iter()
+            .find(|c| c["name"] == entry["component"])
+            .unwrap_or_else(|| panic!("unknown component in {entry}"));
+        assert_eq!(entry["available"], component["available"], "{entry}");
+        let command = entry["command"].as_str().unwrap();
+        assert!(
+            commands
+                .iter()
+                .any(|(name, status)| name == command && status == "implemented"),
+            "{entry}"
+        );
+        assert!(
+            keys.insert((command, entry["mode"].as_str(), entry["component"].as_str())),
+            "duplicate {entry}"
+        );
+    }
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_reports_every_unqualified_boundary_as_unavailable() {
+    let platform = &registry()["platform"];
+    for boundary in platform["boundaries"].as_array().unwrap() {
+        assert_eq!(boundary["available"], false, "{boundary}");
+        assert!(boundary["reason"].is_string(), "{boundary}");
+    }
+    for mode in platform["modes"].as_array().unwrap() {
+        assert_eq!(mode["available"], false, "{mode}");
+    }
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn linux_and_macos_report_every_boundary_as_available() {
+    let platform = &registry()["platform"];
+    for boundary in platform["boundaries"].as_array().unwrap() {
+        assert_eq!(boundary["available"], true, "{boundary}");
+        assert!(boundary["reason"].is_null(), "{boundary}");
+    }
+    for mode in platform["modes"].as_array().unwrap() {
+        assert_eq!(mode["available"], true, "{mode}");
+    }
+}
+
+/// One invocation that reaches a component's refusal path.
+struct Probe {
+    args: &'static [&'static str],
+    component: &'static str,
+    exit: i32,
+    kind: &'static str,
+    /// Text only the platform refusal prints, when the refusal has its own
+    /// message. Its absence is checked where the component is available.
+    platform_phrase: Option<&'static str>,
+}
+
+const PROBES: &[Probe] = &[
+    Probe {
+        args: &["ledger", "status", "--json"],
+        component: "ledger",
+        exit: 9,
+        kind: "storage-failure",
+        platform_phrase: None,
+    },
+    Probe {
+        args: &["stats", "--json"],
+        component: "ledger",
+        exit: 9,
+        kind: "storage-failure",
+        platform_phrase: None,
+    },
+    Probe {
+        args: &[
+            "feedback",
+            "evt",
+            "--skill",
+            "a",
+            "--verdict",
+            "useful",
+            "--json",
+        ],
+        component: "ledger",
+        exit: 9,
+        kind: "storage-failure",
+        platform_phrase: None,
+    },
+    Probe {
+        args: &["snooze", "evt", "--skill", "a", "--for", "1h", "--json"],
+        component: "ledger",
+        exit: 9,
+        kind: "storage-failure",
+        platform_phrase: None,
+    },
+    Probe {
+        args: &[
+            "budget",
+            "--max-attempts",
+            "3",
+            "--window",
+            "1h",
+            "--apply",
+            "--json",
+        ],
+        component: "request-allowance",
+        exit: 9,
+        kind: "storage-failure",
+        platform_phrase: Some("not supported on this platform"),
+    },
+    Probe {
+        args: &["roster", "--snapshot", "snapshot.json", "--json"],
+        component: "owner-only-exports",
+        exit: 9,
+        kind: "storage-failure",
+        platform_phrase: Some("not qualified on this platform"),
+    },
+    Probe {
+        args: &["replay", "case.json", "--json"],
+        component: "replay-case-read",
+        exit: 7,
+        kind: "malformed-input",
+        platform_phrase: Some("cannot be verified as owner-only on this platform"),
+    },
+    Probe {
+        args: &["rank", "--session", "session.jsonl", "--json"],
+        component: "cass-sessions",
+        exit: 7,
+        kind: "unsupported-source-mode",
+        platform_phrase: Some("not supported on this platform"),
+    },
+];
+
+#[test]
+fn refusal_paths_agree_with_their_capability_entries() {
+    let platform = registry()["platform"].clone();
+    let available = |name: &str| {
+        platform["components"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["name"] == name)
+            .unwrap_or_else(|| panic!("probe names unknown component {name}"))["available"]
+            .as_bool()
+            .unwrap()
+    };
+    // Every component whose absence refuses a command has a probe.
+    for component in platform["components"].as_array().unwrap() {
+        if component["when_unavailable"] == "refused" {
+            let name = component["name"].as_str().unwrap();
+            assert!(
+                PROBES.iter().any(|p| p.component == name),
+                "no probe for {name}"
+            );
+        }
+    }
+    for probe in PROBES {
+        let root = home();
+        std::fs::write(root.join("workspace/case.json"), b"{}").unwrap();
+        let output = run(&root, probe.args);
+        let text = format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let label = probe.args.join(" ");
+        if available(probe.component) {
+            if let Some(phrase) = probe.platform_phrase {
+                assert!(!text.contains(phrase), "{label}: {text}");
+            }
+        } else {
+            assert_eq!(output.status.code(), Some(probe.exit), "{label}: {text}");
+            let error: Value = serde_json::from_slice(&output.stdout)
+                .unwrap_or_else(|_| panic!("{label}: {text}"));
+            assert_eq!(error["error"]["kind"], probe.kind, "{label}: {text}");
+            if let Some(phrase) = probe.platform_phrase {
+                assert!(text.contains(phrase), "{label}: {text}");
+            }
+        }
+    }
+}

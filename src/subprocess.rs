@@ -192,6 +192,12 @@ fn read_pipe<R: AsyncRead + Unpin>(
     Ok(())
 }
 
+// `platform_support::OWNED_SUBPROCESS` reports whether `run` spawns here.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+const _: () = assert!(crate::platform_support::OWNED_SUBPROCESS);
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+const _: () = assert!(!crate::platform_support::OWNED_SUBPROCESS);
+
 /// Drives one owned child without detached workers. The returned future must be
 /// driven to completion after Cx cancellation; dropping it early synchronously
 /// kills/reaps via the owner guard, rather than leaving an unowned child.

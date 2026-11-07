@@ -600,6 +600,12 @@ impl ReplayCase {
     }
 }
 
+// `platform_support::OWNER_ONLY_FILES` reports which case read this build has.
+#[cfg(unix)]
+const _: () = assert!(crate::platform_support::OWNER_ONLY_FILES);
+#[cfg(windows)]
+const _: () = assert!(!crate::platform_support::OWNER_ONLY_FILES);
+
 // Open once without following the final symlink or waiting for a FIFO writer.
 // Permission/type checks and the bounded read all concern this same descriptor.
 fn read_private_replay_file(

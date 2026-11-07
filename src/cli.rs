@@ -5677,7 +5677,7 @@ fn hook_prerequisites(
             .ok()
         });
     let ledger = match ledger {
-        _ if cfg!(windows) => {
+        _ if !crate::platform_support::PRIVATE_STORAGE => {
             "unavailable: Windows builds have no ledger, so a recorded trial is not possible"
                 .to_owned()
         }
@@ -6570,7 +6570,8 @@ fn snapshot_failure(error: crate::roster::snapshot::SnapshotError) -> Failure {
 }
 
 /// Export an owner-only snapshot without replacing any existing file.
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+/// Gated like `storage::export` (`platform_support::OWNER_ONLY_FILES`).
+#[cfg(unix)]
 fn export_snapshot(
     snapshot: &crate::roster::snapshot::Snapshot,
     target: &Path,
@@ -6604,7 +6605,7 @@ fn export_snapshot(
     Ok(format!("{receipt}\n"))
 }
 
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+#[cfg(not(unix))]
 fn export_snapshot(
     _snapshot: &crate::roster::snapshot::Snapshot,
     _target: &Path,

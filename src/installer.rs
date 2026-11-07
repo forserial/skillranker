@@ -283,6 +283,12 @@ pub fn resolve_backup_dir() -> Result<PathBuf, InstallerError> {
     Ok(base)
 }
 
+// `platform_support::OWNER_ONLY_FILES` reports whether backups get owner-only modes.
+#[cfg(unix)]
+const _: () = assert!(crate::platform_support::OWNER_ONLY_FILES);
+#[cfg(not(unix))]
+const _: () = assert!(!crate::platform_support::OWNER_ONLY_FILES);
+
 /// Writes an owner-only backup of original settings bytes before publication.
 pub fn write_backup(
     settings_file: &Path,
@@ -680,7 +686,7 @@ pub fn install_hook(options: &InstallOptions) -> Result<InstallOutcome, Installe
     let classification = classify_existing_entry(arr, &command_str, options.timeout_secs);
 
     let mode_str = match options.effective_mode {
-        HookMode::Shadow if cfg!(windows) => {
+        HookMode::Shadow if !crate::platform_support::PRIVATE_STORAGE => {
             "shadow (default, no context injected; Windows builds have no ledger, so nothing is recorded)"
         }
         HookMode::Shadow => "shadow (default, evaluations recorded without injecting context)",

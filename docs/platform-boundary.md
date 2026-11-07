@@ -99,6 +99,12 @@ owner-only private store fails closed instead of being emulated:
 | Hook invocation counter | Never written (it lives beside a ledger) |
 | Owner-only exports, roster snapshots and replay case files | Refused: Windows ACLs are not inspected, so owner-only access cannot be established |
 | cass sessions (`--session`), Git `dirty_paths` | Unsupported source mode / omitted signal: subprocesses are Linux/macOS only |
+| Hook installer backups, calibration policy files | Written without owner-only protection (sr-winpar.7 for backups) |
+| `sr gaps` without `--input` | Reads no ledger and reports zero events |
+
+`sr capabilities --json` reports this table in its `platform` field, from the
+same flags the refusing code asserts at compile time; see
+[the capability registry](capabilities.md#platform-availability).
 
 ### File access without `openat`
 
@@ -162,8 +168,8 @@ the fallback there; Unix still reads only `HOME`.
 - Shadow-mode hooks with network consent send their provider requests and then
   have no ledger to record them in, so on Windows they spend requests for no
   stored result. Advisory mode publishes its answer.
-- `sr roster --snapshot` and `--diff` are refused along with other owner-only
-  exports.
+- `sr roster --snapshot` is refused along with other owner-only exports.
+  `--diff` reads a saved snapshot, but Windows cannot write one.
 - A full storage port needs an audited owner-only ACL check and an admitted
   filesystem list (NTFS, ReFS) before cache or ledger can be enabled.
 
