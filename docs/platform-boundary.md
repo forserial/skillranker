@@ -242,7 +242,9 @@ can run out and report `Budget`, as on any loaded host.
 - `sr roster --snapshot` is refused along with other owner-only exports.
   `--diff` reads a saved snapshot, but Windows cannot write one.
 - A full storage port needs an audited owner-only ACL check and an admitted
-  filesystem list (NTFS, ReFS) before cache or ledger can be enabled.
+  filesystem list (NTFS, ReFS) before cache or ledger can be enabled. The
+  policy it must implement, with the Unix rule each part mirrors and its test
+  matrix, is [Windows private storage](windows-private-storage.md).
 
 ### Evidence
 
