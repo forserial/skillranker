@@ -12,6 +12,10 @@
   builds Linux, macOS and Windows release archives.
 - A Windows test suite for the file layer and the `sr` binary, running against real
   symbolic links, junctions, reserved names and Claude Code hook input.
+- `tests/windows_test_matrix.toml` lists every test gate that runs on Linux but
+  not on Windows (165 gates covering 877 tests), with a reason and the issue that
+  lifts it or a justified permanent exclusion; `tests/windows_test_matrix.rs`
+  fails when a gate is missing from it or an entry is stale.
 - `sr capabilities --json` reports platform availability in a new additive
   `platform` field: which boundaries (private storage, owner-only files, owned
   subprocesses, enforced allowance) this build has, and which components and

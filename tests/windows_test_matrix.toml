@@ -1,0 +1,1288 @@
+# tests/windows_test_matrix.toml
+#
+# Every test gate that runs on Linux but not on native Windows, why, and which
+# issue will lift it (sr-winpar.16). tests/windows_test_matrix.rs scans src/ and
+# tests/ for such gates and fails if one is missing here or an entry is stale.
+#
+# A gate is a `#![cfg(...)]` file attribute, or a `#[cfg(...)]` on a test
+# function or on a module that contains tests, whose predicate holds on Linux
+# and fails on Windows. `item` is "*" for a whole file, `mod NAME` for a module,
+# or the test function name. Gates nested inside an already gated scope are
+# listed too, so lifting the outer gate cannot silently expose them.
+#
+# reason:
+#   private-storage  needs the owner-only cache, ledger, allowance or export store
+#   subprocess       needs the owned-subprocess boundary (cass, Git, children)
+#   hook-suite       the Claude hook contract suites
+#   provider-stub    drives the loopback TLS provider stub through /usr/bin/python3
+#   unix-fixture     builds Unix symlinks, FIFOs, devices, pipes, directory
+#                    streams or non-UTF-8 byte names
+#   unaudited        no Windows-specific dependency found; gated by its authors
+#   linux-only       a Linux mechanism (tmpfs, /proc, pidfd, statfs, raw bytes)
+#   unix-only        a POSIX mechanism (signals, rlimits)
+#   platform-twin    the Linux/macOS half of a test whose Windows half exists
+#
+# issue: the sr-winpar child whose completion lifts the gate, or
+# "permanent: <reason>". `also` names further blockers.
+#
+# Reconciliation (the commit that added this file, native Windows 11 MSVC vs
+# WSL2 Linux, `cargo test --locked -- --list`): Windows lists 975 tests, Linux 1,824;
+# all 877 Linux-only tests (175 lib unit tests, 702 integration tests in 98
+# binaries) fall under these gates, and every gate excludes at least one test.
+# The one test Windows ignores is ignored on every platform. Windows-only
+# suites: tests/authorized_read_windows.rs, tests/windows_platform.rs and
+# capabilities_contract's Windows twin.
+
+schema_version = 1
+
+[[gate]]
+file = "src/allowance.rs"
+item = "mod accounting"
+gate = "cfg(unix)"
+reason = "private-storage"
+issue = "sr-winpar.5"
+
+[[gate]]
+file = "src/allowance.rs"
+item = "mod charge_consistency_tests"
+gate = "cfg(all(test, unix))"
+reason = "private-storage"
+issue = "sr-winpar.5"
+
+[[gate]]
+file = "src/allowance.rs"
+item = "mod guard_file"
+gate = "cfg(unix)"
+reason = "private-storage"
+issue = "sr-winpar.5"
+
+[[gate]]
+file = "src/allowance.rs"
+item = "mod inspection_tests"
+gate = "cfg(all(test, unix))"
+reason = "private-storage"
+issue = "sr-winpar.5"
+
+[[gate]]
+file = "src/allowance.rs"
+item = "mod integrity_tests"
+gate = "cfg(all(test, unix))"
+reason = "private-storage"
+issue = "sr-winpar.5"
+
+[[gate]]
+file = "src/allowance.rs"
+item = "mod tests"
+gate = "cfg(all(test, unix))"
+reason = "private-storage"
+issue = "sr-winpar.5"
+
+[[gate]]
+file = "src/allowance/admission_budget_tests.rs"
+item = "mod native"
+gate = "cfg(any(target_os = \"linux\", target_os = \"macos\"))"
+reason = "private-storage"
+issue = "sr-winpar.5"
+
+[[gate]]
+file = "src/breaker.rs"
+item = "an_origin_that_never_failed_creates_no_store"
+gate = "cfg(unix)"
+reason = "private-storage"
+issue = "sr-winpar.3"
+note = "breaker store"
+
+[[gate]]
+file = "src/breaker.rs"
+item = "one_probe_owner_and_a_doubling_capped_cooldown"
+gate = "cfg(unix)"
+reason = "private-storage"
+issue = "sr-winpar.3"
+note = "breaker store"
+
+[[gate]]
+file = "src/breaker/probe_tests.rs"
+item = "shared_wal_reopen_preserves_successors_lease_after_stale_retry_after"
+gate = "cfg(unix)"
+reason = "private-storage"
+issue = "sr-winpar.3"
+note = "breaker store"
+
+[[gate]]
+file = "src/breaker/store.rs"
+item = "mod tests"
+gate = "cfg(all(test, unix))"
+reason = "private-storage"
+issue = "sr-winpar.3"
+note = "breaker store"
+
+[[gate]]
+file = "src/cache/coordination.rs"
+item = "mod integrity_tests"
+gate = "cfg(all(test, unix))"
+reason = "private-storage"
+issue = "sr-winpar.3"
+
+[[gate]]
+file = "src/cache/coordination/integrity_tests.rs"
+item = "fresh_reopen_cannot_replay_a_completed_lease"
+gate = "cfg(unix)"
+reason = "private-storage"
+issue = "sr-winpar.3"
+note = "nested inside a gated module"
+
+[[gate]]
+file = "src/cli.rs"
+item = "mod invocation_cleanup_tests"
+gate = "cfg(all(test, unix))"
+reason = "private-storage"
+issue = "sr-winpar.3"
+also = ["sr-winpar.4"]
+
+[[gate]]
+file = "src/filesystem_policy.rs"
+item = "descriptor_policy_matches_the_native_filesystem_not_its_path_name"
+gate = "cfg(any(target_os = \"linux\", target_os = \"macos\"))"
+reason = "linux-only"
+issue = "permanent: Linux-only mechanism (tmpfs, /proc, pidfd or statfs magic) with no Windows counterpart"
+note = "Windows admission is designed in sr-winpar.1/.3"
+
+[[gate]]
+file = "src/filesystem_policy.rs"
+item = "only_qualified_linux_filesystems_are_admitted"
+gate = "cfg(target_os = \"linux\")"
+reason = "linux-only"
+issue = "permanent: Linux-only mechanism (tmpfs, /proc, pidfd or statfs magic) with no Windows counterpart"
+
+[[gate]]
+file = "src/jev/client.rs"
+item = "mod tests"
+gate = "cfg(all(test, unix))"
+reason = "provider-stub"
+issue = "sr-winpar.24"
+
+[[gate]]
+file = "src/lib.rs"
+item = "mod filesystem_policy"
+gate = "cfg(unix)"
+reason = "private-storage"
+issue = "sr-winpar.3"
+note = "Unix statfs admission; Windows needs its own (sr-winpar.1/.3)"
+
+[[gate]]
+file = "src/roster/discovery/tests.rs"
+item = "a_nonadvancing_failed_directory_stream_is_not_retried"
+gate = "cfg(unix)"
+reason = "unix-fixture"
+issue = "sr-winpar.25"
+note = "Unix directory streams"
+
+[[gate]]
+file = "src/roster/discovery/tests.rs"
+item = "candidate_metadata_uses_the_open_directory_not_a_replaced_parent_path"
+gate = "cfg(unix)"
+reason = "unix-fixture"
+issue = "sr-winpar.25"
+note = "symlink and directory-stream fixtures"
+
+[[gate]]
+file = "src/roster/discovery/tests.rs"
+item = "failed_stream_preserves_preceding_entries_and_leaves_following_entries_unread"
+gate = "cfg(unix)"
+reason = "unix-fixture"
+issue = "sr-winpar.25"
+note = "Unix directory streams"
+
+[[gate]]
+file = "src/roster/resolution/discovery_scope.rs"
+item = "symlinked_directories_and_dangling_file_links_never_prove_absence"
+gate = "cfg(unix)"
+reason = "unix-fixture"
+issue = "sr-winpar.25"
+note = "symlink fixtures"
+
+[[gate]]
+file = "src/storage/export.rs"
+item = "mod tests"
+gate = "cfg(all(test, unix))"
+reason = "private-storage"
+issue = "sr-winpar.6"
+
+[[gate]]
+file = "src/storage/filesystem.rs"
+item = "mod scan_tests"
+gate = "cfg(all(test, unix))"
+reason = "private-storage"
+issue = "sr-winpar.3"
+
+[[gate]]
+file = "src/storage/filesystem.rs"
+item = "mod tests"
+gate = "cfg(all(test, unix))"
+reason = "private-storage"
+issue = "sr-winpar.3"
+
+[[gate]]
+file = "src/storage/filesystem/scan_tests.rs"
+item = "raw_filename_bytes_cannot_evade_quota_or_collide_with_replacement_text"
+gate = "cfg(target_os = \"linux\")"
+reason = "linux-only"
+issue = "permanent: arbitrary non-UTF-8 filename bytes are a Linux filesystem property"
+note = "nested inside a gated module"
+
+[[gate]]
+file = "src/storage/filesystem/scan_tests.rs"
+item = "raw_filename_symlink_is_not_skipped"
+gate = "cfg(target_os = \"linux\")"
+reason = "linux-only"
+issue = "permanent: arbitrary non-UTF-8 filename bytes are a Linux filesystem property"
+note = "nested inside a gated module"
+
+[[gate]]
+file = "src/storage/hook_entries.rs"
+item = "mod tests"
+gate = "cfg(all(test, unix))"
+reason = "private-storage"
+issue = "sr-winpar.4"
+note = "hook invocation counter"
+
+[[gate]]
+file = "tests/allowance_contract.rs"
+item = "*"
+gate = "cfg(any(target_os = \"linux\", target_os = \"macos\"))"
+reason = "private-storage"
+issue = "sr-winpar.5"
+also = ["sr-winpar.24"]
+
+[[gate]]
+file = "tests/allowance_filesystem_contract.rs"
+item = "*"
+gate = "cfg(any(target_os = \"linux\", target_os = \"macos\"))"
+reason = "private-storage"
+issue = "sr-winpar.5"
+
+[[gate]]
+file = "tests/allowance_filesystem_contract.rs"
+item = "a_missing_guard_still_admits_without_creating_state_on_tmpfs"
+gate = "cfg(target_os = \"linux\")"
+reason = "linux-only"
+issue = "permanent: Linux-only mechanism (tmpfs, /proc, pidfd or statfs magic) with no Windows counterpart"
+note = "nested inside a gated file; tmpfs"
+
+[[gate]]
+file = "tests/allowance_filesystem_contract.rs"
+item = "disposable_cache_retains_its_existing_tmpfs_support"
+gate = "cfg(target_os = \"linux\")"
+reason = "linux-only"
+issue = "permanent: Linux-only mechanism (tmpfs, /proc, pidfd or statfs magic) with no Windows counterpart"
+note = "nested inside a gated file; tmpfs"
+
+[[gate]]
+file = "tests/allowance_filesystem_contract.rs"
+item = "existing_volatile_guard_is_invalid_not_an_unguarded_admission"
+gate = "cfg(target_os = \"linux\")"
+reason = "linux-only"
+issue = "permanent: Linux-only mechanism (tmpfs, /proc, pidfd or statfs magic) with no Windows counterpart"
+note = "nested inside a gated file; tmpfs"
+
+[[gate]]
+file = "tests/allowance_filesystem_contract.rs"
+item = "persistent_guard_cannot_authorize_a_valid_accounting_copy_on_tmpfs"
+gate = "cfg(target_os = \"linux\")"
+reason = "linux-only"
+issue = "permanent: Linux-only mechanism (tmpfs, /proc, pidfd or statfs magic) with no Windows counterpart"
+note = "nested inside a gated file; tmpfs"
+
+[[gate]]
+file = "tests/allowance_filesystem_contract.rs"
+item = "refused_setup_preserves_existing_volatile_guard_and_lock"
+gate = "cfg(target_os = \"linux\")"
+reason = "linux-only"
+issue = "permanent: Linux-only mechanism (tmpfs, /proc, pidfd or statfs magic) with no Windows counterpart"
+note = "nested inside a gated file; tmpfs"
+
+[[gate]]
+file = "tests/allowance_filesystem_contract.rs"
+item = "volatile_guard_setup_fails_before_creating_control_or_accounting_paths"
+gate = "cfg(target_os = \"linux\")"
+reason = "linux-only"
+issue = "permanent: Linux-only mechanism (tmpfs, /proc, pidfd or statfs magic) with no Windows counterpart"
+note = "nested inside a gated file; tmpfs"
+
+[[gate]]
+file = "tests/authorized_read_contract.rs"
+item = "concurrent_component_swaps_never_return_content_from_outside"
+gate = "cfg(unix)"
+reason = "unix-fixture"
+issue = "sr-winpar.25"
+note = "symlink, FIFO or directory fixtures"
+
+[[gate]]
+file = "tests/authorized_read_contract.rs"
+item = "native_path_bytes_survive_and_diagnostics_stay_private"
+gate = "cfg(unix)"
+reason = "unix-fixture"
+issue = "sr-winpar.25"
+note = "symlink, FIFO or directory fixtures"
+
+[[gate]]
+file = "tests/authorized_read_contract.rs"
+item = "only_regular_files_are_read"
+gate = "cfg(unix)"
+reason = "unix-fixture"
+issue = "permanent: Windows has no FIFO or device special files; its non-regular names (reserved devices, streams) are refused in tests/windows_platform.rs and tests/authorized_read_windows.rs"
+
+[[gate]]
+file = "tests/authorized_read_contract.rs"
+item = "replacing_a_component_after_the_root_opens_cannot_redirect_reads"
+gate = "cfg(unix)"
+reason = "unix-fixture"
+issue = "sr-winpar.25"
+note = "symlink, FIFO or directory fixtures"
+
+[[gate]]
+file = "tests/authorized_read_contract.rs"
+item = "symlinks_resolve_only_inside_authorized_roots"
+gate = "cfg(unix)"
+reason = "unix-fixture"
+issue = "sr-winpar.25"
+note = "symlink, FIFO or directory fixtures"
+
+[[gate]]
+file = "tests/authorized_read_contract.rs"
+item = "workspace_relative_roots_open_without_leaving_the_workspace"
+gate = "cfg(unix)"
+reason = "unix-fixture"
+issue = "sr-winpar.25"
+note = "symlink, FIFO or directory fixtures"
+
+[[gate]]
+file = "tests/bootstrap_cli.rs"
+item = "non_utf8_arguments_are_usage_errors_without_panicking"
+gate = "cfg(unix)"
+reason = "unix-fixture"
+issue = "sr-winpar.25"
+note = "non-UTF-8 argument bytes; port with unpaired surrogates"
+
+[[gate]]
+file = "tests/breaker_contract.rs"
+item = "*"
+gate = "cfg(any(target_os = \"linux\", target_os = \"macos\"))"
+reason = "private-storage"
+issue = "sr-winpar.3"
+also = ["sr-winpar.24"]
+note = "shared provider breaker store"
+
+[[gate]]
+file = "tests/cache_atomic_publication.rs"
+item = "*"
+gate = "cfg(any(target_os = \"linux\", target_os = \"macos\"))"
+reason = "private-storage"
+issue = "sr-winpar.3"
+
+[[gate]]
+file = "tests/cache_identity.rs"
+item = "*"
+gate = "cfg(unix)"
+reason = "private-storage"
+issue = "sr-winpar.3"
+
+[[gate]]
+file = "tests/cache_live_reuse.rs"
+item = "*"
+gate = "cfg(unix)"
+reason = "private-storage"
+issue = "sr-winpar.3"
+
+[[gate]]
+file = "tests/cache_pair_read_view.rs"
+item = "*"
+gate = "cfg(any(target_os = \"linux\", target_os = \"macos\"))"
+reason = "private-storage"
+issue = "sr-winpar.3"
+
+[[gate]]
+file = "tests/cache_policy_revocation.rs"
+item = "*"
+gate = "cfg(unix)"
+reason = "private-storage"
+issue = "sr-winpar.3"
+
+[[gate]]
+file = "tests/cache_publication_fence.rs"
+item = "*"
+gate = "cfg(any(target_os = \"linux\", target_os = \"macos\"))"
+reason = "private-storage"
+issue = "sr-winpar.3"
+
+[[gate]]
+file = "tests/capabilities_contract.rs"
+item = "linux_and_macos_report_every_boundary_as_available"
+gate = "cfg(any(target_os = \"linux\", target_os = \"macos\"))"
+reason = "platform-twin"
+issue = "permanent: Linux/macOS twin of windows_reports_every_unqualified_boundary_as_unavailable"
+
+[[gate]]
+file = "tests/cass_adapter.rs"
+item = "*"
+gate = "cfg(unix)"
+reason = "subprocess"
+issue = "sr-winpar.11"
+
+[[gate]]
+file = "tests/cass_session.rs"
+item = "*"
+gate = "cfg(unix)"
+reason = "subprocess"
+issue = "sr-winpar.11"
+
+[[gate]]
+file = "tests/cli_config.rs"
+item = "project_symlink_escape_is_refused"
+gate = "cfg(unix)"
+reason = "unix-fixture"
+issue = "sr-winpar.25"
+note = "symlink, FIFO or directory fixtures"
+
+[[gate]]
+file = "tests/cli_contract.rs"
+item = "*"
+gate = "cfg(unix)"
+reason = "unix-fixture"
+issue = "sr-winpar.25"
+note = "symlink fixtures"
+
+[[gate]]
+file = "tests/config_contract.rs"
+item = "non_utf8_environment_is_rejected_only_in_the_strict_namespace"
+gate = "cfg(unix)"
+reason = "unix-fixture"
+issue = "sr-winpar.25"
+note = "non-UTF-8 environment bytes; port with unpaired surrogates"
+
+[[gate]]
+file = "tests/config_contract.rs"
+item = "project_roots_stay_inside_the_workspace_and_lists_only_grow"
+gate = "cfg(unix)"
+reason = "unaudited"
+issue = "sr-winpar.25"
+note = "Unix path syntax or non-UTF-8 environment"
+
+[[gate]]
+file = "tests/config_contract.rs"
+item = "security_sensitive_keys_follow_an_independent_layer_matrix"
+gate = "cfg(unix)"
+reason = "unaudited"
+issue = "sr-winpar.25"
+note = "Unix path syntax or non-UTF-8 environment"
+
+[[gate]]
+file = "tests/config_contract.rs"
+item = "workspace_relative_roots_normalize_lexically"
+gate = "cfg(unix)"
+reason = "unaudited"
+issue = "sr-winpar.25"
+note = "Unix path syntax or non-UTF-8 environment"
+
+[[gate]]
+file = "tests/context_contract.rs"
+item = "cass_adapter"
+gate = "cfg(unix)"
+reason = "subprocess"
+issue = "sr-winpar.11"
+
+[[gate]]
+file = "tests/context_contract.rs"
+item = "claude_prompt_overlay"
+gate = "cfg(unix)"
+reason = "unix-fixture"
+issue = "sr-winpar.25"
+note = "symlink, FIFO or directory fixtures"
+
+[[gate]]
+file = "tests/context_contract.rs"
+item = "claude_prompt_overlay_missing_parent_keeps_authority_failures"
+gate = "cfg(unix)"
+reason = "unix-fixture"
+issue = "sr-winpar.25"
+note = "symlink, FIFO or directory fixtures"
+
+[[gate]]
+file = "tests/context_overlay_safety.rs"
+item = "authorized_symlink_works_but_dangling_link_is_not_a_first_prompt"
+gate = "cfg(unix)"
+reason = "unix-fixture"
+issue = "sr-winpar.25"
+note = "symlink, FIFO or directory fixtures"
+
+[[gate]]
+file = "tests/coordination_contract.rs"
+item = "*"
+gate = "cfg(any(target_os = \"linux\", target_os = \"macos\"))"
+reason = "private-storage"
+issue = "sr-winpar.3"
+note = "coordinator leases"
+
+[[gate]]
+file = "tests/demo_contract.rs"
+item = "*"
+gate = "cfg(unix)"
+reason = "unaudited"
+issue = "sr-winpar.25"
+
+[[gate]]
+file = "tests/effect_gate.rs"
+item = "*"
+gate = "cfg(any(target_os = \"linux\", target_os = \"macos\"))"
+reason = "private-storage"
+issue = "sr-winpar.3"
+also = ["sr-winpar.4", "sr-winpar.11"]
+
+[[gate]]
+file = "tests/effect_policies.rs"
+item = "*"
+gate = "cfg(unix)"
+reason = "private-storage"
+issue = "sr-winpar.3"
+also = ["sr-winpar.4", "sr-winpar.11"]
+
+[[gate]]
+file = "tests/eval_cli_contract.rs"
+item = "eval_rejects_nonregular_datasets_without_waiting_for_a_writer"
+gate = "cfg(unix)"
+reason = "unix-fixture"
+issue = "sr-winpar.25"
+note = "symlink, FIFO or directory fixtures"
+
+[[gate]]
+file = "tests/explicit_judgment_contract.rs"
+item = "*"
+gate = "cfg(unix)"
+reason = "private-storage"
+issue = "sr-winpar.4"
+
+[[gate]]
+file = "tests/export_contract.rs"
+item = "*"
+gate = "cfg(any(target_os = \"linux\", target_os = \"macos\"))"
+reason = "private-storage"
+issue = "sr-winpar.6"
+
+[[gate]]
+file = "tests/feedback_snapshot_coverage.rs"
+item = "*"
+gate = "cfg(unix)"
+reason = "private-storage"
+issue = "sr-winpar.4"
+
+[[gate]]
+file = "tests/hook_advice_contract.rs"
+item = "*"
+gate = "cfg(unix)"
+reason = "hook-suite"
+issue = "sr-winpar.17"
+also = ["sr-winpar.4"]
+
+[[gate]]
+file = "tests/hook_contract.rs"
+item = "*"
+gate = "cfg(unix)"
+reason = "hook-suite"
+issue = "sr-winpar.17"
+also = ["sr-winpar.4", "sr-winpar.5"]
+
+[[gate]]
+file = "tests/hook_installer_contract.rs"
+item = "*"
+gate = "cfg(unix)"
+reason = "hook-suite"
+issue = "sr-winpar.17"
+also = ["sr-winpar.7"]
+
+[[gate]]
+file = "tests/identity_contract.rs"
+item = "local_paths_preserve_native_bytes_without_leaking_in_debug"
+gate = "cfg(unix)"
+reason = "unix-fixture"
+issue = "sr-winpar.25"
+note = "non-UTF-8 path bytes; port with unpaired surrogates"
+
+[[gate]]
+file = "tests/jev_retry.rs"
+item = "*"
+gate = "cfg(unix)"
+reason = "provider-stub"
+issue = "sr-winpar.24"
+
+[[gate]]
+file = "tests/jev_smoke.rs"
+item = "*"
+gate = "cfg(unix)"
+reason = "unaudited"
+issue = "sr-winpar.25"
+note = "consented live smoke; skips without credentials"
+
+[[gate]]
+file = "tests/jev_transport.rs"
+item = "*"
+gate = "cfg(unix)"
+reason = "provider-stub"
+issue = "sr-winpar.24"
+
+[[gate]]
+file = "tests/jsonl_snapshot.rs"
+item = "symlink_and_directory_are_rejected_before_open"
+gate = "cfg(unix)"
+reason = "unix-fixture"
+issue = "sr-winpar.25"
+note = "symlink, FIFO or directory fixtures"
+
+[[gate]]
+file = "tests/learning_contract.rs"
+item = "*"
+gate = "cfg(any(target_os = \"linux\", target_os = \"macos\"))"
+reason = "private-storage"
+issue = "sr-winpar.4"
+
+[[gate]]
+file = "tests/ledger_attempt_ownership_contract.rs"
+item = "*"
+gate = "cfg(unix)"
+reason = "private-storage"
+issue = "sr-winpar.4"
+
+[[gate]]
+file = "tests/ledger_attempt_recording.rs"
+item = "*"
+gate = "cfg(unix)"
+reason = "private-storage"
+issue = "sr-winpar.4"
+also = ["sr-winpar.24"]
+
+[[gate]]
+file = "tests/ledger_attempt_rows.rs"
+item = "*"
+gate = "cfg(unix)"
+reason = "private-storage"
+issue = "sr-winpar.4"
+
+[[gate]]
+file = "tests/ledger_exposure_lifecycle_contract.rs"
+item = "*"
+gate = "cfg(unix)"
+reason = "private-storage"
+issue = "sr-winpar.4"
+
+[[gate]]
+file = "tests/ledger_fencing_contract.rs"
+item = "*"
+gate = "cfg(unix)"
+reason = "private-storage"
+issue = "sr-winpar.4"
+
+[[gate]]
+file = "tests/ledger_invocation_identity.rs"
+item = "*"
+gate = "cfg(any(target_os = \"linux\", target_os = \"macos\"))"
+reason = "private-storage"
+issue = "sr-winpar.4"
+also = ["sr-winpar.24"]
+
+[[gate]]
+file = "tests/ledger_migration_contract.rs"
+item = "*"
+gate = "cfg(unix)"
+reason = "private-storage"
+issue = "sr-winpar.4"
+
+[[gate]]
+file = "tests/ledger_paired_correction_contract.rs"
+item = "*"
+gate = "cfg(unix)"
+reason = "private-storage"
+issue = "sr-winpar.4"
+
+[[gate]]
+file = "tests/ledger_quota_headroom_contract.rs"
+item = "*"
+gate = "cfg(unix)"
+reason = "private-storage"
+issue = "sr-winpar.4"
+
+[[gate]]
+file = "tests/ledger_retention_contract.rs"
+item = "*"
+gate = "cfg(unix)"
+reason = "private-storage"
+issue = "sr-winpar.4"
+
+[[gate]]
+file = "tests/ledger_schema_contract.rs"
+item = "*"
+gate = "cfg(unix)"
+reason = "private-storage"
+issue = "sr-winpar.4"
+
+[[gate]]
+file = "tests/normalized_roster_roots.rs"
+item = "*"
+gate = "cfg(any(target_os = \"linux\", target_os = \"macos\"))"
+reason = "unix-fixture"
+issue = "sr-winpar.25"
+note = "symlink fixtures"
+
+[[gate]]
+file = "tests/observation_contract.rs"
+item = "*"
+gate = "cfg(unix)"
+reason = "private-storage"
+issue = "sr-winpar.4"
+also = ["sr-winpar.11"]
+
+[[gate]]
+file = "tests/onboarding_contract.rs"
+item = "*"
+gate = "cfg(any(target_os = \"linux\", target_os = \"macos\"))"
+reason = "private-storage"
+issue = "sr-winpar.4"
+also = ["sr-winpar.24"]
+
+[[gate]]
+file = "tests/owner_only_refusal_names_the_path.rs"
+item = "*"
+gate = "cfg(unix)"
+reason = "private-storage"
+issue = "sr-winpar.4"
+note = "owner-only refusal diagnostics"
+
+[[gate]]
+file = "tests/p1_gate.rs"
+item = "*"
+gate = "cfg(unix)"
+reason = "unaudited"
+issue = "sr-winpar.25"
+
+[[gate]]
+file = "tests/p2_gate.rs"
+item = "*"
+gate = "cfg(any(target_os = \"linux\", target_os = \"macos\"))"
+reason = "unix-fixture"
+issue = "sr-winpar.25"
+note = "symlink fixtures"
+
+[[gate]]
+file = "tests/p3_gate.rs"
+item = "*"
+gate = "cfg(unix)"
+reason = "subprocess"
+issue = "sr-winpar.11"
+
+[[gate]]
+file = "tests/p4_gate.rs"
+item = "*"
+gate = "cfg(any(target_os = \"linux\", target_os = \"macos\"))"
+reason = "private-storage"
+issue = "sr-winpar.3"
+
+[[gate]]
+file = "tests/p5_gate.rs"
+item = "*"
+gate = "cfg(any(target_os = \"linux\", target_os = \"macos\"))"
+reason = "private-storage"
+issue = "sr-winpar.4"
+also = ["sr-winpar.24"]
+
+[[gate]]
+file = "tests/p6_gate.rs"
+item = "*"
+gate = "cfg(any(target_os = \"linux\", target_os = \"macos\"))"
+reason = "hook-suite"
+issue = "sr-winpar.17"
+also = ["sr-winpar.4", "sr-winpar.5", "sr-winpar.24"]
+
+[[gate]]
+file = "tests/p7_gate.rs"
+item = "*"
+gate = "cfg(any(target_os = \"linux\", target_os = \"macos\"))"
+reason = "hook-suite"
+issue = "sr-winpar.17"
+also = ["sr-winpar.4", "sr-winpar.24"]
+
+[[gate]]
+file = "tests/p8_gate.rs"
+item = "*"
+gate = "cfg(any(target_os = \"linux\", target_os = \"macos\"))"
+reason = "private-storage"
+issue = "sr-winpar.4"
+
+[[gate]]
+file = "tests/p9_gate.rs"
+item = "*"
+gate = "cfg(any(target_os = \"linux\", target_os = \"macos\"))"
+reason = "unaudited"
+issue = "sr-winpar.25"
+
+[[gate]]
+file = "tests/passages_contract.rs"
+item = "*"
+gate = "cfg(any(target_os = \"linux\", target_os = \"macos\"))"
+reason = "unaudited"
+issue = "sr-winpar.25"
+
+[[gate]]
+file = "tests/project_signals.rs"
+item = "*"
+gate = "cfg(unix)"
+reason = "subprocess"
+issue = "sr-winpar.10"
+
+[[gate]]
+file = "tests/provider_configuration.rs"
+item = "non_utf8_unused_provider_values_stay_local_and_fail_when_selected"
+gate = "cfg(unix)"
+reason = "unix-fixture"
+issue = "sr-winpar.25"
+note = "non-UTF-8 environment bytes; port with unpaired surrogates"
+
+[[gate]]
+file = "tests/rank_acceptance.rs"
+item = "*"
+gate = "cfg(unix)"
+reason = "private-storage"
+issue = "sr-winpar.3"
+also = ["sr-winpar.24"]
+
+[[gate]]
+file = "tests/rank_discovery_gaps.rs"
+item = "*"
+gate = "cfg(unix)"
+reason = "unix-fixture"
+issue = "sr-winpar.25"
+note = "symlink and FIFO fixtures"
+
+[[gate]]
+file = "tests/rank_inputs.rs"
+item = "*"
+gate = "cfg(unix)"
+reason = "unix-fixture"
+issue = "sr-winpar.25"
+also = ["sr-winpar.11"]
+note = "symlink and FIFO fixtures"
+
+[[gate]]
+file = "tests/rank_partial_roster.rs"
+item = "*"
+gate = "cfg(unix)"
+reason = "unix-fixture"
+issue = "sr-winpar.25"
+note = "symlink and FIFO fixtures"
+
+[[gate]]
+file = "tests/rank_pipeline.rs"
+item = "a_run_past_the_failure_recording_window_preserves_unknown_ledger_outcome"
+gate = "cfg(unix)"
+reason = "private-storage"
+issue = "sr-winpar.4"
+
+[[gate]]
+file = "tests/rank_pipeline.rs"
+item = "a_run_that_overruns_its_deadline_records_its_failure_not_in_flight"
+gate = "cfg(unix)"
+reason = "private-storage"
+issue = "sr-winpar.4"
+
+[[gate]]
+file = "tests/rank_pipeline.rs"
+item = "an_unconfirmed_failure_ledger_write_preserves_timeout_and_unknown_usage"
+gate = "cfg(unix)"
+reason = "private-storage"
+issue = "sr-winpar.4"
+
+[[gate]]
+file = "tests/rank_pipeline.rs"
+item = "successful_rankings_report_unconfirmed_ledger_finalization"
+gate = "cfg(unix)"
+reason = "private-storage"
+issue = "sr-winpar.4"
+
+[[gate]]
+file = "tests/real_rank_coordination.rs"
+item = "*"
+gate = "cfg(unix)"
+reason = "private-storage"
+issue = "sr-winpar.3"
+also = ["sr-winpar.24"]
+note = "coordinator leases"
+
+[[gate]]
+file = "tests/render_history_scope.rs"
+item = "production_dry_run_contains_active_history_but_no_sibling_prose"
+gate = "cfg(unix)"
+reason = "unaudited"
+issue = "sr-winpar.25"
+note = "Unix modes only for 0700 setup directories"
+
+[[gate]]
+file = "tests/render_tool_labels.rs"
+item = "production_dry_run_redacts_tool_labels_and_no_tools_omits_them"
+gate = "cfg(unix)"
+reason = "unaudited"
+issue = "sr-winpar.25"
+note = "Unix modes only for 0700 setup directories"
+
+[[gate]]
+file = "tests/replay_case_completeness.rs"
+item = "*"
+gate = "cfg(unix)"
+reason = "private-storage"
+issue = "sr-winpar.6"
+
+[[gate]]
+file = "tests/replay_cli_contract.rs"
+item = "*"
+gate = "cfg(unix)"
+reason = "private-storage"
+issue = "sr-winpar.6"
+
+[[gate]]
+file = "tests/replay_contract.rs"
+item = "replay_save_and_load_enforces_owner_only_and_no_clobber"
+gate = "cfg(unix)"
+reason = "private-storage"
+issue = "sr-winpar.6"
+
+[[gate]]
+file = "tests/rollout_contract.rs"
+item = "*"
+gate = "cfg(any(target_os = \"linux\", target_os = \"macos\"))"
+reason = "private-storage"
+issue = "sr-winpar.4"
+also = ["sr-winpar.24"]
+
+[[gate]]
+file = "tests/roster_cli.rs"
+item = "configured_project_and_user_roots_reach_roster_doctor_and_snapshot"
+gate = "cfg(unix)"
+reason = "unix-fixture"
+issue = "sr-winpar.25"
+note = "symlink, FIFO or directory fixtures"
+
+[[gate]]
+file = "tests/roster_cli.rs"
+item = "project_root_symlink_cannot_grant_external_reads_but_contained_root_works"
+gate = "cfg(unix)"
+reason = "unix-fixture"
+issue = "sr-winpar.25"
+note = "symlink, FIFO or directory fixtures"
+
+[[gate]]
+file = "tests/roster_contract.rs"
+item = "atomic_private_exports"
+gate = "cfg(unix)"
+reason = "private-storage"
+issue = "sr-winpar.6"
+
+[[gate]]
+file = "tests/roster_contract.rs"
+item = "concurrent_export_race_prevents_clobber"
+gate = "cfg(unix)"
+reason = "private-storage"
+issue = "sr-winpar.6"
+
+[[gate]]
+file = "tests/roster_discovery.rs"
+item = "broad_discovery_fits_a_small_descriptor_limit"
+gate = "cfg(unix)"
+reason = "unix-only"
+issue = "permanent: RLIMIT_NOFILE descriptor limits are a Unix mechanism"
+
+[[gate]]
+file = "tests/roster_discovery.rs"
+item = "discovery_is_independent_of_another_reader_of_the_pinned_root"
+gate = "cfg(unix)"
+reason = "unix-fixture"
+issue = "sr-winpar.25"
+note = "symlink, FIFO or directory fixtures"
+
+[[gate]]
+file = "tests/roster_discovery.rs"
+item = "symlinked_directories_are_skipped_and_symlinked_skill_files_are_flagged"
+gate = "cfg(unix)"
+reason = "unix-fixture"
+issue = "sr-winpar.25"
+note = "symlink, FIFO or directory fixtures"
+
+[[gate]]
+file = "tests/roster_discovery_gaps.rs"
+item = "recovery_preserves_precedence_manual_only_and_authorized_file_aliases"
+gate = "cfg(unix)"
+reason = "unix-fixture"
+issue = "sr-winpar.25"
+note = "symlink, FIFO or directory fixtures"
+
+[[gate]]
+file = "tests/roster_discovery_gaps.rs"
+item = "same_diagnostic_count_cannot_hide_a_new_competitor_at_publication"
+gate = "cfg(unix)"
+reason = "unix-fixture"
+issue = "sr-winpar.25"
+note = "symlink, FIFO or directory fixtures"
+
+[[gate]]
+file = "tests/roster_discovery_gaps.rs"
+item = "skipped_directory_and_dangling_skill_link_withhold_only_their_names"
+gate = "cfg(unix)"
+reason = "unix-fixture"
+issue = "sr-winpar.25"
+note = "symlink, FIFO or directory fixtures"
+
+[[gate]]
+file = "tests/roster_discovery_gaps.rs"
+item = "unrelated_symlink_preserves_three_skills_ids_and_option_authority"
+gate = "cfg(unix)"
+reason = "unix-fixture"
+issue = "sr-winpar.25"
+note = "symlink, FIFO or directory fixtures"
+
+[[gate]]
+file = "tests/roster_import.rs"
+item = "escaped_and_unauthorized_paths_are_refused"
+gate = "cfg(unix)"
+reason = "unix-fixture"
+issue = "sr-winpar.25"
+note = "symlink, FIFO or directory fixtures"
+
+[[gate]]
+file = "tests/roster_import.rs"
+item = "importing_a_roster_mutates_nothing"
+gate = "cfg(unix)"
+reason = "unix-fixture"
+issue = "sr-winpar.25"
+note = "symlink, FIFO or directory fixtures"
+
+[[gate]]
+file = "tests/roster_import.rs"
+item = "roster_file_reads_are_bounded_regular_files"
+gate = "cfg(unix)"
+reason = "unix-fixture"
+issue = "permanent: Windows has no FIFO or device special files; its non-regular names (reserved devices, streams) are refused in tests/windows_platform.rs and tests/authorized_read_windows.rs"
+
+[[gate]]
+file = "tests/roster_real_layout.rs"
+item = "*"
+gate = "cfg(unix)"
+reason = "unaudited"
+issue = "sr-winpar.25"
+
+[[gate]]
+file = "tests/roster_rejections.rs"
+item = "nonregular_personal_slots_cannot_promote_the_project_definition"
+gate = "cfg(unix)"
+reason = "unix-fixture"
+issue = "sr-winpar.25"
+note = "symlink, FIFO or directory fixtures"
+
+[[gate]]
+file = "tests/roster_resolution.rs"
+item = "authorized_file_symlink_deduplicates_but_escape_withholds_authority"
+gate = "cfg(unix)"
+reason = "unix-fixture"
+issue = "sr-winpar.25"
+note = "symlink, FIFO or directory fixtures"
+
+[[gate]]
+file = "tests/roster_resolution.rs"
+item = "concurrent_rejections_and_aliases_preserve_safe_shadowing_and_positives"
+gate = "cfg(unix)"
+reason = "unix-fixture"
+issue = "sr-winpar.25"
+note = "symlink, FIFO or directory fixtures"
+
+[[gate]]
+file = "tests/roster_resolution.rs"
+item = "read_failure_and_escaping_symlink_continue_and_scope_withholding"
+gate = "cfg(unix)"
+reason = "unix-fixture"
+issue = "sr-winpar.25"
+note = "symlink, FIFO or directory fixtures"
+
+[[gate]]
+file = "tests/roster_snapshot.rs"
+item = "a_diff_reports_renames_replacements_restrictions_additions_and_removals"
+gate = "cfg(unix)"
+reason = "private-storage"
+issue = "sr-winpar.6"
+note = "snapshots are owner-only exports"
+
+[[gate]]
+file = "tests/roster_snapshot.rs"
+item = "a_different_workspace_or_home_is_an_incompatible_namespace"
+gate = "cfg(unix)"
+reason = "private-storage"
+issue = "sr-winpar.6"
+note = "snapshots are owner-only exports"
+
+[[gate]]
+file = "tests/roster_snapshot.rs"
+item = "a_snapshot_is_owner_only_path_free_and_never_overwrites"
+gate = "cfg(unix)"
+reason = "private-storage"
+issue = "sr-winpar.6"
+note = "snapshots are owner-only exports"
+
+[[gate]]
+file = "tests/roster_snapshot.rs"
+item = "an_unreadable_root_makes_removals_unconfirmed"
+gate = "cfg(unix)"
+reason = "private-storage"
+issue = "sr-winpar.6"
+note = "snapshots are owner-only exports"
+
+[[gate]]
+file = "tests/roster_snapshot.rs"
+item = "imported_paths_unknown_fields_and_unsafe_files_are_refused"
+gate = "cfg(unix)"
+reason = "private-storage"
+issue = "sr-winpar.6"
+note = "snapshots are owner-only exports"
+
+[[gate]]
+file = "tests/runtime_contract.rs"
+item = "mod pipe_tests"
+gate = "cfg(unix)"
+reason = "unix-fixture"
+issue = "sr-winpar.15"
+note = "Unix pipe descriptors; Windows bounded stdin uses a helper thread"
+
+[[gate]]
+file = "tests/runtime_contract.rs"
+item = "user_cancel_is_the_signal_path"
+gate = "cfg(unix)"
+reason = "unix-only"
+issue = "permanent: POSIX signal delivery has no Windows counterpart"
+
+[[gate]]
+file = "tests/save_case_contract.rs"
+item = "*"
+gate = "cfg(unix)"
+reason = "private-storage"
+issue = "sr-winpar.6"
+also = ["sr-winpar.24"]
+
+[[gate]]
+file = "tests/session_discovery.rs"
+item = "*"
+gate = "cfg(unix)"
+reason = "unaudited"
+issue = "sr-winpar.25"
+
+[[gate]]
+file = "tests/shadow_spending_contract.rs"
+item = "shadow_with_a_ready_ledger_ranks_and_records"
+gate = "cfg(unix)"
+reason = "private-storage"
+issue = "sr-winpar.4"
+
+[[gate]]
+file = "tests/snooze_contract.rs"
+item = "*"
+gate = "cfg(any(target_os = \"linux\", target_os = \"macos\"))"
+reason = "private-storage"
+issue = "sr-winpar.4"
+also = ["sr-winpar.24"]
+
+[[gate]]
+file = "tests/stats_inflight_accounting.rs"
+item = "*"
+gate = "cfg(unix)"
+reason = "private-storage"
+issue = "sr-winpar.4"
+
+[[gate]]
+file = "tests/stats_value_report_contract.rs"
+item = "*"
+gate = "cfg(unix)"
+reason = "private-storage"
+issue = "sr-winpar.4"
+
+[[gate]]
+file = "tests/storage_contract.rs"
+item = "*"
+gate = "cfg(any(target_os = \"linux\", target_os = \"macos\"))"
+reason = "private-storage"
+issue = "sr-winpar.3"
+
+[[gate]]
+file = "tests/storage_contract.rs"
+item = "a_response_expires_by_its_boot_clock_age_whatever_the_wall_clock_says"
+gate = "cfg(target_os = \"linux\")"
+reason = "linux-only"
+issue = "permanent: Linux-only mechanism (tmpfs, /proc, pidfd or statfs magic) with no Windows counterpart"
+note = "nested inside a gated file"
+
+[[gate]]
+file = "tests/subprocess_contract.rs"
+item = "*"
+gate = "cfg(any(target_os = \"linux\", target_os = \"macos\"))"
+reason = "subprocess"
+issue = "sr-winpar.9"
+
+[[gate]]
+file = "tests/subprocess_contract.rs"
+item = "termination_observer_accepts_a_proc_descriptor_whose_task_was_reaped"
+gate = "cfg(target_os = \"linux\")"
+reason = "linux-only"
+issue = "permanent: Linux-only mechanism (tmpfs, /proc, pidfd or statfs magic) with no Windows counterpart"
+note = "nested inside a gated file"
+
+[[gate]]
+file = "tests/subprocess_contract.rs"
+item = "termination_observer_preserves_other_errors_and_nonterminal_states"
+gate = "cfg(target_os = \"linux\")"
+reason = "linux-only"
+issue = "permanent: Linux-only mechanism (tmpfs, /proc, pidfd or statfs magic) with no Windows counterpart"
+note = "nested inside a gated file"
+
+[[gate]]
+file = "tests/subprocess_contract.rs"
+item = "termination_observer_rejects_a_live_child"
+gate = "cfg(target_os = \"linux\")"
+reason = "linux-only"
+issue = "permanent: Linux-only mechanism (tmpfs, /proc, pidfd or statfs magic) with no Windows counterpart"
+note = "nested inside a gated file"
+
+[[gate]]
+file = "tests/task_history_scope.rs"
+item = "offline_cli_never_turns_a_sibling_directive_into_an_explicit_request"
+gate = "cfg(unix)"
+reason = "unaudited"
+issue = "sr-winpar.25"
+note = "Unix modes only for 0700 setup directories"
+
+[[gate]]
+file = "tests/trace_continuation.rs"
+item = "*"
+gate = "cfg(unix)"
+reason = "private-storage"
+issue = "sr-winpar.4"
+
+[[gate]]
+file = "tests/transcript_request.rs"
+item = "*"
+gate = "cfg(unix)"
+reason = "unaudited"
+issue = "sr-winpar.25"
+
+[[gate]]
+file = "tests/transport_failures.rs"
+item = "*"
+gate = "cfg(unix)"
+reason = "provider-stub"
+issue = "sr-winpar.24"
+
+[[gate]]
+file = "tests/tui_contract.rs"
+item = "*"
+gate = "cfg(any(target_os = \"linux\", target_os = \"macos\"))"
+reason = "unaudited"
+issue = "sr-winpar.25"

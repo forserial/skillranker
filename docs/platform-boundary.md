@@ -231,16 +231,22 @@ different skill IDs; transcript paths skipped the reserved-name refusal; piped
 input was not seen as supplied; and a workspace-relative root was not held against
 rename.
 
-**What the Windows suite leaves out.** 72 integration suites (643 tests) are
-gated to Unix at file level: 61 were already, and 11 were added here because they
-need the private store or owner-only modes. A further 51 integration tests, and the
-lib tests of the store, exports, allowance and coordination, are gated
-individually for symlink, FIFO, mode or store fixtures. The Linux run below
-executes 1,804 tests where Windows executes 965. `tests/authorized_read_windows.rs`
-and `tests/windows_platform.rs` cover the file layer and hook natively, but
-`hook_contract`, `hook_installer_contract` and `hook_advice_contract` themselves do
-not run on Windows. Symbolic-link cases report a skip on a token without the
-privilege; here they ran. Several provider tests need `python` on `PATH`.
+**What the Windows suite leaves out.**
+[`tests/windows_test_matrix.toml`](../tests/windows_test_matrix.toml) is the exact
+inventory. It lists 165 gates (72 whole files, 17 modules, 76 single tests) with a
+reason and the issue that lifts each one, or a justified permanent exclusion;
+`tests/windows_test_matrix.rs` scans `src/` and `tests/` and fails when a gate is
+missing from it or an entry is stale. Reconciled with
+`cargo test --locked -- --list` on the commit that added it, Windows lists 975
+tests and Linux 1,824; all 877 Linux-only tests (175 lib unit tests, 702
+integration tests in 98 binaries) fall under those gates. 76 gates wait on the
+private store (sr-winpar.3 to .6), 5 on the hook suites (.17), 6 on subprocesses
+(.9 to .11), 4 on the provider-stub harness (.24) and 55 on porting fixtures or
+auditing suites (.25, .15); 19 are permanent (FIFOs and devices, POSIX signals
+and rlimits, Linux-only mechanisms, the Linux half of a twin test).
+`tests/authorized_read_windows.rs` and `tests/windows_platform.rs` cover the file
+layer and hook natively. Symbolic-link cases report a skip on a token without the
+privilege; here they ran.
 
 **Not established.** A model turn receiving the injected context: `claude -p`
 stopped at login on the evidence machine, after the hook had run. Live Jev
