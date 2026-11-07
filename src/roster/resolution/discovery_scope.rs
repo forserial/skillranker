@@ -243,6 +243,7 @@ mod tests {
         assert!(!slot_matches(&root, "alpha", Some(read.identity())));
     }
 
+    #[cfg(unix)]
     #[test]
     fn symlinked_directories_and_dangling_file_links_never_prove_absence() {
         use std::os::unix::fs::symlink;

@@ -37,6 +37,9 @@ toml = { version = "1", default-features = false, features = ["parse", "serde"] 
 # Windows. Already in the Windows graph through frankensearch's same-file.
 [target.'cfg(windows)'.dependencies]
 winapi-util = "=0.1.11"
+# The OS CSPRNG, without unsafe code in this crate. Windows has no /dev/urandom.
+# Already in the Windows graph through ahash.
+getrandom = "=0.3.4"
 
 [build-dependencies]
 blake3 = "1.8"

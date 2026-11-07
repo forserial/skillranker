@@ -97,14 +97,15 @@ owner-only private store fails closed instead of being emulated:
 | Response cache, ledger, coordinator leases | Store open reports `UnsupportedFilesystem`; optional caching is skipped visibly and commands that require the ledger (`observe`, `feedback`, `stats`, `ledger`, …) fail with their storage error |
 | Enforced request allowance | An absent guard means no allowance is configured, as on Unix; an existing guard, accounting store or `sr budget --apply` is refused, which withholds provider requests |
 | Hook invocation counter | Never written (it lives beside a ledger) |
-| Owner-only exports and replay case files | Refused: Windows ACLs are not inspected, so owner-only access cannot be established |
+| Owner-only exports, roster snapshots and replay case files | Refused: Windows ACLs are not inspected, so owner-only access cannot be established |
 | cass sessions (`--session`), Git `dirty_paths` | Unsupported source mode / omitted signal: subprocesses are Linux/macOS only |
 
 ### File access without `openat`
 
 `authorized_read` keeps one shared walk; only its four primitives differ by
-platform (`sys` module). On Windows each directory on the walk is held open
-without `FILE_SHARE_DELETE`, so it cannot be renamed, deleted or replaced by
+platform (`sys` module). On Windows each directory on the walk, including a final
+directory that becomes a workspace-relative root, is held open without
+`FILE_SHARE_DELETE`, so it cannot be renamed, deleted or replaced by
 a junction while held, and the next child's path still names a child of the
 checked object. Components are opened with `FILE_FLAG_OPEN_REPARSE_POINT`,
 mirroring `O_NOFOLLOW`; only name-surrogate reparse points (symbolic links,
@@ -126,13 +127,43 @@ discovery use the same primitives. Locks for hook installation and snoozes use
 `USERPROFILE`, which Claude Code uses for `%USERPROFILE%\.claude`, so it is
 the fallback there; Unix still reads only `HOME`.
 
+### Other Windows differences
+
+- **Randomness.** Cache keys, lease tokens and sampling seeds come from
+  `os_random`: `/dev/urandom` on Unix, `getrandom` (`ProcessPrng`) on Windows.
+  Sampling provenance records whichever source drew the seed.
+- **Hook command.** Claude Code runs Windows hook commands through Git Bash, so
+  `install-hook` writes `"C:/path/sr.exe" hook claude`: forward slashes inside
+  double quotes. An unquoted backslash path exits 127 in Bash, and hooks fail
+  open, so that failure would look like a quiet hook.
+- **Bounded stdin.** Windows pipes have no safe readiness wait. The read runs on a
+  helper thread and the caller waits on a channel, so it still stops at the
+  cleanup reserve. See the residual limits for what a stalled writer leaves.
+- **Main-thread stack.** `build.rs` links `sr.exe` with an 8 MiB stack, matching
+  Linux and macOS. The 1 MiB Windows default overflows in `sr eval`.
+- **Skill IDs.** Logical keys hash `/` separators on Windows, so discovery and
+  roster manifests assign equal IDs.
+- **Building from source.** Cargo's checkout of the pinned `asupersync` needs
+  `git config --global core.longpaths true`; some of its files exceed 260
+  characters. Linking every test binary can exhaust linker memory
+  (`LNK1102`), which `CARGO_PROFILE_TEST_DEBUG=0`, `CARGO_PROFILE_DEV_DEBUG=0`
+  and `CARGO_BUILD_JOBS=6` avoided on the evidence machine.
+
 ### Residual limits
 
 - The root of a walk is opened by its trusted absolute path; renaming one of
   its ancestors is not prevented by the held handles.
-- Windows releases are not native-qualified: no test suite has run on real
-  Windows, and the Claude Code `UserPromptSubmit` hook on Windows has not been
-  exercised end to end.
+- A stdin helper thread stalled in its read cannot be cancelled. It holds only
+  stdin and at most one chunk, publishes nothing, and ends with the process.
+  AGENTS.md's no-detached-workers rule is relaxed for this one leaf, because
+  cancelling it would need `unsafe` code the crate forbids.
+- Root matching compares path components case-sensitively. A link target spelled
+  with different case than its authorized root is refused, which fails closed.
+- Shadow-mode hooks with network consent send their provider requests and then
+  have no ledger to record them in, so on Windows they spend requests for no
+  stored result. Advisory mode publishes its answer.
+- `sr roster --snapshot` and `--diff` are refused along with other owner-only
+  exports.
 - A full storage port needs an audited owner-only ACL check and an admitted
   filesystem list (NTFS, ReFS) before cache or ledger can be enabled.
 
@@ -155,6 +186,74 @@ link refusal was not exercised there. (Cross-linking with MinGW on Linux needs
 a `libKernel32.a` alias for a dependency's capitalized import; MSVC is
 unaffected.)
 
-Not established: execution on real Windows, the Windows test suite (existing
-suites use Unix fixtures such as modes, symlinks and FIFOs and are not gated per
-platform), link/junction refusal, and the Claude Code hook end to end.
+That run did not exercise `rank`, the hook or real links.
+
+#### Native Windows (MSVC)
+
+Windows 11 Pro 10.0.26300, NTFS, `x86_64-pc-windows-msvc`,
+`nightly-2026-08-31`, Developer Mode on, not elevated. Claude Code 2.1.302.
+
+| Check | Result |
+|---|---|
+| `cargo build --release --locked --bin sr` | Pass, after `core.longpaths` for the first dependency checkout |
+| `cargo clippy --locked --lib --bins -- -D warnings`, and `--all-targets` | Pass |
+| `cargo fmt --check` | Pass |
+| `cargo test --locked` (158 binaries) | 965 passed, 0 failed, 1 ignored, with the link-memory settings above |
+| `sr --version`, `capabilities --json`, `demo --case useful --json` | Exit 0 |
+| `sr roster --json` | Exit 0; finds project and user skills |
+| `mklink /D` and `mklink /J` skill folders, in or out of the root | Skipped, reported as `symlinked-directory-skipped` |
+| `CON`, `nul.txt`, `COM1`, `trail.`, `space ` skill folders | Refused, reported as `entry-unreadable` |
+| `x.md:stream`, `t.jsonl.`, `t.jsonl `, `CON`, `nul.txt` as `--transcript` | Exit 7; the valid twin reaches its cache miss (exit 11) |
+| `x.md:stream`, `CON`, `x.md.` as `--roster` | Exit 5 |
+| Personal skills with `HOME` unset | Found through `USERPROFILE`; a set `HOME` wins |
+| `ledger status`, `ledger init`, `stats`, `budget --apply`, `roster --snapshot` | Exit 9, `storage-failure`, no state created |
+| `install-hook` preview, `--apply`, repeat, `uninstall-hook --apply` | One managed entry; a copy of a real settings file round-trips semantically, reformatted rather than byte-identical |
+| `sr rank` over TLS to a loopback provider stub | `ranked` through both stages in about 105 ms, debug build |
+
+The hook ran through a real `claude -p` in a temporary settings file, using
+`--settings`. Claude Code invoked the installed command through Git Bash, it
+exited 0, and:
+
+- Shadow mode published nothing, while the stub served both stages.
+- Advisory mode published `hookSpecificOutput.additionalContext` for a ranked
+  suggestion from the stub and for a local `/use-skill` request.
+- A stalled stdin ended in about 2.8 s with exit 0, and input over 1 MiB failed
+  open.
+
+These bugs existed only on real Windows, and are fixed: ranking failed for lack of
+`/dev/urandom`; the installed hook exited 127 in Git Bash; the hook could not read
+stdin; `sr eval` overflowed the main-thread stack; discovery and manifests derived
+different skill IDs; transcript paths skipped the reserved-name refusal; piped
+input was not seen as supplied; and a workspace-relative root was not held against
+rename.
+
+**What the Windows suite leaves out.** 72 integration suites (643 tests) are
+gated to Unix at file level: 61 were already, and 11 were added here because they
+need the private store or owner-only modes. A further 51 integration tests, and the
+lib tests of the store, exports, allowance and coordination, are gated
+individually for symlink, FIFO, mode or store fixtures. The Linux run below
+executes 1,804 tests where Windows executes 965. `tests/authorized_read_windows.rs`
+and `tests/windows_platform.rs` cover the file layer and hook natively, but
+`hook_contract`, `hook_installer_contract` and `hook_advice_contract` themselves do
+not run on Windows. Symbolic-link cases report a skip on a token without the
+privilege; here they ran. Several provider tests need `python` on `PATH`.
+
+**Not established.** A model turn receiving the injected context: `claude -p`
+stopped at login on the evidence machine, after the hook had run. Live Jev
+ranking: no `TYPESAFE_API_KEY` was available, so every provider exchange used the
+loopback stub. Hook latency targets. Other Windows versions, ReFS, or a token
+without symlink rights. `ubs` was not available, so its gate did not run.
+`tests/platform_boundary_contract.py` and `scripts/validate_public_contracts.py`
+fail on Windows, identically on the unmodified tree, and pass on Linux.
+
+#### Linux regression run
+
+WSL2 (`openclaw`), the same toolchain, on the Linux filesystem: `cargo fmt --check`,
+`cargo clippy --locked --all-targets -- -D warnings` and both Python contract checks
+pass. `cargo test --locked` ran 158 binaries: 1,794 passed, 10 failed, 11 ignored.
+The ten are multi-process provider tests in `allowance_contract`, `breaker_contract`,
+`rank_acceptance` and `real_rank_coordination`. They fail the same way on the
+unmodified tree in that distro, so they are not regressions, and their cause there
+was not diagnosed. `every_hand_written_cli_pair_matches_the_documented_mapping`,
+which failed before, now passes. Later edits were limited to `cfg(windows)` code and
+Windows-only tests, so this run was not repeated. It is not native macOS evidence.

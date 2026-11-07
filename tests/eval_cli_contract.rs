@@ -741,10 +741,18 @@ impl LiveProvider {
         ] {
             fs::write(dir.join(name), bytes).unwrap();
         }
-        let mut child = Command::new("/usr/bin/python3")
+        // Windows has no fixed interpreter path, and Python needs SystemRoot there.
+        let mut server = Command::new(if cfg!(windows) {
+            "python"
+        } else {
+            "/usr/bin/python3"
+        });
+        if cfg!(not(windows)) {
+            server.env_clear();
+        }
+        let mut child = server
             .arg(dir.join("provider_server.py"))
             .arg(scenario)
-            .env_clear()
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit())
@@ -814,8 +822,13 @@ fn live_workspace() -> PathBuf {
 }
 
 fn run_live(root: &PathBuf, port: u16, args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_sr"))
-        .env_clear()
+    let mut command = Command::new(env!("CARGO_BIN_EXE_sr"));
+    command.env_clear();
+    // Winsock cannot start without it.
+    if let Some(system_root) = std::env::var_os("SystemRoot") {
+        command.env("SystemRoot", system_root);
+    }
+    command
         .env("HOME", root)
         .env("XDG_CONFIG_HOME", root.join("config"))
         .env("TYPESAFE_API_KEY", "synthetic-eval-canary")

@@ -857,6 +857,18 @@ mod sys {
         if stat.kind == FileKind::Symlink {
             return Ok(Opened::Link);
         }
+        if last && stat.kind == FileKind::Directory {
+            // A final directory can become a root that later walks descend from,
+            // so it is held like every other directory. The first handle stays
+            // open across the reopen, which keeps the object from being replaced
+            // unnoticed: the identity must still match.
+            let held = open(&path, false, true).map_err(|error| map_io(&error))?;
+            let held_stat = self::stat(&held)?;
+            if held_stat.kind != FileKind::Directory || held_stat.identity != stat.identity {
+                return Err(ReadError::Io);
+            }
+            return Ok(Opened::Object(Descriptor { file: held, path }, held_stat));
+        }
         Ok(Opened::Object(Descriptor { file, path }, stat))
     }
 

@@ -8,6 +8,8 @@
 //! 5. Policy overrides and comparisons execute without ambient configuration.
 //! 6. Owner-only file permissions (0600/0400) are enforced.
 //! 7. Incompatible policies (such as uncaptured priors) are rejected.
+// Replay files must prove owner-only modes, which Windows builds refuse (see docs/platform-boundary.md).
+#![cfg(unix)]
 
 use serde_json::{Value, json};
 use skillranker::output::SCHEMA_VERSION;

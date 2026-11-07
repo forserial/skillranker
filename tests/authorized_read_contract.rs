@@ -1,10 +1,14 @@
+// Part of this suite needs Unix fixtures; those tests and their helpers are gated.
+#![cfg_attr(not(unix), allow(unused_imports, dead_code))]
 use skillranker::authorized_read::*;
 use skillranker::identity::ContentHash;
 use skillranker::limits::{LimitUnit, ResourceLimit, SKILL_FILE_BYTES};
 use skillranker::privacy::{TrustedAbsoluteRoot, WorkspaceRelativeRoot};
 use std::ffi::OsStr;
 use std::fs;
+#[cfg(unix)]
 use std::os::unix::ffi::OsStrExt;
+#[cfg(unix)]
 use std::os::unix::fs::symlink;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -132,6 +136,7 @@ fn content_hash_changes_when_size_and_mtime_do_not() {
     );
 }
 
+#[cfg(unix)]
 #[test]
 fn only_regular_files_are_read() {
     let tree = temp_tree("types");
@@ -164,6 +169,7 @@ fn only_regular_files_are_read() {
     );
 }
 
+#[cfg(unix)]
 #[test]
 fn symlinks_resolve_only_inside_authorized_roots() {
     let tree = temp_tree("links");
@@ -214,6 +220,7 @@ fn symlinks_resolve_only_inside_authorized_roots() {
     );
 }
 
+#[cfg(unix)]
 #[test]
 fn replacing_a_component_after_the_root_opens_cannot_redirect_reads() {
     let tree = temp_tree("swap");
@@ -252,6 +259,7 @@ fn replacing_a_component_after_the_root_opens_cannot_redirect_reads() {
     );
 }
 
+#[cfg(unix)]
 #[test]
 fn concurrent_component_swaps_never_return_content_from_outside() {
     let tree = temp_tree("race");
@@ -361,6 +369,7 @@ fn absolute_reads_require_an_authorized_root() {
     );
 }
 
+#[cfg(unix)]
 #[test]
 fn workspace_relative_roots_open_without_leaving_the_workspace() {
     let tree = temp_tree("workspace");
@@ -402,6 +411,7 @@ fn workspace_relative_roots_open_without_leaving_the_workspace() {
     assert_eq!(trusted.absolute_path(), outside.as_path());
 }
 
+#[cfg(unix)]
 #[test]
 fn native_path_bytes_survive_and_diagnostics_stay_private() {
     let tree = temp_tree("bytes");

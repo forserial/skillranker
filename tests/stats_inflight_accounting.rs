@@ -17,6 +17,8 @@
 //! - its `elapsed_ms = 0` is not a real duration and must stay out of the summary,
 //! - its absent provider attempts are not evidence of a cache hit,
 //! - and once the invocation finishes, its row is counted exactly once.
+// Exercises the Unix-only private store; Windows builds refuse it (see docs/platform-boundary.md).
+#![cfg(unix)]
 
 use asupersync::Cx;
 use skillranker::runtime::ProcessInvocation;

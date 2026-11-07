@@ -418,6 +418,7 @@ fn wide_and_body_excerpt_scalar_truncation() {
 // Unit Property Test: tests/roster_contract.rs::atomic_private_exports
 // -----------------------------------------------------------------------------
 
+#[cfg(unix)]
 #[test]
 fn atomic_private_exports() {
     use skillranker::storage::export::{ExportConfig, ExportError, export_private_atomic};
@@ -510,6 +511,7 @@ fn atomic_private_exports() {
     assert!(matches!(err_bad_dir, ExportError::InvalidDirectory(_)));
 }
 
+#[cfg(unix)]
 #[test]
 fn concurrent_export_race_prevents_clobber() {
     use skillranker::storage::export::{ExportConfig, ExportError, export_private_atomic};

@@ -1,6 +1,7 @@
 use super::*;
 use std::cell::Cell;
 use std::fs;
+#[cfg(unix)]
 use std::os::unix::fs::{MetadataExt, symlink};
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -153,6 +154,7 @@ fn even_an_empty_pass_checks_admission_and_completion() {
     );
 }
 
+#[cfg(unix)]
 #[test]
 fn a_nonadvancing_failed_directory_stream_is_not_retried() {
     let mut discovery = Discovery::default();
@@ -171,6 +173,7 @@ fn a_nonadvancing_failed_directory_stream_is_not_retried() {
     assert!(discovery.is_partial());
 }
 
+#[cfg(unix)]
 #[test]
 fn failed_stream_preserves_preceding_entries_and_leaves_following_entries_unread() {
     let mut discovery = Discovery::default();
@@ -185,6 +188,7 @@ fn failed_stream_preserves_preceding_entries_and_leaves_following_entries_unread
     assert_eq!(discovery.diagnostics().len(), 1);
 }
 
+#[cfg(unix)]
 #[test]
 fn candidate_metadata_uses_the_open_directory_not_a_replaced_parent_path() {
     let path = tree();

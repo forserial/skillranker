@@ -323,10 +323,51 @@ pub fn write_backup(
 /// Formats the managed hook command invocation string.
 pub fn make_command_string(binary_path: &Path) -> String {
     let path_str = binary_path.to_string_lossy();
-    if path_str.contains(' ') {
+    if cfg!(windows) {
+        windows_hook_command(&path_str)
+    } else if path_str.contains(' ') {
         format!("\"{path_str}\" hook claude")
     } else {
         format!("{path_str} hook claude")
+    }
+}
+
+/// Claude Code runs hook commands through Git Bash on Windows, where an unquoted
+/// `C:\dir\sr.exe` loses its backslashes and fails with exit 127. Forward slashes
+/// inside double quotes survive Bash; `$` and backtick stay literal when escaped.
+/// A verbatim prefix has no Bash spelling, so the plain drive form is written.
+fn windows_hook_command(path: &str) -> String {
+    let path = path
+        .strip_prefix(r"\\?\")
+        .unwrap_or(path)
+        .replace('\\', "/");
+    let mut quoted = String::with_capacity(path.len() + 2);
+    for character in path.chars() {
+        if matches!(character, '$' | '`') {
+            quoted.push('\\');
+        }
+        quoted.push(character);
+    }
+    format!("\"{quoted}\" hook claude")
+}
+
+#[cfg(test)]
+mod windows_hook_command_tests {
+    use super::windows_hook_command;
+
+    #[test]
+    fn the_command_survives_git_bash() {
+        for (path, expected) in [
+            (r"C:\tools\sr.exe", r#""C:/tools/sr.exe" hook claude"#),
+            (
+                r"C:\Program Files\sr.exe",
+                r#""C:/Program Files/sr.exe" hook claude"#,
+            ),
+            (r"\\?\C:\tools\sr.exe", r#""C:/tools/sr.exe" hook claude"#),
+            (r"C:\a$b`c\sr.exe", r#""C:/a\$b\`c/sr.exe" hook claude"#),
+        ] {
+            assert_eq!(windows_hook_command(path), expected);
+        }
     }
 }
 
@@ -639,6 +680,9 @@ pub fn install_hook(options: &InstallOptions) -> Result<InstallOutcome, Installe
     let classification = classify_existing_entry(arr, &command_str, options.timeout_secs);
 
     let mode_str = match options.effective_mode {
+        HookMode::Shadow if cfg!(windows) => {
+            "shadow (default, no context injected; Windows builds have no ledger, so nothing is recorded)"
+        }
         HookMode::Shadow => "shadow (default, evaluations recorded without injecting context)",
         HookMode::Advisory => "advisory (suggestions enabled)",
     };

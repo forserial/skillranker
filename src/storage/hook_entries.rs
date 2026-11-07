@@ -311,7 +311,7 @@ fn replace_entries(_: &Path, _: HookCounter, _: &[u8]) -> Result<(), StoreError>
     Err(StoreError::UnsupportedFilesystem)
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
     use std::os::unix::fs::{DirBuilderExt, PermissionsExt};

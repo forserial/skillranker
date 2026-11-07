@@ -261,6 +261,15 @@ fn read_snapshot(
     {
         return Err(JsonlError::UnsafePath);
     }
+    // This path is opened directly rather than through the authorized walk, so it
+    // refuses the same names: Win32 would open a stream, device or stripped alias.
+    #[cfg(windows)]
+    if path.components().any(|component| {
+        matches!(component, std::path::Component::Normal(name)
+            if !crate::authorized_read::valid_component(name))
+    }) {
+        return Err(JsonlError::UnsafePath);
+    }
     let link_meta = fs::symlink_metadata(path).map_err(|_| JsonlError::Io)?;
     if link_meta.file_type().is_symlink() || !link_meta.file_type().is_file() {
         return Err(JsonlError::UnsafePath);

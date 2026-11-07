@@ -447,6 +447,7 @@ mod tests {
         assert!(breaker.admit(10, LEASE).is_ok());
     }
 
+    #[cfg(unix)]
     #[test]
     fn one_probe_owner_and_a_doubling_capped_cooldown() {
         let path = temp();
@@ -593,6 +594,7 @@ mod tests {
         assert!(breaker.admit(3, LEASE).is_ok(), "a valid response lifts it");
     }
 
+    #[cfg(unix)]
     #[test]
     fn an_origin_that_never_failed_creates_no_store() {
         let path = temp();

@@ -10,7 +10,6 @@ use super::fingerprint::{CacheKey, CacheNamespace, RequestFingerprint};
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use std::fmt;
-use std::io::Read;
 
 /// Default lease TTL in milliseconds (5,000 ms).
 pub const DEFAULT_LEASE_TTL_MS: u64 = 5_000;
@@ -64,8 +63,7 @@ impl OwnerToken {
     /// Generates a fresh random token from the operating system CSPRNG.
     pub fn generate() -> Result<Self, std::io::Error> {
         let mut bytes = [0u8; 16];
-        let mut file = std::fs::File::open("/dev/urandom")?;
-        file.read_exact(&mut bytes)?;
+        crate::os_random::fill(&mut bytes)?;
         Ok(Self(bytes))
     }
 
@@ -500,6 +498,6 @@ impl SqliteLeaseCoordinator {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 #[path = "coordination/integrity_tests.rs"]
 mod integrity_tests;

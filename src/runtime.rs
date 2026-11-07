@@ -627,13 +627,96 @@ pub fn read_stdin_platform_before_cleanup(
     read_fd_before_cleanup(clock, io::stdin(), max_bytes, buf)
 }
 
+/// Read standard input where it cannot be polled: Windows pipes have no safe
+/// readiness wait, so the blocking read lives on a helper thread.
 #[cfg(not(unix))]
 pub fn read_stdin_platform_before_cleanup(
-    _clock: &EntryClock,
-    _max_bytes: usize,
-    _buf: &mut Vec<u8>,
+    clock: &EntryClock,
+    max_bytes: usize,
+    buf: &mut Vec<u8>,
 ) -> Result<(), RuntimeError> {
-    Err(RuntimeError::UnboundedLeaf)
+    read_on_helper_before_cleanup(clock, io::stdin(), max_bytes, buf)
+}
+
+/// Deadline-bounded read of a reader whose blocking `read` cannot be interrupted.
+/// The caller waits on a channel, so it never waits past the cleanup reserve. A
+/// stalled helper stays parked in its read holding only this reader, reads nothing
+/// further into memory than one chunk, and ends when the process exits.
+#[cfg(any(not(unix), test))]
+fn read_on_helper_before_cleanup<R: Read + Send + 'static>(
+    clock: &EntryClock,
+    mut reader: R,
+    max_bytes: usize,
+    buf: &mut Vec<u8>,
+) -> Result<(), RuntimeError> {
+    clock
+        .admit_new_work()
+        .map_err(|_| RuntimeError::StdinTimeout)?;
+    buf.clear();
+
+    // One byte past the bound is enough to report an overflow.
+    let readable = max_bytes.saturating_add(1);
+    let (sender, receiver) = std::sync::mpsc::sync_channel::<io::Result<Vec<u8>>>(1);
+    std::thread::Builder::new()
+        .name("sr-stdin".to_owned())
+        .spawn(move || {
+            let mut total = 0_usize;
+            while total < readable {
+                let mut chunk = vec![0_u8; (8 * 1024).min(readable - total)];
+                match reader.read(&mut chunk) {
+                    Ok(0) => break,
+                    Ok(n) => {
+                        total += n;
+                        chunk.truncate(n);
+                        if sender.send(Ok(chunk)).is_err() {
+                            return;
+                        }
+                    }
+                    Err(err) if err.kind() == io::ErrorKind::Interrupted => {}
+                    Err(err) => {
+                        let _ = sender.send(Err(err));
+                        return;
+                    }
+                }
+            }
+            // Dropping the sender is the end-of-input signal.
+        })
+        .map_err(|_| RuntimeError::StdinIo)?;
+
+    loop {
+        clock
+            .admit_new_work()
+            .map_err(|_| RuntimeError::StdinTimeout)?;
+        let remaining =
+            std::time::Duration::from_millis(clock.remaining_before_cleanup().as_millis());
+        let chunk = match receiver.recv_timeout(remaining) {
+            Ok(Ok(chunk)) => chunk,
+            Ok(Err(_)) => return Err(RuntimeError::StdinIo),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                return Err(RuntimeError::StdinTimeout);
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                clock
+                    .admit_new_work()
+                    .map_err(|_| RuntimeError::StdinTimeout)?;
+                return Ok(());
+            }
+        };
+        clock
+            .admit_new_work()
+            .map_err(|_| RuntimeError::StdinTimeout)?;
+        let observed = buf.len() + chunk.len();
+        if observed > max_bytes {
+            return Err(LimitError::AboveLimit {
+                name: "hook_stdin",
+                observed: observed as u128,
+                limit: max_bytes as u128,
+                unit: crate::limits::LimitUnit::Bytes,
+            }
+            .into());
+        }
+        buf.extend_from_slice(&chunk);
+    }
 }
 
 pub const fn default_deadline_ms() -> u64 {
@@ -642,6 +725,81 @@ pub const fn default_deadline_ms() -> u64 {
 
 pub const fn default_cleanup_reserve_ms() -> u64 {
     DEFAULT_OUTPUT_CLEANUP_RESERVE_MS
+}
+
+#[cfg(test)]
+mod helper_read_tests {
+    use super::*;
+    use std::io::Cursor;
+    use std::time::Instant;
+
+    fn read(input: &[u8], max_bytes: usize) -> Result<Vec<u8>, RuntimeError> {
+        let clock = EntryClock::capture().unwrap();
+        let mut buf = vec![0xff];
+        read_on_helper_before_cleanup(&clock, Cursor::new(input.to_vec()), max_bytes, &mut buf)?;
+        Ok(buf)
+    }
+
+    #[test]
+    fn reads_complete_input_up_to_the_exact_bound() {
+        assert_eq!(read(b"", 8).unwrap(), b"");
+        assert_eq!(read(b"", 0).unwrap(), b"");
+        assert_eq!(read(b"12345678", 8).unwrap(), b"12345678");
+        let large = vec![7_u8; 100 * 1024];
+        assert_eq!(read(&large, large.len()).unwrap(), large);
+    }
+
+    #[test]
+    fn input_past_the_bound_is_an_overflow_not_a_truncated_document() {
+        for (input, max_bytes) in [(&b"123456789"[..], 8), (&b"x"[..], 0)] {
+            assert!(matches!(
+                read(input, max_bytes),
+                Err(RuntimeError::Deadline(LimitError::AboveLimit { .. }))
+            ));
+        }
+    }
+
+    struct Failing;
+
+    impl Read for Failing {
+        fn read(&mut self, _: &mut [u8]) -> io::Result<usize> {
+            Err(io::Error::other("broken"))
+        }
+    }
+
+    #[test]
+    fn a_read_failure_is_not_end_of_input() {
+        let clock = EntryClock::capture().unwrap();
+        let mut buf = Vec::new();
+        assert_eq!(
+            read_on_helper_before_cleanup(&clock, Failing, 8, &mut buf),
+            Err(RuntimeError::StdinIo)
+        );
+    }
+
+    /// Never returns while its keeper is alive, like stdin from a stalled writer.
+    struct Stalled(std::sync::mpsc::Receiver<()>);
+
+    impl Read for Stalled {
+        fn read(&mut self, _: &mut [u8]) -> io::Result<usize> {
+            let _ = self.0.recv();
+            Ok(0)
+        }
+    }
+
+    #[test]
+    fn a_stalled_writer_times_out_at_the_cleanup_reserve() {
+        let clock = EntryClock::capture().unwrap();
+        let (keeper, stalled) = std::sync::mpsc::channel();
+        let started = Instant::now();
+        let mut buf = Vec::new();
+        assert_eq!(
+            read_on_helper_before_cleanup(&clock, Stalled(stalled), 8, &mut buf),
+            Err(RuntimeError::StdinTimeout)
+        );
+        assert!(started.elapsed().as_millis() < u128::from(default_deadline_ms()));
+        drop(keeper);
+    }
 }
 
 #[cfg(test)]

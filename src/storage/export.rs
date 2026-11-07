@@ -378,7 +378,7 @@ pub fn export_private_atomic(
     ))
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
 

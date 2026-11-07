@@ -8,6 +8,8 @@
 //! - Fill recording capacity then successfully migrate/prune within reserve.
 //! - Simulate external full disk and reject before mutation with required-space figure and recovery hint.
 //! - Preserve recoverable copy and never reset protected charges.
+// Exercises the Unix-only private store; Windows builds refuse it (see docs/platform-boundary.md).
+#![cfg(unix)]
 
 use asupersync::Cx;
 use rusqlite::Connection;

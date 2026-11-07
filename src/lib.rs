@@ -24,6 +24,7 @@ pub mod installer;
 pub mod jev;
 pub mod learning;
 pub mod limits;
+mod os_random;
 pub mod output;
 pub mod pipeline;
 mod platform_path;

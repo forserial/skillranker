@@ -4294,7 +4294,7 @@ fn read_bounded_eval_bytes(path: &str, what: &str, max_bytes: usize) -> Result<V
         })?;
     if bytes.len() > max_bytes {
         return Err((
-            8u8,
+            7u8,
             "oversized-input",
             format!("{what} {path} exceeds maximum size of {max_bytes} bytes"),
         ));
@@ -5377,6 +5377,12 @@ fn is_stdin_supplied() -> bool {
             return false;
         }
     }
+    // Same rule as above: pipes and files are input, while the NUL device a
+    // detached process inherits is not.
+    #[cfg(windows)]
+    if let Ok(kind) = winapi_util::file::typ(winapi_util::HandleRef::stdin()) {
+        return kind.is_pipe() || kind.is_disk();
+    }
     false
 }
 
@@ -5671,6 +5677,10 @@ fn hook_prerequisites(
             .ok()
         });
     let ledger = match ledger {
+        _ if cfg!(windows) => {
+            "unavailable: Windows builds have no ledger, so a recorded trial is not possible"
+                .to_owned()
+        }
         Some(crate::storage::LedgerOpen::Ready(_)) => "initialized".to_owned(),
         Some(crate::storage::LedgerOpen::ReadOnly(_)) => {
             "read-only: a hook cannot record to it".to_owned()
@@ -6606,7 +6616,7 @@ fn export_snapshot(
     ))
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod invocation_cleanup_tests {
     use super::*;
     use crate::runtime::ProcessInvocation;

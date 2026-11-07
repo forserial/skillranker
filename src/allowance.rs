@@ -28,7 +28,7 @@ use crate::jev::{CanonicalOrigin, RankingStage};
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use serde::Deserialize;
 use std::fmt;
-#[cfg(test)]
+#[cfg(all(test, unix))]
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -247,7 +247,7 @@ pub fn read_guard(paths: &AllowancePaths) -> Result<Option<Guard>, AllowanceErro
     guard_file::read(&paths.guard)
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 fn create_private_dir(dir: &Path) -> Result<(), AllowanceError> {
     let mut builder = fs::DirBuilder::new();
     builder.recursive(true);
@@ -845,7 +845,7 @@ pub fn admit(
     }))
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
 
@@ -1056,7 +1056,7 @@ mod tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 #[path = "allowance/integrity_tests.rs"]
 mod integrity_tests;
 
@@ -1064,6 +1064,6 @@ mod integrity_tests;
 #[path = "allowance/inspection_tests.rs"]
 mod inspection_tests;
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 #[path = "allowance/charge_consistency_tests.rs"]
 mod charge_consistency_tests;

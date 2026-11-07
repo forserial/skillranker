@@ -576,7 +576,7 @@ pub fn diagnose_owner_only(_: &Path) -> Option<PermissionRefusal> {
     None
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
     #[test]
@@ -607,5 +607,5 @@ mod tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod scan_tests;

@@ -1,5 +1,7 @@
 //! Real binary checks of `sr roster`: complete records, snapshot-bound pages,
 //! and clean streams, over actual skill trees.
+// Part of this suite needs Unix fixtures; those tests and their helpers are gated.
+#![cfg_attr(not(unix), allow(unused_imports, dead_code))]
 use serde_json::Value;
 use std::collections::BTreeSet;
 use std::path::PathBuf;
@@ -24,11 +26,16 @@ impl Fixture {
                 .as_nanos(),
             NEXT.fetch_add(1, Ordering::Relaxed)
         ));
-        use std::os::unix::fs::DirBuilderExt;
-        std::fs::DirBuilder::new()
-            .mode(0o700)
-            .create(&root)
-            .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::DirBuilderExt;
+            std::fs::DirBuilder::new()
+                .mode(0o700)
+                .create(&root)
+                .unwrap();
+        }
+        #[cfg(not(unix))]
+        std::fs::create_dir(&root).unwrap();
         std::fs::create_dir_all(root.join("workspace/.claude/skills")).unwrap();
         std::fs::create_dir_all(root.join("home/.claude/skills")).unwrap();
         Self { root }
@@ -259,6 +266,7 @@ fn project_roots(f: &Fixture, text: &str) {
     std::fs::write(f.root.join("workspace/.sr/config.toml"), text).unwrap();
 }
 
+#[cfg(unix)]
 #[test]
 fn configured_project_and_user_roots_reach_roster_doctor_and_snapshot() {
     use std::os::unix::fs::PermissionsExt;
@@ -324,6 +332,7 @@ fn configured_project_and_user_roots_reach_roster_doctor_and_snapshot() {
     assert_eq!(comparison.status.code(), Some(0));
 }
 
+#[cfg(unix)]
 #[test]
 fn project_root_symlink_cannot_grant_external_reads_but_contained_root_works() {
     use std::os::unix::fs::symlink;

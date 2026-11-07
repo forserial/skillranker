@@ -68,7 +68,7 @@ harm here; it is reported by the operational cohort (8.4).
 ## 4. Randomization and blinding
 
 - **Arm order.** Within each unit, which arm runs first is drawn from a seed read
-  from OS randomness at freeze time (`/dev/urandom`) and recorded in the
+  from OS randomness at freeze time (`/dev/urandom`; `ProcessPrng` on Windows) and recorded in the
   manifest. The derivation is fixed (§8), so anyone holding the manifest can
   check the assignment. A manually chosen seed marks the cohort diagnostic.
 - **Blind labels.** Each arm of each unit gets an opaque label derived from the

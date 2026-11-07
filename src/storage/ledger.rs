@@ -1970,11 +1970,8 @@ impl From<StoreError> for FeedbackError {
 }
 
 pub(crate) fn generate_random_hex(byte_count: usize) -> String {
-    use std::io::Read;
     let mut bytes = vec![0u8; byte_count];
-    if let Ok(mut f) = std::fs::File::open("/dev/urandom") {
-        let _ = f.read_exact(&mut bytes);
-    } else {
+    if crate::os_random::fill(&mut bytes).is_err() {
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()

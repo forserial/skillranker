@@ -503,6 +503,7 @@ fn malformed_winner_withholds_its_name_but_unsupported_layout_claims_no_name() {
     assert!(runtime.shutdown());
 }
 
+#[cfg(unix)]
 #[test]
 fn read_failure_and_escaping_symlink_continue_and_scope_withholding() {
     let root = tree();
@@ -619,6 +620,7 @@ fn mixed_contracts_are_ambiguous_and_unverified_singletons_stay_unverified() {
     assert!(runtime.shutdown());
 }
 
+#[cfg(unix)]
 #[test]
 fn authorized_file_symlink_deduplicates_but_escape_withholds_authority() {
     use std::os::unix::fs::symlink;
@@ -792,6 +794,7 @@ fn concurrent_real_rosters_preserve_listing_at_choice_and_batch_boundaries() {
     }
 }
 
+#[cfg(unix)]
 #[test]
 fn concurrent_rejections_and_aliases_preserve_safe_shadowing_and_positives() {
     use std::os::unix::fs::symlink;

@@ -89,7 +89,12 @@ fn relatives(discovery: &Discovery) -> Vec<String> {
     discovery
         .candidates()
         .iter()
-        .map(|candidate| candidate.relative().to_string_lossy().into_owned())
+        .map(|candidate| {
+            candidate
+                .relative()
+                .to_string_lossy()
+                .replace(std::path::MAIN_SEPARATOR, "/")
+        })
         .collect()
 }
 
@@ -355,6 +360,7 @@ fn deep_trees_stop_at_the_depth_bound() {
     );
 }
 
+#[cfg(unix)]
 #[test]
 fn symlinked_directories_are_skipped_and_symlinked_skill_files_are_flagged() {
     let tree = temp_tree("links");
@@ -506,6 +512,7 @@ fn repeated_plan_observes_new_entries_and_renamed_skills() {
     );
 }
 
+#[cfg(unix)]
 #[test]
 fn discovery_is_independent_of_another_reader_of_the_pinned_root() {
     use nix::dir::Dir;

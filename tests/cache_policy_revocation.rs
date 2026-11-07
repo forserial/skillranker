@@ -3,6 +3,8 @@
 //! SingleFlightCoordinator and its alternate response store are not reproduced.
 //! Actual CLI sharing, offline output, provider attempts and live policy changes
 //! are covered by real_rank_coordination and rank_acceptance.
+// Exercises the Unix-only private store; Windows builds refuse it (see docs/platform-boundary.md).
+#![cfg(unix)]
 
 use skillranker::cache::{
     CacheKey, CacheLookupQuery, CacheLookupResult, CacheNamespace, CachedResponseEntry,

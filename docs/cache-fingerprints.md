@@ -20,7 +20,7 @@ Decision Inputs (Loaded References, Exclusions, Policy, Prior Snapshot, Snoozes)
 ## Security & Privacy Properties
 
 1. **Local Secret Key (`CacheKey`)**:
-   - Stored hashes are computed using a 32-byte secret key generated from the operating system CSPRNG (`/dev/urandom`).
+   - Stored hashes are computed using a 32-byte secret key generated from the operating system CSPRNG (`/dev/urandom`; `ProcessPrng` on Windows).
    - Prevents dictionary attacks where an attacker precomputes BLAKE3 hashes of known prompts to verify whether a user ran a particular prompt.
    - Debug and display implementations strictly redact the secret key (`CacheKey(<secret-key>)`), ensuring raw key bytes never appear in logs or diagnostics.
 2. **Namespace Isolation (`CacheNamespace`)**:

@@ -2,6 +2,8 @@
 //! and CLI invocation boundary.
 //!
 //! Satisfies contract boundary `p4_two_stage_pipeline` (sr-roadmap-l1i.5.11).
+// Part of this suite needs Unix fixtures; those tests and their helpers are gated.
+#![cfg_attr(not(unix), allow(unused_imports, dead_code))]
 
 mod support;
 
@@ -1404,6 +1406,7 @@ fn overrun_failure_finalization_fixture(
     (doc, reasons, elapsed_ms)
 }
 
+#[cfg(unix)]
 #[test]
 fn a_run_that_overruns_its_deadline_records_its_failure_not_in_flight() {
     let (doc, reasons, elapsed_ms) = overrun_failure_finalization_fixture(false, 50);
@@ -1421,6 +1424,7 @@ fn a_run_that_overruns_its_deadline_records_its_failure_not_in_flight() {
     );
 }
 
+#[cfg(unix)]
 #[test]
 fn an_unconfirmed_failure_ledger_write_preserves_timeout_and_unknown_usage() {
     let (doc, reasons, elapsed_ms) = overrun_failure_finalization_fixture(true, 50);
@@ -1434,6 +1438,7 @@ fn an_unconfirmed_failure_ledger_write_preserves_timeout_and_unknown_usage() {
     assert_eq!(warning["count"], 1);
 }
 
+#[cfg(unix)]
 #[test]
 fn a_run_past_the_failure_recording_window_preserves_unknown_ledger_outcome() {
     let (doc, reasons, elapsed_ms) = overrun_failure_finalization_fixture(false, 650);
@@ -1574,6 +1579,7 @@ fn successful_ledger_finalization_fixture(
     (document.as_value().clone(), reason)
 }
 
+#[cfg(unix)]
 #[test]
 fn successful_rankings_report_unconfirmed_ledger_finalization() {
     for low_gate in [false, true] {

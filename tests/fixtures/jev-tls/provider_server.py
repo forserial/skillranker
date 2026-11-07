@@ -28,12 +28,15 @@ Scenarios:
                   as live totals drift from one
 """
 
+import atexit
 import json
 import pathlib
+import queue
 import select
 import socket
 import ssl
 import sys
+import threading
 import time
 
 root = pathlib.Path(__file__).parent
@@ -43,8 +46,24 @@ text = sys.argv[3] if len(sys.argv) > 3 else ""
 USAGE = {"wide": (100, 25), "rerank": (120, 30)}
 
 
-def emit(value):
-    print(json.dumps(value), flush=True)
+if sys.platform == "win32":
+    # A Windows pipe holds about 4 KiB and the test reads its reports at the end,
+    # so a blocking write here would stall the server mid-answer.
+    pending = queue.SimpleQueue()
+
+    def report_pending():
+        while (line := pending.get()) is not None:
+            print(line, flush=True)
+
+    reporter = threading.Thread(target=report_pending, daemon=True)
+    reporter.start()
+    atexit.register(lambda: (pending.put(None), reporter.join()))
+
+    def emit(value):
+        pending.put(json.dumps(value))
+else:
+    def emit(value):
+        print(json.dumps(value), flush=True)
 
 
 def distribution(options, favored):
@@ -113,9 +132,16 @@ def read_request(stream):
 context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
 context.load_cert_chain(root / "server.pem", root / "server.key")
 context.set_alpn_protocols(["http/1.1"])
-listener = socket.socket()
-listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-listener.bind(("127.0.0.1", 0))
+if sys.platform == "win32":
+    # `localhost` tries ::1 first, and Windows retries a refused connect for two
+    # seconds, which is most of a ranking deadline. Answer on both families.
+    listener = socket.socket(socket.AF_INET6)
+    listener.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
+    listener.bind(("::", 0))
+else:
+    listener = socket.socket()
+    listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    listener.bind(("127.0.0.1", 0))
 listener.listen(4)
 listener.settimeout(30)
 emit({"port": listener.getsockname()[1]})

@@ -18,6 +18,7 @@ use skillranker::roster::{InvocationKind, Visibility};
 use skillranker::runtime::{EntryClock, ProcessInvocation};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
+#[cfg(unix)]
 use std::os::unix::fs::symlink;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -177,6 +178,7 @@ fn many_oversized_files_do_not_accumulate_a_fictitious_read_budget() {
     );
 }
 
+#[cfg(unix)]
 #[test]
 fn nonregular_personal_slots_cannot_promote_the_project_definition() {
     for kind in ["fifo", "directory", "linked-fifo", "linked-directory"] {

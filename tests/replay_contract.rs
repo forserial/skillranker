@@ -1,5 +1,7 @@
 //! Tests for replay case validation, safe import, and policy comparison (sr-roadmap-l1i.6.14, sr-roadmap-l1i.6.16).
 
+// Part of this suite needs Unix fixtures; those tests and their helpers are gated.
+#![cfg_attr(not(unix), allow(unused_imports, dead_code))]
 use serde_json::json;
 use skillranker::output::{CliExit, GateStatus, RunStatus, SCHEMA_VERSION};
 use skillranker::replay::{
@@ -9,7 +11,6 @@ use skillranker::replay::{
     execute_replay,
 };
 use std::fs;
-use std::os::unix::fs::DirBuilderExt;
 use std::path::{Path, PathBuf};
 
 fn temp_replay_dir(name: &str) -> PathBuf {
@@ -22,11 +23,17 @@ fn temp_replay_dir(name: &str) -> PathBuf {
             .unwrap()
             .as_nanos()
     ));
-    fs::DirBuilder::new()
-        .mode(0o700)
-        .recursive(true)
-        .create(&dir)
-        .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        fs::DirBuilder::new()
+            .mode(0o700)
+            .recursive(true)
+            .create(&dir)
+            .unwrap();
+    }
+    #[cfg(not(unix))]
+    fs::create_dir_all(&dir).unwrap();
     dir
 }
 
@@ -378,6 +385,7 @@ fn replay_synthetic_case_uses_not_applicable_gate() {
     assert_eq!(outcome.gate_status, GateStatus::NotApplicable);
 }
 
+#[cfg(unix)]
 #[test]
 fn replay_save_and_load_enforces_owner_only_and_no_clobber() {
     let dir = temp_replay_dir("export-contract");

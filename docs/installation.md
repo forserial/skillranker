@@ -9,6 +9,9 @@ aliases are supported without permitting arbitrary symlink traversal. The
 installer rejects unsupported systems before downloads, builds, or destination
 writes.
 
+Building on Windows needs `git config --global core.longpaths true` first: Cargo's
+checkout of a pinned dependency contains paths longer than 260 characters.
+
 Use `bash install.sh --help` for the complete option list. The installer writes
 `sr` to `~/.local/bin` by default; `--dest DIR` selects another directory. It
 requires Bash and Python 3, standard POSIX utilities, and either `sha256sum` or
