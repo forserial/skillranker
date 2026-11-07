@@ -6,10 +6,11 @@ use skillranker::limits::{LimitUnit, ResourceLimit, SKILL_FILE_BYTES};
 use skillranker::privacy::{TrustedAbsoluteRoot, WorkspaceRelativeRoot};
 use std::ffi::OsStr;
 use std::fs;
-#[cfg(unix)]
-use std::os::unix::ffi::OsStrExt;
-#[cfg(unix)]
-use std::os::unix::fs::symlink;
+#[path = "support/links.rs"]
+mod links;
+#[path = "support/non_unicode.rs"]
+mod non_unicode;
+use links::symlink;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -259,9 +260,11 @@ fn replacing_a_component_after_the_root_opens_cannot_redirect_reads() {
     );
 }
 
-#[cfg(unix)]
 #[test]
 fn concurrent_component_swaps_never_return_content_from_outside() {
+    if !links::available() {
+        return;
+    }
     let tree = temp_tree("race");
     let outside = temp_tree("race-outside");
     write(&tree.join("real/SKILL.md"), "inside");
@@ -275,7 +278,7 @@ fn concurrent_component_swaps_never_return_content_from_outside() {
     let inside_path = tree.join("real");
     let flipper = std::thread::spawn(move || {
         for index in 0..300 {
-            let _ = fs::remove_file(&flipper_path);
+            let _ = links::remove(&flipper_path);
             let target = if index % 2 == 0 {
                 &outside_path
             } else {
@@ -299,16 +302,21 @@ fn concurrent_component_swaps_never_return_content_from_outside() {
                 // A component swapped mid-walk can surface as NotADirectory
                 // (O_DIRECTORY|O_NOFOLLOW reports ENOTDIR and the link is gone
                 // before the type is confirmed), SymlinkLoop, NotFound or Io.
+                // On Windows, opening a link another thread is deleting meets its
+                // delete-pending state, which Windows reports as access denied.
+                let windows_delete_pending =
+                    cfg!(windows) && matches!(error, ReadError::PermissionDenied);
                 assert!(
-                    matches!(
-                        error,
-                        ReadError::EscapesAuthorizedRoots
-                            | ReadError::NotADirectory
-                            | ReadError::NotRegularFile(_)
-                            | ReadError::SymlinkLoop
-                            | ReadError::NotFound
-                            | ReadError::Io
-                    ),
+                    windows_delete_pending
+                        || matches!(
+                            error,
+                            ReadError::EscapesAuthorizedRoots
+                                | ReadError::NotADirectory
+                                | ReadError::NotRegularFile(_)
+                                | ReadError::SymlinkLoop
+                                | ReadError::NotFound
+                                | ReadError::Io
+                        ),
                     "unexpected error {error:?}"
                 );
                 refused += 1;
@@ -411,14 +419,29 @@ fn workspace_relative_roots_open_without_leaving_the_workspace() {
     assert_eq!(trusted.absolute_path(), outside.as_path());
 }
 
-#[cfg(unix)]
 #[test]
 fn native_path_bytes_survive_and_diagnostics_stay_private() {
+    if !links::available() {
+        return;
+    }
     let tree = temp_tree("bytes");
-    let name = OsStr::from_bytes(b"caf\xff.md");
+    // Not valid Unicode: a 0xff byte on Unix, a lone surrogate on Windows.
+    let mut owned = non_unicode::with_prefix("caf");
+    owned.push(".md");
+    let name: &OsStr = &owned;
     let path = tree.join(name);
     let roots = AuthorizedRoots::single(root_of(&tree));
     match fs::write(&path, "non-utf8 name") {
+        // Windows refuses a name with an unpaired surrogate: it cannot be checked
+        // against Win32's name-rewriting rules, so the walk fails closed.
+        #[cfg(windows)]
+        Ok(()) => assert_eq!(
+            roots
+                .read_bounded(0, Path::new(name), SKILL_FILE_BYTES)
+                .unwrap_err(),
+            ReadError::InvalidRelativePath
+        ),
+        #[cfg(not(windows))]
         Ok(()) => {
             let found = roots
                 .read_bounded(0, Path::new(name), SKILL_FILE_BYTES)

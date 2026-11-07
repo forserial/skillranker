@@ -166,33 +166,22 @@ note = "Unix statfs admission; Windows needs its own (sr-winpar.1/.3)"
 file = "src/roster/discovery/tests.rs"
 item = "a_nonadvancing_failed_directory_stream_is_not_retried"
 gate = "cfg(unix)"
-reason = "unix-fixture"
-issue = "sr-winpar.25"
-note = "Unix directory streams"
+reason = "unix-only"
+issue = "permanent: tests Discovery::next_entry, the Unix readdir loop (cfg(unix)); the Windows walk enumerates held handles with its own code, whose entry-failure path has no equivalent unit test"
 
 [[gate]]
 file = "src/roster/discovery/tests.rs"
 item = "candidate_metadata_uses_the_open_directory_not_a_replaced_parent_path"
 gate = "cfg(unix)"
-reason = "unix-fixture"
-issue = "sr-winpar.25"
-note = "symlink and directory-stream fixtures"
+reason = "platform-twin"
+issue = "permanent: replaces a parent under an openat descriptor; Windows holds walked directories against rename and replacement instead (tests/authorized_read_windows.rs a_held_root_cannot_be_renamed_or_replaced)"
 
 [[gate]]
 file = "src/roster/discovery/tests.rs"
 item = "failed_stream_preserves_preceding_entries_and_leaves_following_entries_unread"
 gate = "cfg(unix)"
-reason = "unix-fixture"
-issue = "sr-winpar.25"
-note = "Unix directory streams"
-
-[[gate]]
-file = "src/roster/resolution/discovery_scope.rs"
-item = "symlinked_directories_and_dangling_file_links_never_prove_absence"
-gate = "cfg(unix)"
-reason = "unix-fixture"
-issue = "sr-winpar.25"
-note = "symlink fixtures"
+reason = "unix-only"
+issue = "permanent: tests Discovery::next_entry, the Unix readdir loop (cfg(unix)); the Windows walk enumerates held handles with its own code, whose entry-failure path has no equivalent unit test"
 
 [[gate]]
 file = "src/storage/export.rs"
@@ -303,22 +292,6 @@ note = "nested inside a gated file; tmpfs"
 
 [[gate]]
 file = "tests/authorized_read_contract.rs"
-item = "concurrent_component_swaps_never_return_content_from_outside"
-gate = "cfg(unix)"
-reason = "unix-fixture"
-issue = "sr-winpar.25"
-note = "symlink, FIFO or directory fixtures"
-
-[[gate]]
-file = "tests/authorized_read_contract.rs"
-item = "native_path_bytes_survive_and_diagnostics_stay_private"
-gate = "cfg(unix)"
-reason = "unix-fixture"
-issue = "sr-winpar.25"
-note = "symlink, FIFO or directory fixtures"
-
-[[gate]]
-file = "tests/authorized_read_contract.rs"
 item = "only_regular_files_are_read"
 gate = "cfg(unix)"
 reason = "unix-fixture"
@@ -328,25 +301,22 @@ issue = "permanent: Windows has no FIFO or device special files; its non-regular
 file = "tests/authorized_read_contract.rs"
 item = "replacing_a_component_after_the_root_opens_cannot_redirect_reads"
 gate = "cfg(unix)"
-reason = "unix-fixture"
-issue = "sr-winpar.25"
-note = "symlink, FIFO or directory fixtures"
+reason = "platform-twin"
+issue = "permanent: Windows refuses renaming a directory the walk holds, so the Unix swap cannot be staged; tests/authorized_read_windows.rs a_held_root_cannot_be_renamed_or_replaced and a_workspace_relative_root_is_held_like_every_other_directory prove it"
 
 [[gate]]
 file = "tests/authorized_read_contract.rs"
 item = "symlinks_resolve_only_inside_authorized_roots"
 gate = "cfg(unix)"
-reason = "unix-fixture"
-issue = "sr-winpar.25"
-note = "symlink, FIFO or directory fixtures"
+reason = "platform-twin"
+issue = "permanent: the Windows twin is tests/authorized_read_windows.rs symbolic_links_resolve_only_inside_authorized_roots (relative, absolute, escaping, climbing, cyclic and dangling links)"
 
 [[gate]]
 file = "tests/authorized_read_contract.rs"
 item = "workspace_relative_roots_open_without_leaving_the_workspace"
 gate = "cfg(unix)"
-reason = "unix-fixture"
-issue = "sr-winpar.25"
-note = "symlink, FIFO or directory fixtures"
+reason = "platform-twin"
+issue = "permanent: the Windows twin is tests/authorized_read_windows.rs a_junction_cannot_supply_a_workspace_root_outside_its_parent"
 
 [[gate]]
 file = "tests/breaker_contract.rs"

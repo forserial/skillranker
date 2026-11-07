@@ -243,17 +243,28 @@ mod tests {
         assert!(!slot_matches(&root, "alpha", Some(read.identity())));
     }
 
-    #[cfg(unix)]
     #[test]
     fn symlinked_directories_and_dangling_file_links_never_prove_absence() {
-        use std::os::unix::fs::symlink;
+        #[cfg(unix)]
+        use std::os::unix::fs::{symlink as symlink_dir, symlink as symlink_file};
+        #[cfg(windows)]
+        use std::os::windows::fs::{symlink_dir, symlink_file};
         let path = tree();
         let outside = tree();
         let root = AuthorizedRoot::open_absolute(&path).unwrap();
-        symlink(&outside, path.join("linked")).unwrap();
+        match symlink_dir(&outside, path.join("linked")) {
+            Ok(()) => {}
+            // Windows needs Developer Mode or elevation for symbolic links.
+            #[cfg(windows)]
+            Err(error) if error.raw_os_error() == Some(1314) => {
+                eprintln!("skipped: creating symbolic links needs Developer Mode or elevation");
+                return;
+            }
+            Err(error) => panic!("create directory link: {error}"),
+        }
         assert!(!slot_matches(&root, "linked", None));
         fs::create_dir(path.join("broken")).unwrap();
-        symlink(outside.join("missing"), path.join("broken/SKILL.md")).unwrap();
+        symlink_file(outside.join("missing"), path.join("broken/SKILL.md")).unwrap();
         assert!(!slot_matches(&root, "broken", None));
     }
 
