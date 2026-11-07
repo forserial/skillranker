@@ -1,6 +1,6 @@
 [package]
 name = "skillranker"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 rust-version = "1.95"
 description = "Session-specific skill advice powered by TypeSafe.ai Jev"
@@ -32,6 +32,14 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0", features = ["float_roundtrip"] }
 time = { version = "=0.3.55", default-features = false, features = ["parsing"] }
 toml = { version = "1", default-features = false, features = ["parse", "serde"] }
+
+# Safe access to volume serial numbers and file indexes (file identity) on
+# Windows. Already in the Windows graph through frankensearch's same-file.
+[target.'cfg(windows)'.dependencies]
+winapi-util = "=0.1.11"
+# The OS CSPRNG, without unsafe code in this crate. Windows has no /dev/urandom.
+# Already in the Windows graph through ahash.
+getrandom = "=0.3.4"
 
 [build-dependencies]
 blake3 = "1.8"

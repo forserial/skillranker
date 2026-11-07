@@ -6,7 +6,6 @@ pub mod anchor;
 pub mod branch;
 #[cfg(unix)]
 pub mod cass;
-#[cfg(unix)]
 pub mod discovery;
 pub mod jsonl;
 pub mod overlay;

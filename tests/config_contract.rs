@@ -1,3 +1,5 @@
+// Part of this suite needs Unix fixtures; those tests and their helpers are gated.
+#![cfg_attr(not(unix), allow(unused_imports, dead_code))]
 use skillranker::config::*;
 use skillranker::context::parse_normalized_context;
 use skillranker::identity::ContentHash;
@@ -159,6 +161,7 @@ enum Expect {
     UnknownEnvironmentName,
 }
 
+#[cfg(unix)]
 /// Written independently of `KEY_SPECS`: a registry edit that loosens trust
 /// must also change this table to pass.
 #[test]
@@ -373,6 +376,7 @@ fn project_cannot_widen_trusted_disclosure_or_advice_authority() {
     );
 }
 
+#[cfg(unix)]
 #[test]
 fn project_roots_stay_inside_the_workspace_and_lists_only_grow() {
     let root_error = |value: &str| {
@@ -459,6 +463,7 @@ fn project_roots_stay_inside_the_workspace_and_lists_only_grow() {
     );
 }
 
+#[cfg(unix)]
 #[test]
 fn workspace_relative_roots_normalize_lexically() {
     for (input, expected) in [

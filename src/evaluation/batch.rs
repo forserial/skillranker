@@ -2191,7 +2191,7 @@ fn freeze_frame_sample(
         Some(seed) => RandomizationProvenance::SuppliedManual { seed },
         None if request.sample_size >= representatives.len() => RandomizationProvenance::Census,
         None => RandomizationProvenance::OsRandom {
-            entropy_source: "/dev/urandom".into(),
+            entropy_source: crate::os_random::ENTROPY_SOURCE.into(),
             seed: draw_os_seed()?,
         },
     };

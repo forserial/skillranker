@@ -9,6 +9,8 @@
 //!   only when proven available in current epoch with matching version.
 //! - Unresolved branch withholds session-specific advice.
 //! - Worktree identity: distinct canonical worktree IDs for linked worktrees; non-Git and detached HEAD.
+// Part of this suite needs Unix fixtures; those tests and their helpers are gated.
+#![cfg_attr(not(unix), allow(unused_imports, dead_code))]
 
 use serde_json::json;
 use skillranker::adapter::{ClaudeUserPromptSubmit, UnknownFieldPolicy};
@@ -564,6 +566,7 @@ fn branch_and_worktree() {
 // Unit Property Test: tests/context_contract.rs::claude_prompt_overlay
 // ==============================================================================
 
+#[cfg(unix)]
 #[test]
 fn claude_prompt_overlay() {
     let test_dir = temp_dir("claude-overlay");
@@ -952,6 +955,7 @@ fn claude_prompt_overlay_missing_workspace_directory() {
     ));
 }
 
+#[cfg(unix)]
 #[test]
 fn claude_prompt_overlay_missing_parent_keeps_authority_failures() {
     let test_dir = temp_dir("claude-missing-parent-authority");
@@ -1422,7 +1426,7 @@ fn tool_associations() {
                 call_id: Some(ToolCallId::new("call_path").unwrap()),
                 name: PrivateText::new("read_file"),
                 status: ToolStatus::Succeeded,
-                arguments: Some(PrivateText::new(format!(r#"{{"path": "{}"}}"#, path_str))),
+                arguments: Some(PrivateText::new(json!({ "path": path_str }).to_string())),
                 result: Some(PrivateText::new("file contents loaded")),
             }),
         },
@@ -2968,6 +2972,7 @@ fn native_jsonl_incremental() {
     assert_eq!(snap3.events[0].event_id.as_ref().unwrap().as_str(), "e5");
 }
 
+#[cfg(unix)]
 #[test]
 fn cass_adapter() {
     use skillranker::context::cass::{ArchiveSelection, validate_capabilities};

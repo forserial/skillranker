@@ -1,12 +1,17 @@
 # Build `sr` release archives for Linux, macOS and Windows and attach them to a
 # GitHub Release.
 #
+# The Windows build ranks statelessly: its stores report an unqualified
+# filesystem, so caching, the ledger and enforced allowances are unavailable
+# there (see docs/platform-boundary.md).
+#
 # Trigger: push a tag like `v0.1.0` (must match Cargo.toml's version), or run
 # manually from the Actions tab with an existing tag name.
 #
 # Archive layout follows docs/installation.md: `skillranker-vVERSION-TARGET`
-# containing a root-level `sr` (or `sr.exe`), LICENSE and README.md, plus an
-# adjacent `.sha256` sidecar holding one `HASH  ARCHIVE_NAME` record.
+# containing a root-level `sr` (`sr.exe` in a .zip on Windows), LICENSE and
+# README.md, plus an adjacent `.sha256` sidecar holding one
+# `HASH  ARCHIVE_NAME` record.
 name: release
 
 on:
@@ -23,6 +28,9 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  # Cargo's built-in libgit2 fetch of the large asupersync git dependency can
+  # stall for many minutes; the git CLI fetches it promptly.
+  CARGO_NET_GIT_FETCH_WITH_CLI: "true"
   TAG: ${{ github.event.inputs.tag || github.ref_name }}
 
 jobs:
@@ -92,6 +100,7 @@ jobs:
           [[ -f "$bin.exe" ]] && bin="$bin.exe"
           "$bin" --version
           "$bin" capabilities --json > /dev/null
+          "$bin" demo --case useful --json > /dev/null
 
       - name: Package
         shell: bash

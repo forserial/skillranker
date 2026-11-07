@@ -1,6 +1,9 @@
 //! Real binary checks of `sr roster --snapshot` and `--diff`.
+// Part of this suite needs Unix fixtures; those tests and their helpers are gated.
+#![cfg_attr(not(unix), allow(unused_imports, dead_code))]
 use serde_json::Value;
-use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::process::{Command, Output};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -25,18 +28,28 @@ impl Fixture {
         ));
         // The export policy validates ancestors too. Create the fixture root
         // private atomically rather than inheriting the worker's umask.
-        std::fs::DirBuilder::new()
-            .mode(0o700)
-            .create(&root)
-            .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::DirBuilderExt;
+            std::fs::DirBuilder::new()
+                .mode(0o700)
+                .create(&root)
+                .unwrap();
+        }
+        #[cfg(not(unix))]
+        std::fs::create_dir(&root).unwrap();
         std::fs::create_dir_all(root.join("workspace/.claude/skills")).unwrap();
         std::fs::create_dir_all(root.join("home/.claude/skills")).unwrap();
         // Snapshot targets must sit in a private directory, whatever the umask.
-        std::fs::set_permissions(
-            root.join("workspace"),
-            std::fs::Permissions::from_mode(0o700),
-        )
-        .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(
+                root.join("workspace"),
+                std::fs::Permissions::from_mode(0o700),
+            )
+            .unwrap();
+        }
         Self { root }
     }
     fn workspace(&self) -> PathBuf {
@@ -98,6 +111,7 @@ fn strings(value: &Value) -> Vec<String> {
         .collect()
 }
 
+#[cfg(unix)]
 #[test]
 fn a_snapshot_is_owner_only_path_free_and_never_overwrites() {
     let f = Fixture::new();
@@ -141,6 +155,7 @@ fn a_snapshot_is_owner_only_path_free_and_never_overwrites() {
     );
 }
 
+#[cfg(unix)]
 #[test]
 fn a_diff_reports_renames_replacements_restrictions_additions_and_removals() {
     let f = Fixture::new();
@@ -180,6 +195,7 @@ fn a_diff_reports_renames_replacements_restrictions_additions_and_removals() {
     assert_eq!(diff["complete"], false);
 }
 
+#[cfg(unix)]
 #[test]
 fn an_unreadable_root_makes_removals_unconfirmed() {
     let f = Fixture::new();
@@ -194,6 +210,7 @@ fn an_unreadable_root_makes_removals_unconfirmed() {
     assert!(diff["removed"].as_array().unwrap().is_empty());
 }
 
+#[cfg(unix)]
 #[test]
 fn a_different_workspace_or_home_is_an_incompatible_namespace() {
     let f = Fixture::new();
@@ -216,6 +233,7 @@ fn a_different_workspace_or_home_is_an_incompatible_namespace() {
     assert_eq!(output.status.code(), Some(5));
 }
 
+#[cfg(unix)]
 #[test]
 fn imported_paths_unknown_fields_and_unsafe_files_are_refused() {
     let f = Fixture::new();

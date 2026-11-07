@@ -3,6 +3,15 @@
 use std::{env, process::Command};
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
+    // Windows gives the main thread 1 MiB by default, which `sr eval` overflows.
+    // Match the 8 MiB Linux and macOS provide.
+    if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
+        if env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc") {
+            println!("cargo:rustc-link-arg-bins=/STACK:8388608");
+        } else {
+            println!("cargo:rustc-link-arg-bins=-Wl,--stack,8388608");
+        }
+    }
     let compiler = env::var_os("RUSTC").expect("Cargo must identify the compiler");
     let mut command = Command::new(compiler);
     command.arg("-vV").env_clear();

@@ -9,6 +9,8 @@
 //! - Live database file is not unlinked or replaced underneath open connections
 //! - Schema generation mismatch fails with IncompatibleSchema
 //! - Incarnation mismatch fails with StoreReplaced
+// Exercises the Unix-only private store; Windows builds refuse it (see docs/platform-boundary.md).
+#![cfg(unix)]
 
 use asupersync::Cx;
 use rusqlite::Connection;

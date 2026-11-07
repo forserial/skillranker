@@ -9,6 +9,8 @@
 //! - Hooks / rank never silently initialize or migrate ledger (`LedgerAccess::ExistingOnly` returns `LedgerOpen::Missing` if absent).
 //! - Real live WAL data survives backup/restore.
 //! - Crash each migration boundary, repeat init, test new/old schemas, quota failure, concurrent writer.
+// Exercises the Unix-only private store; Windows builds refuse it (see docs/platform-boundary.md).
+#![cfg(unix)]
 
 use asupersync::Cx;
 use rusqlite::Connection;

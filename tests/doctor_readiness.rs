@@ -410,7 +410,12 @@ fn ignored_ambient_proxies_are_named_without_their_values() {
     assert_eq!(transport["state"], "untested");
     assert_eq!(
         transport["ambient_proxy_ignored"],
-        serde_json::json!(["HTTPS_PROXY", "no_proxy"])
+        // Windows environment names are case-insensitive, so each spelling is set.
+        if cfg!(windows) {
+            serde_json::json!(["HTTPS_PROXY", "https_proxy", "NO_PROXY", "no_proxy"])
+        } else {
+            serde_json::json!(["HTTPS_PROXY", "no_proxy"])
+        }
     );
     assert!(steps(&report).contains(&"transport".to_owned()));
     let text = report.to_string();

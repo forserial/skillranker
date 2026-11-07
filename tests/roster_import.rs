@@ -1,3 +1,5 @@
+// Part of this suite needs Unix fixtures; those tests and their helpers are gated.
+#![cfg_attr(not(unix), allow(unused_imports, dead_code))]
 use serde_json::{Value, json};
 use skillranker::identity::{ContentHash, HarnessId};
 use skillranker::limits::{DurationMillis, EXPLICIT_ROSTER_JSON_BYTES, EXPLICIT_ROSTER_RECORDS};
@@ -11,6 +13,7 @@ use skillranker::roster::{InvocationKind, InvocationRestrictions, Visibility};
 use skillranker::runtime::{EntryClock, ProcessInvocation};
 use std::collections::BTreeMap;
 use std::fs;
+#[cfg(unix)]
 use std::os::unix::fs::symlink;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -186,6 +189,7 @@ fn verified_inventory_replaces_discovery_with_discovery_identities() {
     assert_eq!(empty.skills().len(), 0);
 }
 
+#[cfg(unix)]
 #[test]
 fn escaped_and_unauthorized_paths_are_refused() {
     let f = Fixture::new();
@@ -623,6 +627,7 @@ fn diagnostics_never_echo_manifest_or_skill_content() {
     assert!(!format!("{:?}", synthetic.skills()[0]).contains("CANARY"));
 }
 
+#[cfg(unix)]
 #[test]
 fn roster_file_reads_are_bounded_regular_files() {
     let dir = tree();
@@ -656,9 +661,11 @@ fn cancellation_stops_import_before_reading() {
     assert_eq!(error.kind(), None);
 }
 
+#[cfg(unix)]
 /// Every path under `root` with its type, size, mode, modification time and
 /// bytes. Access times are excluded: reading may update them.
 fn tree_state(root: &Path) -> BTreeMap<PathBuf, (u32, u64, i64, i64, ContentHash)> {
+    #[cfg(unix)]
     use std::os::unix::fs::MetadataExt;
     let mut state = BTreeMap::new();
     let mut pending = vec![root.to_path_buf()];
@@ -688,6 +695,7 @@ fn tree_state(root: &Path) -> BTreeMap<PathBuf, (u32, u64, i64, i64, ContentHash
     state
 }
 
+#[cfg(unix)]
 #[test]
 fn importing_a_roster_mutates_nothing() {
     let f = Fixture::new();

@@ -16,7 +16,6 @@ use crate::limits::{EXPLICIT_ROSTER_JSON_BYTES, EXPLICIT_ROSTER_RECORDS};
 use crate::output::ErrorKind;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
-use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
 
 pub const SNAPSHOT_SCHEMA: &str = "sr.roster-snapshot.v1";
@@ -57,7 +56,7 @@ impl Namespace {
     /// `workspace` and `home` should be canonical absolute paths.
     pub fn new(harness: &str, workspace: &Path, home: Option<&Path>) -> Self {
         let digest = |path: &Path| {
-            ContentHash::from_bytes(path.as_os_str().as_bytes())
+            ContentHash::from_bytes(path.as_os_str().as_encoded_bytes())
                 .as_str()
                 .to_owned()
         };

@@ -5,6 +5,12 @@
 //! escape with setsid. Synchronous OS spawn and uninterruptible kernel I/O cannot
 //! be given a hard wall-time guarantee. Cancellation kills the group and reaps the
 //! direct child before return; no reader or reaper tasks are detached.
+// Off Linux/macOS `run` reports UnsupportedPlatform before spawning, so the
+// process machinery below is unreachable there.
+#![cfg_attr(
+    not(any(target_os = "linux", target_os = "macos")),
+    allow(dead_code, unused_imports)
+)]
 use crate::runtime::EntryClock;
 use asupersync::Cx;
 use asupersync::io::{AsyncRead, AsyncWrite, ReadBuf};

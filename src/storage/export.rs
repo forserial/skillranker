@@ -7,15 +7,25 @@
 //! mutation is outside the owner-controlled directory boundary.
 
 use crate::output::{CliExit, ErrorKind};
+#[cfg(unix)]
 use nix::errno::Errno;
+#[cfg(unix)]
 use nix::fcntl::{AtFlags, OFlag, open, openat};
+#[cfg(unix)]
 use nix::sys::stat::{FileStat, Mode, SFlag, fchmod, fstat, fstatat};
+#[cfg(unix)]
 use nix::unistd::{UnlinkatFlags, linkat, unlinkat};
+#[cfg(unix)]
 use std::ffi::OsStr;
 use std::fmt;
+#[cfg(unix)]
 use std::fs::File;
+#[cfg(unix)]
 use std::io::Write;
-use std::path::{Component, Path, PathBuf};
+#[cfg(unix)]
+use std::path::Component;
+use std::path::{Path, PathBuf};
+#[cfg(unix)]
 use std::sync::atomic::{AtomicU64, Ordering};
 
 /// Default maximum export size for roster snapshots (32 MiB).
@@ -115,12 +125,14 @@ impl fmt::Display for ExportError {
 impl std::error::Error for ExportError {}
 
 /// Cleanup stays bound to the directory that received our temporary file.
+#[cfg(unix)]
 struct PartialFileGuard<'a> {
     directory: &'a File,
     name: &'a OsStr,
     active: bool,
 }
 
+#[cfg(unix)]
 impl Drop for PartialFileGuard<'_> {
     fn drop(&mut self) {
         if self.active {
@@ -129,6 +141,7 @@ impl Drop for PartialFileGuard<'_> {
     }
 }
 
+#[cfg(unix)]
 fn io_error(error: Errno) -> ExportError {
     ExportError::Io(std::io::Error::from_raw_os_error(error as i32))
 }
@@ -140,6 +153,7 @@ fn io_error(error: Errno) -> ExportError {
 /// filesystem effects. A successful return confirms file and directory flushes.
 /// An error after publication can leave the destination in place: inspect it
 /// before retrying; never remove or overwrite it as rollback.
+#[cfg(unix)]
 pub fn export_private_atomic(
     target_path: &Path,
     content: &[u8],
@@ -217,6 +231,7 @@ pub fn export_private_atomic(
     Ok(())
 }
 
+#[cfg(unix)]
 fn validate_directory(stat: &FileStat, leaf: bool) -> Result<(), ExportError> {
     if SFlag::from_bits_truncate(stat.st_mode) & SFlag::S_IFMT != SFlag::S_IFDIR {
         return Err(ExportError::InvalidDirectory(
@@ -235,6 +250,7 @@ fn validate_directory(stat: &FileStat, leaf: bool) -> Result<(), ExportError> {
     Ok(())
 }
 
+#[cfg(unix)]
 fn open_destination_directory(path: &Path) -> Result<File, ExportError> {
     let path = super::platform::storage_path(path.to_owned());
     if !path.is_absolute() || path.as_os_str().len() > 4096 {
@@ -271,6 +287,7 @@ fn open_destination_directory(path: &Path) -> Result<File, ExportError> {
     Ok(handle.into())
 }
 
+#[cfg(unix)]
 fn directory_open_error(error: Errno) -> ExportError {
     match error {
         Errno::ENOENT | Errno::ENOTDIR | Errno::ELOOP => ExportError::InvalidDirectory(
@@ -280,6 +297,7 @@ fn directory_open_error(error: Errno) -> ExportError {
     }
 }
 
+#[cfg(unix)]
 fn revalidate_directory(directory: &File, path: &Path) -> Result<(), ExportError> {
     let current = open_destination_directory(path)?;
     let before = fstat(directory).map_err(io_error)?;
@@ -292,10 +310,12 @@ fn revalidate_directory(directory: &File, path: &Path) -> Result<(), ExportError
     Ok(())
 }
 
+#[cfg(unix)]
 fn sync_directory(directory: &File) -> Result<(), ExportError> {
     directory.sync_all().map_err(ExportError::Durability)
 }
 
+#[cfg(unix)]
 fn atomic_no_clobber_publish(
     directory: &File,
     from: &OsStr,
@@ -323,6 +343,7 @@ fn atomic_no_clobber_publish(
     link_no_clobber_publish(directory, from, to, target_path)
 }
 
+#[cfg(unix)]
 fn link_no_clobber_publish(
     directory: &File,
     from: &OsStr,
@@ -336,7 +357,28 @@ fn link_no_clobber_publish(
     }
 }
 
-#[cfg(test)]
+/// Windows: an export must land owner-only in a directory no other user can
+/// write, and Windows permissions are access-control lists this build does not
+/// verify. The size bound is still checked first; publication then fails
+/// closed rather than writing private data to an unverified location.
+#[cfg(not(unix))]
+pub fn export_private_atomic(
+    _target_path: &Path,
+    content: &[u8],
+    config: ExportConfig,
+) -> Result<(), ExportError> {
+    if content.len() > config.max_bytes {
+        return Err(ExportError::Oversized {
+            len: content.len(),
+            max: config.max_bytes,
+        });
+    }
+    Err(ExportError::Permissions(
+        "owner-only export destinations cannot be verified on this platform".into(),
+    ))
+}
+
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
 

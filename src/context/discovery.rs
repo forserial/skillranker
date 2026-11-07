@@ -17,14 +17,10 @@ use crate::identity::{
 use crate::roster::LocalPath;
 use crate::runtime::{EntryClock, RuntimeError};
 use asupersync::Cx;
-use nix::dir::{Dir, Type};
-use nix::fcntl::{OFlag, openat};
-use nix::sys::stat::{FileStat, Mode, SFlag, fstat};
 use serde_json::Value;
 use std::collections::BTreeSet;
 use std::ffi::OsStr;
 use std::io::{Read, Seek, SeekFrom};
-use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 
 /// Transcripts examined per discovery, across all roots and directory names.
@@ -266,30 +262,22 @@ fn discover_with_checkpoint<E>(
                     continue;
                 }
             };
-            let listing = directory
-                .as_fd()
-                .try_clone_to_owned()
-                .ok()
-                .and_then(|fd| Dir::from_fd(fd).ok());
-            let Some(mut listing) = listing else {
+            let Some(mut entries) = sys::entries(&directory) else {
                 inventory.complete = false;
                 continue;
             };
-            let mut entries = listing.iter();
             while let Some(entry) = {
                 // Skipped names count as work too; a large unrelated directory
                 // cannot evade the invocation's time/cancellation boundary.
                 checkpoint()?;
                 entries.next()
             } {
-                let Ok(entry) = entry else {
+                let Ok((name, may_be_regular)) = entry else {
                     inventory.complete = false;
                     continue;
                 };
-                let name = OsStr::from_bytes(entry.file_name().to_bytes());
-                if !name.as_bytes().ends_with(b".jsonl")
-                    || matches!(entry.file_type(), Some(kind) if !matches!(kind, Type::File))
-                {
+                let name = name.as_os_str();
+                if !name.as_encoded_bytes().ends_with(b".jsonl") || !may_be_regular {
                     continue;
                 }
                 examined += 1;
@@ -344,40 +332,111 @@ fn probe(
     name: &OsStr,
     workspace: &str,
 ) -> Result<Option<ProbedSession>, ()> {
-    let stem =
-        std::str::from_utf8(name.as_bytes().strip_suffix(b".jsonl").ok_or(())?).map_err(|_| ())?;
-    let flags = OFlag::O_RDONLY | OFlag::O_NOFOLLOW | OFlag::O_NONBLOCK | OFlag::O_CLOEXEC;
-    let fd = openat(directory.as_fd(), name, flags, Mode::empty()).map_err(|_| ())?;
-    let stat = fstat(&fd).map_err(|_| ())?;
-    if SFlag::from_bits_truncate(stat.st_mode) & SFlag::S_IFMT != SFlag::S_IFREG {
-        return Err(());
-    }
-    let mut file = std::fs::File::from(fd);
+    let stem = std::str::from_utf8(name.as_encoded_bytes().strip_suffix(b".jsonl").ok_or(())?)
+        .map_err(|_| ())?;
+    let (mut file, size, identity) = sys::open_regular(directory, name)?;
     let mut head = Vec::with_capacity(HEAD_BYTES);
     file.by_ref()
         .take(HEAD_BYTES as u64)
         .read_to_end(&mut head)
         .map_err(|_| ())?;
-    let size = file_size(&stat);
     // Only a file read to its end can prove it holds no conversation turn.
     let whole = size <= HEAD_BYTES as u64 && head.len() as u64 == size;
     let Some(session) = checked_attribution(&head, stem, workspace, whole)? else {
         return Ok(None);
     };
     let recorded = last_recorded_ms(&mut file, size);
-    Ok(Some((session, recorded, file_identity(&stat))))
+    Ok(Some((session, recorded, identity)))
 }
 
-// Stat field widths differ by platform: these casts are identity on Linux and
-// widening on macOS.
-#[allow(clippy::unnecessary_cast)]
-fn file_size(stat: &FileStat) -> u64 {
-    stat.st_size.max(0) as u64
+/// Directory listing and the no-follow open of one listed name. A listed
+/// name is `(name, may_be_regular)`: false only when the listing already
+/// shows the entry is not a regular file; the open re-checks either way.
+#[cfg(unix)]
+mod sys {
+    use crate::authorized_read::AuthorizedRoot;
+    use nix::dir::{Dir, Type};
+    use nix::fcntl::{OFlag, openat};
+    use nix::sys::stat::{Mode, SFlag, fstat};
+    use std::ffi::{OsStr, OsString};
+    use std::fs::File;
+    use std::os::unix::ffi::OsStrExt;
+
+    pub(super) fn entries(
+        directory: &AuthorizedRoot,
+    ) -> Option<impl Iterator<Item = Result<(OsString, bool), ()>>> {
+        let listing = directory
+            .as_fd()
+            .try_clone_to_owned()
+            .ok()
+            .and_then(|fd| Dir::from_fd(fd).ok())?;
+        Some(listing.into_iter().map(|entry| {
+            let entry = entry.map_err(|_| ())?;
+            let name = OsStr::from_bytes(entry.file_name().to_bytes()).to_os_string();
+            let may_be_regular =
+                !matches!(entry.file_type(), Some(kind) if !matches!(kind, Type::File));
+            Ok((name, may_be_regular))
+        }))
+    }
+
+    // Stat field widths differ by platform: these casts are identity on Linux
+    // and widening on macOS.
+    #[allow(clippy::unnecessary_cast)]
+    pub(super) fn open_regular(
+        directory: &AuthorizedRoot,
+        name: &OsStr,
+    ) -> Result<(File, u64, (u64, u64)), ()> {
+        let flags = OFlag::O_RDONLY | OFlag::O_NOFOLLOW | OFlag::O_NONBLOCK | OFlag::O_CLOEXEC;
+        let fd = openat(directory.as_fd(), name, flags, Mode::empty()).map_err(|_| ())?;
+        let stat = fstat(&fd).map_err(|_| ())?;
+        if SFlag::from_bits_truncate(stat.st_mode) & SFlag::S_IFMT != SFlag::S_IFREG {
+            return Err(());
+        }
+        let size = stat.st_size.max(0) as u64;
+        let identity = (stat.st_dev as u64, stat.st_ino as u64);
+        Ok((File::from(fd), size, identity))
+    }
 }
 
-#[allow(clippy::unnecessary_cast)]
-fn file_identity(stat: &FileStat) -> (u64, u64) {
-    (stat.st_dev as u64, stat.st_ino as u64)
+/// Windows: the held root directory pins the listed directory (it cannot be
+/// renamed or replaced while held), and each candidate is opened with
+/// `FILE_FLAG_OPEN_REPARSE_POINT`, so a link is refused rather than followed.
+#[cfg(windows)]
+mod sys {
+    use crate::authorized_read::{
+        AuthorizedRoot, FileKind, open_windows, stat_windows, valid_component,
+    };
+    use std::ffi::{OsStr, OsString};
+    use std::fs::File;
+
+    pub(super) fn entries(
+        directory: &AuthorizedRoot,
+    ) -> Option<impl Iterator<Item = Result<(OsString, bool), ()>>> {
+        let listing = std::fs::read_dir(directory.windows_handle().path()).ok()?;
+        Some(listing.map(|entry| {
+            let entry = entry.map_err(|_| ())?;
+            let may_be_regular = entry.file_type().is_ok_and(|kind| kind.is_file());
+            Ok((entry.file_name(), may_be_regular))
+        }))
+    }
+
+    pub(super) fn open_regular(
+        directory: &AuthorizedRoot,
+        name: &OsStr,
+    ) -> Result<(File, u64, (u64, u64)), ()> {
+        if !valid_component(name) {
+            return Err(());
+        }
+        let file = open_windows(&directory.windows_handle().path().join(name), false, false)
+            .map_err(|_| ())?;
+        let stat = stat_windows(&file).map_err(|_| ())?;
+        if stat.kind() != FileKind::Regular {
+            return Err(());
+        }
+        let size = file.metadata().map_err(|_| ())?.len();
+        let identity = (stat.identity().device(), stat.identity().inode());
+        Ok((file, size, identity))
+    }
 }
 
 #[cfg(test)]

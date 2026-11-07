@@ -10,6 +10,8 @@
 //! - Explicit prune/clear preview does not mutate; --apply mutates after preflighting headroom.
 //! - Doctor reports cleanup debt. No secure-erasure claim.
 //! - WAL checkpoint and separate budget/capacity behavior unaffected.
+// Exercises the Unix-only private store; Windows builds refuse it (see docs/platform-boundary.md).
+#![cfg(unix)]
 
 use asupersync::Cx;
 use rusqlite::Connection;

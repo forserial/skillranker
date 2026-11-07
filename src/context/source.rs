@@ -127,6 +127,9 @@ pub struct SessionInventory {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+// Windows `PathBuf` is wider, which alone pushes this once-per-invocation
+// value past the lint's threshold there.
+#[cfg_attr(windows, allow(clippy::large_enum_variant))]
 pub enum SelectionOutcome {
     Selected(SourceSelection),
     NeedsChoice(SessionChoices),

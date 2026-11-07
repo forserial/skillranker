@@ -15,16 +15,15 @@ use crate::identity::ContentHash;
 use crate::limits::ResourceLimit;
 use crate::privacy::{TrustedAbsoluteRoot, WorkspaceRelativeRoot};
 use crate::roster::LocalPath;
-use nix::errno::Errno;
-use nix::fcntl::{AtFlags, OFlag, open, openat, readlinkat};
-use nix::sys::stat::{FileStat, Mode, SFlag, fstat, fstatat};
 use std::collections::VecDeque;
 use std::ffi::{OsStr, OsString};
 use std::fmt;
 use std::fs::File;
 use std::io::Read;
-use std::os::fd::{AsFd, BorrowedFd, OwnedFd};
+#[cfg(unix)]
+use std::os::fd::{AsFd, BorrowedFd};
 use std::path::{Component, Path, PathBuf};
+use sys::{Descriptor, Stat};
 
 /// Symlink hops permitted while resolving one request; cycles end here.
 pub const MAX_SYMLINK_HOPS: u32 = 16;
@@ -47,20 +46,6 @@ pub enum FileKind {
 }
 
 impl FileKind {
-    fn of(stat: &FileStat) -> Self {
-        let bits = SFlag::from_bits_truncate(stat.st_mode) & SFlag::S_IFMT;
-        match bits {
-            SFlag::S_IFREG => Self::Regular,
-            SFlag::S_IFDIR => Self::Directory,
-            SFlag::S_IFLNK => Self::Symlink,
-            SFlag::S_IFIFO => Self::Fifo,
-            SFlag::S_IFSOCK => Self::Socket,
-            SFlag::S_IFCHR => Self::CharacterDevice,
-            SFlag::S_IFBLK => Self::BlockDevice,
-            _ => Self::Unknown,
-        }
-    }
-
     const fn as_str(self) -> &'static str {
         match self {
             Self::Regular => "regular file",
@@ -84,16 +69,6 @@ pub struct FileIdentity {
 }
 
 impl FileIdentity {
-    // `dev_t`/`ino_t` widths differ by platform: the casts are identity on
-    // Linux and widening on macOS.
-    #[allow(clippy::unnecessary_cast)]
-    fn of(stat: &FileStat) -> Self {
-        Self {
-            device: stat.st_dev as u64,
-            inode: stat.st_ino as u64,
-        }
-    }
-
     /// Build an identity from a caller's own stat of the same object, so
     /// enumeration and reads can be compared without a second open.
     pub const fn new(device: u64, inode: u64) -> Self {
@@ -153,23 +128,20 @@ impl fmt::Display for ReadError {
 
 impl std::error::Error for ReadError {}
 
-fn map_errno(errno: Errno) -> ReadError {
-    match errno {
-        Errno::ENOENT => ReadError::NotFound,
-        Errno::EACCES | Errno::EPERM => ReadError::PermissionDenied,
-        Errno::ENOTDIR => ReadError::NotADirectory,
-        Errno::ELOOP | Errno::EMLINK => ReadError::SymlinkLoop,
-        Errno::ENAMETOOLONG => ReadError::InvalidRelativePath,
-        Errno::EINVAL => ReadError::InvalidRelativePath,
-        _ => ReadError::Io,
-    }
+/// What opening one name below a held directory found.
+enum Opened {
+    /// The object itself, opened without following a final link.
+    Object(Descriptor, Stat),
+    /// A symbolic link (on Windows, a name-surrogate reparse point) that the
+    /// walk must resolve itself, within its authorized roots.
+    Link,
 }
 
 /// A directory descriptor that anchors every read. Holding the descriptor binds
 /// later operations to this exact directory, even if its name is replaced.
 #[derive(Debug)]
 pub struct AuthorizedRoot {
-    directory: OwnedFd,
+    directory: Descriptor,
     absolute: PathBuf,
     identity: FileIdentity,
 }
@@ -182,16 +154,14 @@ impl AuthorizedRoot {
         if !path.is_absolute() {
             return Err(ReadError::InvalidRelativePath);
         }
-        let flags = OFlag::O_RDONLY | OFlag::O_DIRECTORY | OFlag::O_CLOEXEC;
-        let directory = open(path, flags, Mode::empty()).map_err(map_errno)?;
-        let stat = fstat(&directory).map_err(map_errno)?;
-        if FileKind::of(&stat) != FileKind::Directory {
+        let (directory, stat) = sys::open_root(path)?;
+        if sys::kind(&stat) != FileKind::Directory {
             return Err(ReadError::NotADirectory);
         }
         Ok(Self {
             directory,
             absolute: path.to_path_buf(),
-            identity: FileIdentity::of(&stat),
+            identity: sys::identity(&stat),
         })
     }
 
@@ -212,11 +182,10 @@ impl AuthorizedRoot {
             return self.try_clone();
         }
         let resolved = Walk::new(&roots, 0)?.resolve(components, Want::Directory)?;
-        let stat = fstat(&resolved.descriptor).map_err(map_errno)?;
         Ok(Self {
+            identity: sys::identity(&resolved.stat),
             directory: resolved.descriptor,
             absolute: resolved.absolute,
-            identity: FileIdentity::of(&stat),
         })
     }
 
@@ -239,6 +208,7 @@ impl AuthorizedRoot {
         self.identity
     }
 
+    #[cfg(unix)]
     pub fn as_fd(&self) -> BorrowedFd<'_> {
         self.directory.as_fd()
     }
@@ -323,7 +293,7 @@ impl AuthorizedRoots {
         let mut walk = Walk::new(self, index)?;
         walk.require_existing_link_targets = true;
         let resolved = walk.resolve(components, Want::File)?;
-        Ok(File::from(resolved.descriptor))
+        Ok(sys::into_file(resolved.descriptor))
     }
 
     /// Read a bounded regular file named by an absolute path that must lie
@@ -401,8 +371,8 @@ enum Want {
 }
 
 struct Resolved {
-    descriptor: OwnedFd,
-    stat: FileStat,
+    descriptor: Descriptor,
+    stat: Stat,
     absolute: PathBuf,
 }
 
@@ -425,7 +395,7 @@ fn split_components(path: &Path) -> Result<Vec<OsString>, ReadError> {
 struct Walk<'a> {
     roots: &'a AuthorizedRoots,
     root: usize,
-    stack: Vec<OwnedFd>,
+    stack: Vec<Descriptor>,
     names: Vec<OsString>,
     hops: u32,
     require_existing_link_targets: bool,
@@ -450,7 +420,7 @@ impl<'a> Walk<'a> {
         })
     }
 
-    fn top(&self) -> Result<&OwnedFd, ReadError> {
+    fn top(&self) -> Result<&Descriptor, ReadError> {
         self.stack.last().ok_or(ReadError::EscapesAuthorizedRoots)
     }
 
@@ -481,17 +451,9 @@ impl<'a> Walk<'a> {
                 continue;
             }
             let last = queue.is_empty();
-            let mut flags = OFlag::O_RDONLY | OFlag::O_CLOEXEC | OFlag::O_NOFOLLOW;
-            if last {
-                // Opening a FIFO must not block waiting for a writer.
-                flags |= OFlag::O_NONBLOCK;
-            } else {
-                flags |= OFlag::O_DIRECTORY;
-            }
-            match openat(self.top()?, name.as_os_str(), flags, Mode::empty()) {
-                Ok(descriptor) => {
-                    let stat = fstat(&descriptor).map_err(map_errno)?;
-                    let kind = FileKind::of(&stat);
+            match sys::open_child(self.top()?, name.as_os_str(), last) {
+                Ok(Opened::Object(descriptor, stat)) => {
+                    let kind = sys::kind(&stat);
                     if last {
                         let acceptable = match want {
                             Want::File => kind == FileKind::Regular,
@@ -507,32 +469,22 @@ impl<'a> Walk<'a> {
                             absolute,
                         });
                     }
+                    if kind != FileKind::Directory {
+                        return Err(ReadError::NotADirectory);
+                    }
                     self.stack.push(descriptor);
                     self.names.push(name);
                 }
-                Err(errno) => {
-                    // O_NOFOLLOW reports a symlink as ELOOP (ENOTDIR on some
-                    // platforms when O_DIRECTORY is also set). Confirm the type
-                    // from the link itself before following it.
-                    let is_link = matches!(errno, Errno::ELOOP | Errno::EMLINK | Errno::ENOTDIR)
-                        && matches!(
-                            fstatat(self.top()?, name.as_os_str(), AtFlags::AT_SYMLINK_NOFOLLOW),
-                            Ok(stat) if FileKind::of(&stat) == FileKind::Symlink
-                        );
-                    if !is_link {
-                        if errno == Errno::ENOENT
-                            && self.hops > 0
-                            && self.require_existing_link_targets
-                        {
-                            return Err(ReadError::InvalidRelativePath);
-                        }
-                        return Err(map_errno(errno));
-                    }
+                Ok(Opened::Link) => {
                     let target = self.follow(name.as_os_str())?;
                     for component in target.into_iter().rev() {
                         queue.push_front(component);
                     }
                 }
+                Err(ReadError::NotFound) if self.hops > 0 && self.require_existing_link_targets => {
+                    return Err(ReadError::InvalidRelativePath);
+                }
+                Err(error) => return Err(error),
             }
         }
         Err(ReadError::InvalidRelativePath)
@@ -545,15 +497,7 @@ impl<'a> Walk<'a> {
         if self.hops > MAX_SYMLINK_HOPS {
             return Err(ReadError::SymlinkLoop);
         }
-        let target = readlinkat(self.top()?, name).map_err(|error| {
-            // The confirmed link can become a regular file before readlinkat.
-            // EINVAL here is a filesystem race, not an invalid caller path.
-            if error == Errno::EINVAL {
-                ReadError::Io
-            } else {
-                map_errno(error)
-            }
-        })?;
+        let target = sys::read_link(self.top()?, name)?;
         if target.as_encoded_bytes().len() > MAX_LINK_TARGET_BYTES {
             return Err(ReadError::LinkTargetTooLong);
         }
@@ -599,7 +543,7 @@ fn read_opened(resolved: Resolved, limit: ResourceLimit) -> Result<BoundedRead, 
         absolute,
     } = resolved;
     let cap = limit.cap_plus_one().map_err(|_| ReadError::Io)?;
-    let mut file = File::from(descriptor);
+    let mut file = sys::into_file(descriptor);
     let mut bytes = Vec::with_capacity(cap.min(64 * 1024));
     file.by_ref()
         .take(cap as u64)
@@ -611,7 +555,366 @@ fn read_opened(resolved: Resolved, limit: ResourceLimit) -> Result<BoundedRead, 
     Ok(BoundedRead {
         content_hash: ContentHash::from_bytes(&bytes),
         bytes,
-        identity: FileIdentity::of(&stat),
+        identity: sys::identity(&stat),
         path: LocalPath::new(absolute),
     })
+}
+
+/// The four operating-system primitives the walk needs. Everything above this
+/// module is shared; only how one name is opened below a held directory differs.
+#[cfg(unix)]
+mod sys {
+    use super::{FileIdentity, FileKind, Opened, ReadError};
+    use nix::errno::Errno;
+    use nix::fcntl::{AtFlags, OFlag, open, openat, readlinkat};
+    use nix::sys::stat::{FileStat, Mode, SFlag, fstat, fstatat};
+    use std::ffi::{OsStr, OsString};
+    use std::fs::File;
+    use std::os::fd::OwnedFd;
+    use std::path::Path;
+
+    pub(super) type Descriptor = OwnedFd;
+    pub(super) type Stat = FileStat;
+
+    pub(super) fn map_errno(errno: Errno) -> ReadError {
+        match errno {
+            Errno::ENOENT => ReadError::NotFound,
+            Errno::EACCES | Errno::EPERM => ReadError::PermissionDenied,
+            Errno::ENOTDIR => ReadError::NotADirectory,
+            Errno::ELOOP | Errno::EMLINK => ReadError::SymlinkLoop,
+            Errno::ENAMETOOLONG => ReadError::InvalidRelativePath,
+            Errno::EINVAL => ReadError::InvalidRelativePath,
+            _ => ReadError::Io,
+        }
+    }
+
+    pub(super) fn kind(stat: &FileStat) -> FileKind {
+        let bits = SFlag::from_bits_truncate(stat.st_mode) & SFlag::S_IFMT;
+        match bits {
+            SFlag::S_IFREG => FileKind::Regular,
+            SFlag::S_IFDIR => FileKind::Directory,
+            SFlag::S_IFLNK => FileKind::Symlink,
+            SFlag::S_IFIFO => FileKind::Fifo,
+            SFlag::S_IFSOCK => FileKind::Socket,
+            SFlag::S_IFCHR => FileKind::CharacterDevice,
+            SFlag::S_IFBLK => FileKind::BlockDevice,
+            _ => FileKind::Unknown,
+        }
+    }
+
+    // `dev_t`/`ino_t` widths differ by platform: the casts are identity on
+    // Linux and widening on macOS.
+    #[allow(clippy::unnecessary_cast)]
+    pub(super) fn identity(stat: &FileStat) -> FileIdentity {
+        FileIdentity::new(stat.st_dev as u64, stat.st_ino as u64)
+    }
+
+    pub(super) fn open_root(path: &Path) -> Result<(OwnedFd, FileStat), ReadError> {
+        let flags = OFlag::O_RDONLY | OFlag::O_DIRECTORY | OFlag::O_CLOEXEC;
+        let directory = open(path, flags, Mode::empty()).map_err(map_errno)?;
+        let stat = fstat(&directory).map_err(map_errno)?;
+        Ok((directory, stat))
+    }
+
+    pub(super) fn open_child(
+        directory: &OwnedFd,
+        name: &OsStr,
+        last: bool,
+    ) -> Result<Opened, ReadError> {
+        let mut flags = OFlag::O_RDONLY | OFlag::O_CLOEXEC | OFlag::O_NOFOLLOW;
+        if last {
+            // Opening a FIFO must not block waiting for a writer.
+            flags |= OFlag::O_NONBLOCK;
+        } else {
+            flags |= OFlag::O_DIRECTORY;
+        }
+        match openat(directory, name, flags, Mode::empty()) {
+            Ok(descriptor) => {
+                let stat = fstat(&descriptor).map_err(map_errno)?;
+                Ok(Opened::Object(descriptor, stat))
+            }
+            Err(errno) => {
+                // O_NOFOLLOW reports a symlink as ELOOP (ENOTDIR on some
+                // platforms when O_DIRECTORY is also set). Confirm the type
+                // from the link itself before following it.
+                let is_link = matches!(errno, Errno::ELOOP | Errno::EMLINK | Errno::ENOTDIR)
+                    && matches!(
+                        fstatat(directory, name, AtFlags::AT_SYMLINK_NOFOLLOW),
+                        Ok(stat) if kind(&stat) == FileKind::Symlink
+                    );
+                if is_link {
+                    Ok(Opened::Link)
+                } else {
+                    Err(map_errno(errno))
+                }
+            }
+        }
+    }
+
+    pub(super) fn read_link(directory: &OwnedFd, name: &OsStr) -> Result<OsString, ReadError> {
+        readlinkat(directory, name).map_err(|error| {
+            // The confirmed link can become a regular file before readlinkat.
+            // EINVAL here is a filesystem race, not an invalid caller path.
+            if error == Errno::EINVAL {
+                ReadError::Io
+            } else {
+                map_errno(error)
+            }
+        })
+    }
+
+    pub(super) fn into_file(descriptor: OwnedFd) -> File {
+        File::from(descriptor)
+    }
+}
+
+/// Windows has no `openat`, so each held directory carries the path it was
+/// opened by. Every directory on the walk's stack stays open without
+/// `FILE_SHARE_DELETE`, which makes Windows refuse to rename, delete or replace
+/// it (for example with a junction) while the walk holds it: the path of the
+/// next child therefore still names a child of the object that was checked.
+/// Final components are opened with `FILE_FLAG_OPEN_REPARSE_POINT`, so a link
+/// is inspected rather than followed, mirroring `O_NOFOLLOW`.
+#[cfg(windows)]
+mod sys {
+    use super::{FileIdentity, FileKind, Opened, ReadError};
+    use std::ffi::{OsStr, OsString};
+    use std::fs::{File, OpenOptions};
+    use std::io;
+    use std::os::windows::fs::OpenOptionsExt;
+    use std::path::{Component, Path, PathBuf, Prefix};
+
+    const FILE_SHARE_READ: u32 = 0x1;
+    const FILE_SHARE_WRITE: u32 = 0x2;
+    const FILE_SHARE_DELETE: u32 = 0x4;
+    const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+    const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+    const ERROR_PATH_NOT_FOUND: i32 = 3;
+    const ERROR_INVALID_NAME: i32 = 123;
+    const ERROR_DIRECTORY: i32 = 267;
+    const ERROR_CANT_ACCESS_FILE: i32 = 1920;
+    const ERROR_CANT_RESOLVE_FILENAME: i32 = 1921;
+
+    #[derive(Debug)]
+    pub(crate) struct Descriptor {
+        file: File,
+        path: PathBuf,
+    }
+
+    impl Descriptor {
+        pub(crate) fn try_clone(&self) -> io::Result<Self> {
+            Ok(Self {
+                file: self.file.try_clone()?,
+                path: self.path.clone(),
+            })
+        }
+
+        pub(crate) fn path(&self) -> &Path {
+            &self.path
+        }
+    }
+
+    #[derive(Clone, Copy, Debug)]
+    pub(crate) struct Stat {
+        kind: FileKind,
+        identity: FileIdentity,
+    }
+
+    impl Stat {
+        pub(crate) const fn kind(&self) -> FileKind {
+            self.kind
+        }
+
+        pub(crate) const fn identity(&self) -> FileIdentity {
+            self.identity
+        }
+    }
+
+    pub(super) fn map_io(error: &io::Error) -> ReadError {
+        match error.raw_os_error() {
+            Some(ERROR_PATH_NOT_FOUND) => return ReadError::NotFound,
+            Some(ERROR_DIRECTORY) => return ReadError::NotADirectory,
+            Some(ERROR_INVALID_NAME) => return ReadError::InvalidRelativePath,
+            Some(ERROR_CANT_ACCESS_FILE | ERROR_CANT_RESOLVE_FILENAME) => {
+                return ReadError::SymlinkLoop;
+            }
+            _ => {}
+        }
+        match error.kind() {
+            io::ErrorKind::NotFound => ReadError::NotFound,
+            io::ErrorKind::PermissionDenied => ReadError::PermissionDenied,
+            io::ErrorKind::NotADirectory => ReadError::NotADirectory,
+            io::ErrorKind::InvalidFilename => ReadError::InvalidRelativePath,
+            _ => ReadError::Io,
+        }
+    }
+
+    pub(super) const fn kind(stat: &Stat) -> FileKind {
+        stat.kind
+    }
+
+    pub(super) const fn identity(stat: &Stat) -> FileIdentity {
+        stat.identity
+    }
+
+    /// Classify an opened handle. Only name-surrogate reparse points
+    /// (symbolic links and junctions) are links; other reparse points such
+    /// as cloud placeholders are ordinary files or directories.
+    pub(crate) fn stat(file: &File) -> Result<Stat, ReadError> {
+        let metadata = file.metadata().map_err(|error| map_io(&error))?;
+        let file_type = metadata.file_type();
+        let kind = if file_type.is_symlink() {
+            FileKind::Symlink
+        } else if file_type.is_dir() {
+            FileKind::Directory
+        } else if file_type.is_file() {
+            FileKind::Regular
+        } else {
+            FileKind::Unknown
+        };
+        let information = winapi_util::file::information(file).map_err(|error| map_io(&error))?;
+        Ok(Stat {
+            kind,
+            identity: FileIdentity::new(
+                information.volume_serial_number(),
+                information.file_index(),
+            ),
+        })
+    }
+
+    /// Win32 rewrites or reinterprets some names: `a:b` opens an alternate
+    /// data stream, trailing dots/spaces are stripped, and device names such
+    /// as `CON` or `nul.txt` open devices in any directory. None of them can
+    /// name an ordinary child, so they are refused before any open.
+    pub(crate) fn valid_component(name: &OsStr) -> bool {
+        let Some(name) = name.to_str() else {
+            // Unpaired surrogates cannot be checked against the rules below.
+            return false;
+        };
+        if name.is_empty()
+            || name.ends_with(['.', ' '])
+            || name.chars().any(|c| {
+                c.is_control() || matches!(c, '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*')
+            })
+        {
+            return name == "." || name == "..";
+        }
+        let stem = name.split('.').next().unwrap_or(name).trim_end_matches(' ');
+        let upper = stem.to_ascii_uppercase();
+        let reserved = matches!(
+            upper.as_str(),
+            "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$"
+        ) || ((upper.starts_with("COM") || upper.starts_with("LPT"))
+            && stem.chars().count() == 4
+            && stem
+                .chars()
+                .nth(3)
+                .is_some_and(|c| c.is_ascii_digit() || matches!(c, '¹' | '²' | '³')));
+        !reserved
+    }
+
+    pub(crate) fn open(path: &Path, follow: bool, directory: bool) -> io::Result<File> {
+        let mut flags = FILE_FLAG_BACKUP_SEMANTICS;
+        if !follow {
+            flags |= FILE_FLAG_OPEN_REPARSE_POINT;
+        }
+        let mut share = FILE_SHARE_READ | FILE_SHARE_WRITE;
+        if !directory {
+            // Files are bound by their handle, not their name: leave them as
+            // shareable as an ordinary reader would.
+            share |= FILE_SHARE_DELETE;
+        }
+        OpenOptions::new()
+            .read(true)
+            .share_mode(share)
+            .custom_flags(flags)
+            .open(path)
+    }
+
+    pub(super) fn open_root(path: &Path) -> Result<(Descriptor, Stat), ReadError> {
+        let file = open(path, true, true).map_err(|error| map_io(&error))?;
+        let stat = stat(&file)?;
+        Ok((
+            Descriptor {
+                file,
+                path: path.to_path_buf(),
+            },
+            stat,
+        ))
+    }
+
+    pub(super) fn open_child(
+        directory: &Descriptor,
+        name: &OsStr,
+        last: bool,
+    ) -> Result<Opened, ReadError> {
+        if !valid_component(name) {
+            return Err(ReadError::InvalidRelativePath);
+        }
+        let path = directory.path.join(name);
+        let file = open(&path, false, !last).map_err(|error| map_io(&error))?;
+        let stat = stat(&file)?;
+        if stat.kind == FileKind::Symlink {
+            return Ok(Opened::Link);
+        }
+        if last && stat.kind == FileKind::Directory {
+            // A final directory can become a root that later walks descend from,
+            // so it is held like every other directory. The first handle stays
+            // open across the reopen, which keeps the object from being replaced
+            // unnoticed: the identity must still match.
+            let held = open(&path, false, true).map_err(|error| map_io(&error))?;
+            let held_stat = self::stat(&held)?;
+            if held_stat.kind != FileKind::Directory || held_stat.identity != stat.identity {
+                return Err(ReadError::Io);
+            }
+            return Ok(Opened::Object(Descriptor { file: held, path }, held_stat));
+        }
+        Ok(Opened::Object(Descriptor { file, path }, stat))
+    }
+
+    /// Read a link target. Junction and symlink targets are often stored in
+    /// verbatim form (`\\?\C:\...`); the plain drive form is what authorized
+    /// roots are matched against, so only that one prefix is rewritten. Any
+    /// other prefix (UNC, device, volume GUID) is left to fail root matching.
+    pub(super) fn read_link(directory: &Descriptor, name: &OsStr) -> Result<OsString, ReadError> {
+        if !valid_component(name) {
+            return Err(ReadError::InvalidRelativePath);
+        }
+        let target = std::fs::read_link(directory.path.join(name)).map_err(|error| {
+            // The confirmed link can become an ordinary file before it is read.
+            if error.kind() == io::ErrorKind::InvalidInput {
+                ReadError::Io
+            } else {
+                map_io(&error)
+            }
+        })?;
+        let mut components = target.components();
+        if let Some(Component::Prefix(prefix)) = components.next()
+            && let Prefix::VerbatimDisk(drive) = prefix.kind()
+        {
+            let mut plain = PathBuf::from(format!("{}:\\", char::from(drive)));
+            for component in components {
+                if component != Component::RootDir {
+                    plain.push(component);
+                }
+            }
+            return Ok(plain.into_os_string());
+        }
+        Ok(target.into_os_string())
+    }
+
+    pub(super) fn into_file(descriptor: Descriptor) -> File {
+        descriptor.file
+    }
+}
+
+#[cfg(windows)]
+pub(crate) use sys::{open as open_windows, stat as stat_windows, valid_component};
+
+#[cfg(windows)]
+impl AuthorizedRoot {
+    /// The held root directory handle, for walks that enumerate it by path.
+    pub(crate) fn windows_handle(&self) -> &sys::Descriptor {
+        &self.directory
+    }
 }

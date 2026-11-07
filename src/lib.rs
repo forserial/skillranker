@@ -16,12 +16,15 @@ pub mod effects;
 pub mod eligibility;
 pub mod evaluation;
 pub mod experiments;
+// Descriptor filesystem classification for Unix-only persistent state.
+#[cfg(unix)]
 mod filesystem_policy;
 pub mod identity;
 pub mod installer;
 pub mod jev;
 pub mod learning;
 pub mod limits;
+mod os_random;
 pub mod output;
 pub mod pipeline;
 mod platform_path;
@@ -33,6 +36,7 @@ pub mod runtime;
 pub mod scoring;
 pub mod snooze;
 pub mod sqlite_engine;
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+// Compiled everywhere; on platforms without an audited private-directory
+// admission (Windows), every store open reports `UnsupportedFilesystem`.
 pub mod storage;
 pub mod subprocess;

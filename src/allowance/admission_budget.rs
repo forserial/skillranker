@@ -47,6 +47,7 @@ impl AdmissionBudget {
             .map_err(|_| state("the accounting busy wait cannot be bounded"))
     }
 
+    #[cfg_attr(not(unix), allow(dead_code))] // Used by the Unix-only enforced store.
     pub(super) fn install_progress_handler(
         self,
         connection: &Connection,
@@ -61,6 +62,7 @@ impl AdmissionBudget {
     }
 }
 
+#[cfg_attr(not(unix), allow(dead_code))] // Used by the Unix-only enforced store.
 pub(super) fn checkpoint(budget: Option<AdmissionBudget>) -> Result<(), AllowanceError> {
     match budget {
         Some(budget) => budget.check(),

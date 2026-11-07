@@ -28,17 +28,23 @@ use crate::jev::{CanonicalOrigin, RankingStage};
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use serde::Deserialize;
 use std::fmt;
-#[cfg(test)]
+#[cfg(all(test, unix))]
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+#[cfg(unix)]
 mod accounting;
 mod admission_budget;
+#[cfg(unix)]
 mod guard_file;
+#[cfg(windows)]
+mod unsupported;
 use admission_budget::AdmissionBudget;
 use guard_file::GuardLock;
+#[cfg(windows)]
+use unsupported::{accounting, guard_file};
 
 /// Relative to the trusted user configuration root.
 pub const GUARD_FILE: &str = "sr/allowance.toml";
@@ -52,9 +58,11 @@ const GUARD_SCHEMA_VERSION: u32 = 1;
 const ACCOUNTING_SCHEMA_VERSION: i64 = 1;
 /// Charges are enforcement state within the 64 MiB cache allocation; this
 /// store never needs more than a few pages per window.
+#[cfg_attr(not(unix), allow(dead_code))] // Used by the Unix-only enforced store.
 const ACCOUNTING_MAX_BYTES: i64 = 4 * 1024 * 1024;
 /// Attempt rows older than this many closed windows no longer apply.
 const RETAINED_WINDOWS: u64 = 24;
+#[cfg_attr(not(unix), allow(dead_code))] // Used by the Unix-only enforced store.
 const GUARD_FILE_MAX_BYTES: u64 = 4096;
 
 static COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -228,6 +236,7 @@ impl AllowancePaths {
         Self::new(user_config_root, &cache)
     }
 
+    #[cfg_attr(not(unix), allow(dead_code))] // Used by the Unix-only enforced store.
     fn lock_path(&self) -> PathBuf {
         self.guard.with_extension("toml.sr-lock")
     }
@@ -238,7 +247,7 @@ pub fn read_guard(paths: &AllowancePaths) -> Result<Option<Guard>, AllowanceErro
     guard_file::read(&paths.guard)
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 fn create_private_dir(dir: &Path) -> Result<(), AllowanceError> {
     let mut builder = fs::DirBuilder::new();
     builder.recursive(true);
@@ -836,7 +845,7 @@ pub fn admit(
     }))
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
 
@@ -1047,7 +1056,7 @@ mod tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 #[path = "allowance/integrity_tests.rs"]
 mod integrity_tests;
 
@@ -1055,6 +1064,6 @@ mod integrity_tests;
 #[path = "allowance/inspection_tests.rs"]
 mod inspection_tests;
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 #[path = "allowance/charge_consistency_tests.rs"]
 mod charge_consistency_tests;

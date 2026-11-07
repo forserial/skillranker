@@ -604,14 +604,10 @@ impl FrozenSampleManifest {
     }
 }
 
-/// Draw a fresh 64-bit seed from trusted OS randomness (/dev/urandom).
+/// Draw a fresh 64-bit seed from trusted OS randomness.
 pub fn draw_os_seed() -> Result<u64, EvaluationError> {
-    use std::io::Read;
-    let mut file = std::fs::File::open("/dev/urandom").map_err(|e| {
-        EvaluationError::SamplingFailure(format!("failed to open /dev/urandom: {e}"))
-    })?;
     let mut buf = [0u8; 8];
-    file.read_exact(&mut buf).map_err(|e| {
+    crate::os_random::fill(&mut buf).map_err(|e| {
         EvaluationError::SamplingFailure(format!("failed to read OS randomness: {e}"))
     })?;
     Ok(u64::from_le_bytes(buf))

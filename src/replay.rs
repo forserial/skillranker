@@ -20,7 +20,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
-use std::io::{Read, Write};
+#[cfg(unix)]
+use std::io::Read;
+use std::io::Write;
 use std::path::Path;
 
 /// Bounded replay error kinds. Safe diagnostics contain no private text or credentials.
@@ -601,6 +603,28 @@ impl ReplayCase {
 // Open once without following the final symlink or waiting for a FIFO writer.
 // Permission/type checks and the bounded read all concern this same descriptor.
 fn read_private_replay_file(
+    path: &Path,
+    label: &str,
+    max: usize,
+    oversized: fn(usize, usize) -> ReplayError,
+) -> Result<Vec<u8>, ReplayError> {
+    // Owner-only access is a precondition for reading captured case data.
+    // Windows permissions are access-control lists, which this build does not
+    // inspect, so the precondition cannot be established and the read fails
+    // closed instead of trusting an unverified file.
+    #[cfg(windows)]
+    {
+        let _ = (path, max, oversized);
+        Err(ReplayError::InvalidField(format!(
+            "{label} file permissions cannot be verified as owner-only on this platform"
+        )))
+    }
+    #[cfg(unix)]
+    read_private_replay_file_unix(path, label, max, oversized)
+}
+
+#[cfg(unix)]
+fn read_private_replay_file_unix(
     path: &Path,
     label: &str,
     max: usize,

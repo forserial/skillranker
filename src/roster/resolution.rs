@@ -17,7 +17,6 @@ use crate::runtime::EntryClock;
 use asupersync::Cx;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
-use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -419,12 +418,16 @@ pub(crate) fn claude_invocation(kind: SourceKind, relative: &Path) -> Option<Inv
 /// The same declared path always yields the same logical key, so discovery and
 /// explicit import assign equal stable IDs to equal records.
 pub(crate) fn path_logical_key(path: &Path) -> Result<LogicalSkillKey, ResolutionError> {
-    LogicalSkillKey::new(
-        blake3::hash(path.as_os_str().as_bytes())
-            .to_hex()
-            .to_string(),
-    )
-    .map_err(|_| ResolutionError::InvalidBinding)
+    // Walks join with the native separator while manifests spell `/`; both name
+    // one declared path, so one spelling is hashed on Windows.
+    #[cfg(windows)]
+    let spelled = path.to_string_lossy().replace('\\', "/");
+    #[cfg(windows)]
+    let bytes = spelled.as_bytes();
+    #[cfg(not(windows))]
+    let bytes = path.as_os_str().as_encoded_bytes();
+    LogicalSkillKey::new(blake3::hash(bytes).to_hex().to_string())
+        .map_err(|_| ResolutionError::InvalidBinding)
 }
 
 /// Resolve direct Claude project/personal skill directories. Caller supplies

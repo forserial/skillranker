@@ -2765,10 +2765,10 @@ fn observe_owned(
             )
             .ok()
             .flatten()?;
-            let meta = std::fs::metadata(&transcript_path).ok()?;
+            let identity = crate::context::jsonl::FileIdentity::of_path(&transcript_path)?;
             Some(crate::context::jsonl::JsonlCursor {
                 kind: crate::context::jsonl::CursorKind::Observation,
-                identity: crate::context::jsonl::FileIdentity::from_metadata(&meta),
+                identity,
                 generation: stored.transcript_generation,
                 byte_offset: stored.last_offset_bytes,
                 last_event_id: crate::identity::EventId::new(stored.last_complete_event_id.clone())
@@ -2877,9 +2877,7 @@ fn observe_owned(
         .map_or_else(|| "main".to_string(), |b| b.as_str().to_string());
 
     // Resolve roster
-    let home = std::env::var_os("HOME")
-        .filter(|p| !p.is_empty())
-        .map(PathBuf::from);
+    let home = crate::platform_path::home_dir();
     let roster_file = matches.get_one::<String>("roster");
     let plan = if roster_file.is_none()
         && normalized_context.harness.as_str() != crate::adapter::CLAUDE_CODE_ID
@@ -4296,7 +4294,7 @@ fn read_bounded_eval_bytes(path: &str, what: &str, max_bytes: usize) -> Result<V
         })?;
     if bytes.len() > max_bytes {
         return Err((
-            8u8,
+            7u8,
             "oversized-input",
             format!("{what} {path} exceeds maximum size of {max_bytes} bytes"),
         ));
@@ -4425,9 +4423,7 @@ fn eval_live_command(
     environment_sources(&mut sources)?;
     let workspace = std::env::current_dir().map_err(|_| invalid("Workspace is unavailable"))?;
     let user_root = user_config_root()?;
-    let home = std::env::var_os("HOME")
-        .filter(|path| !path.is_empty())
-        .map(PathBuf::from);
+    let home = crate::platform_path::home_dir();
     // A live batch records no cache or ledger history, but it is not
     // stateless: its sends stay subject to a configured shared attempt
     // allowance, which persistent runtime state enforces.
@@ -4991,9 +4987,7 @@ fn doctor_command(clock: &EntryClock, doctor: &clap::ArgMatches) -> Result<Strin
     let json_output =
         doctor.get_flag("json") || (!doctor.get_flag("table") && !io::stdout().is_terminal());
     if doctor.get_flag("descriptions") {
-        let home = std::env::var_os("HOME")
-            .filter(|path| !path.is_empty())
-            .map(PathBuf::from);
+        let home = crate::platform_path::home_dir();
         let manifest = doctor.get_one::<String>("roster").map(Path::new);
         let roster = resolve_workspace_roster_with_manifest(
             clock,
@@ -5165,9 +5159,7 @@ fn rank_command(
 
     let workspace = std::env::current_dir().map_err(|_| invalid("Workspace is unavailable"))?;
     let user_root = user_config_root()?;
-    let home = std::env::var_os("HOME")
-        .filter(|path| !path.is_empty())
-        .map(PathBuf::from);
+    let home = crate::platform_path::home_dir();
     // The persistent response cache lives in the platform cache directory
     // ($XDG_CACHE_HOME/sr or ~/.cache/sr); effect flags may still disable it.
     let cache_dir = user_cache_root()?;
@@ -5385,6 +5377,12 @@ fn is_stdin_supplied() -> bool {
             return false;
         }
     }
+    // Same rule as above: pipes and files are input, while the NUL device a
+    // detached process inherits is not.
+    #[cfg(windows)]
+    if let Ok(kind) = winapi_util::file::typ(winapi_util::HandleRef::stdin()) {
+        return kind.is_pipe() || kind.is_disk();
+    }
     false
 }
 
@@ -5396,9 +5394,8 @@ fn user_config_root() -> Result<Option<PathBuf>, Failure> {
         }
         return Ok(Some(path));
     }
-    match std::env::var_os("HOME").filter(|p| !p.is_empty()) {
+    match crate::platform_path::home_dir() {
         Some(home) => {
-            let home = PathBuf::from(home);
             if !home.is_absolute() {
                 return Err(invalid("Home directory must be absolute"));
             }
@@ -5483,9 +5480,7 @@ fn hook_claude_command(clock: &EntryClock, m: &clap::ArgMatches) -> Result<Strin
         std::env::current_dir().map_err(|_| invalid("Workspace is unavailable"))?
     };
     let user_root = user_config_root()?;
-    let home = std::env::var_os("HOME")
-        .filter(|path| !path.is_empty())
-        .map(PathBuf::from);
+    let home = crate::platform_path::home_dir();
     let cache_dir = user_cache_root()?;
 
     let source_options = crate::context::source::SourceOptions {
@@ -5682,6 +5677,10 @@ fn hook_prerequisites(
             .ok()
         });
     let ledger = match ledger {
+        _ if cfg!(windows) => {
+            "unavailable: Windows builds have no ledger, so a recorded trial is not possible"
+                .to_owned()
+        }
         Some(crate::storage::LedgerOpen::Ready(_)) => "initialized".to_owned(),
         Some(crate::storage::LedgerOpen::ReadOnly(_)) => {
             "read-only: a hook cannot record to it".to_owned()
@@ -6107,9 +6106,7 @@ fn readiness(
     json_output: bool,
 ) -> Result<String, Failure> {
     use crate::readiness::{Inputs, RosterCheck, TransportIdentity, assess_transport, report};
-    let home = std::env::var_os("HOME")
-        .filter(|path| !path.is_empty())
-        .map(PathBuf::from);
+    let home = crate::platform_path::home_dir();
     // Readiness answers whether `sr rank` can work, so it resolves the roster
     // under the same provisional Claude contract rank uses. The report still
     // labels that visibility unverified.
@@ -6308,9 +6305,7 @@ fn roster_listing(clock: &EntryClock, matches: &clap::ArgMatches) -> Result<Stri
             "The workspace directory is unavailable".to_owned(),
         )
     })?;
-    let home = std::env::var_os("HOME")
-        .filter(|path| !path.is_empty())
-        .map(PathBuf::from);
+    let home = crate::platform_path::home_dir();
     let mut sources = ConfigSources::default();
     for (name, value) in std::env::vars_os() {
         if is_configuration_environment(&name) {
@@ -6621,7 +6616,7 @@ fn export_snapshot(
     ))
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod invocation_cleanup_tests {
     use super::*;
     use crate::runtime::ProcessInvocation;

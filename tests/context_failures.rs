@@ -9,6 +9,8 @@
 //! 1. Native Claude Hook & JSONL Transcript Adapter
 //! 2. Normalized Context Input Envelope Adapter
 //! 3. Cass Archive Subprocess Adapter
+// Part of this suite needs Unix fixtures; those tests and their helpers are gated.
+#![cfg_attr(not(unix), allow(unused_imports, dead_code))]
 
 use serde_json::json;
 #[cfg(unix)]
@@ -49,6 +51,11 @@ fn temp_test_dir(label: &str) -> PathBuf {
     path
 }
 
+/// A path spelled for a JSON string literal; Windows paths hold backslashes.
+fn json_path(path: &std::path::Path) -> String {
+    path.display().to_string().replace('\\', "\\\\")
+}
+
 fn parse_hook(json: &str) -> ClaudeUserPromptSubmit {
     ClaudeUserPromptSubmit::from_json(json.as_bytes(), UnknownFieldPolicy::RetainAdditive).unwrap()
 }
@@ -81,7 +88,7 @@ fn context_failure_cases() {
                 "prompt": "How do I fix this?",
                 "prompt_id": "ev-corrupt-user"
             }}"#,
-            corrupt_file.display()
+            json_path(&corrupt_file)
         ));
         let req = ClaudeOverlayRequest {
             hook_input: hook,
@@ -131,7 +138,7 @@ fn context_failure_cases() {
                 "prompt": "Review this code",
                 "prompt_id": "ev-oversize-user"
             }}"#,
-            oversize_file.display()
+            json_path(&oversize_file)
         ));
         let req = ClaudeOverlayRequest {
             hook_input: hook,
@@ -210,7 +217,7 @@ fn context_failure_cases() {
                 "prompt": "Prompt text",
                 "prompt_id": "ev-dupkey-01"
             }}"#,
-            dupkey_file.display()
+            json_path(&dupkey_file)
         ));
         let req = ClaudeOverlayRequest {
             hook_input: hook,
@@ -257,7 +264,7 @@ fn context_failure_cases() {
                 "prompt": "New prompt",
                 "prompt_id": "ev-tail-new"
             }}"#,
-            tail_file.display()
+            json_path(&tail_file)
         ));
         let req = ClaudeOverlayRequest {
             hook_input: hook,
@@ -288,7 +295,7 @@ fn context_failure_cases() {
                 "prompt": "Prompt text",
                 "prompt_id": "ev-dir-01"
             }}"#,
-            sub_dir.display()
+            json_path(&sub_dir)
         ));
         let req_dir = ClaudeOverlayRequest {
             hook_input: hook_dir,
@@ -316,7 +323,7 @@ fn context_failure_cases() {
                 "prompt": "Prompt text",
                 "prompt_id": "ev-outside-01"
             }}"#,
-            outside_file.display()
+            json_path(&outside_file)
         ));
         let req_outside = ClaudeOverlayRequest {
             hook_input: hook_outside,
@@ -364,7 +371,7 @@ fn context_failure_cases() {
                 "prompt": "Starting a fresh session",
                 "prompt_id": "ev-first-01"
             }}"#,
-            nonexistent_file.display()
+            json_path(&nonexistent_file)
         ));
         let first_turn_req = ClaudeOverlayRequest {
             hook_input: first_turn_hook,
@@ -405,7 +412,7 @@ fn context_failure_cases() {
                 "prompt": "Fix the compiler errors",
                 "prompt_id": "ev-03"
             }}"#,
-            valid_file.display()
+            json_path(&valid_file)
         ));
         let multi_req = ClaudeOverlayRequest {
             hook_input: multi_hook,

@@ -15,6 +15,8 @@
 //! - Per-skill breakdown (--by-skill): top-1 recommendations, shortlist appearances, loads, judgments.
 //! - Time window filtering (--since 7d, 24h, 30m, ISO timestamp).
 //! - CLI output: JSON and human-readable table outputs.
+// Exercises the Unix-only private store; Windows builds refuse it (see docs/platform-boundary.md).
+#![cfg(unix)]
 
 use asupersync::Cx;
 use skillranker::runtime::ProcessInvocation;

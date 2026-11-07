@@ -198,6 +198,7 @@ fn public_process_local_breaker_preserves_recovery_after_expired_outcomes() {
     }
 }
 
+#[cfg(unix)]
 #[test]
 fn shared_wal_reopen_preserves_successors_lease_after_stale_retry_after() {
     // Keep this shared-WAL success case outside RCH's writable TMPDIR ancestry.

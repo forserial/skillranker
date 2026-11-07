@@ -27,11 +27,17 @@
 //! not turns and so never record a row.
 
 use super::StoreError;
+#[cfg(unix)]
 use nix::errno::Errno;
+#[cfg(unix)]
 use nix::fcntl::{OFlag, open};
+#[cfg(unix)]
 use nix::sys::stat::{Mode, SFlag, fstat};
+#[cfg(unix)]
 use std::fs::File;
+#[cfg(unix)]
 use std::io::{Read, Write};
+#[cfg(unix)]
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::Path;
 
@@ -61,6 +67,7 @@ impl HookCounter {
 }
 /// `{unix_ms:020} {token:32 hex}\n`.
 const RECORD_LEN: usize = 54;
+#[cfg_attr(not(unix), allow(dead_code))] // Validated by the Unix-only counter.
 const TOKEN_HEX: usize = 32;
 
 /// Entries counted over a window.
@@ -104,6 +111,7 @@ pub fn record_hook_entry(dir: &Path, database_file: &str, counter: HookCounter, 
     let _ = try_record(dir, database_file, counter, now_unix_ms);
 }
 
+#[cfg(unix)]
 fn try_record(
     dir: &Path,
     database_file: &str,
@@ -232,6 +240,7 @@ fn parse_record(record: &[u8]) -> Option<i64> {
     std::str::from_utf8(&record[..20]).ok()?.parse().ok()
 }
 
+#[cfg(unix)]
 fn read_entries(dir: &Path, counter: HookCounter) -> Result<Option<Vec<u8>>, StoreError> {
     let fd = match open(
         &dir.join(counter.file()),
@@ -257,6 +266,7 @@ fn read_entries(dir: &Path, counter: HookCounter) -> Result<Option<Vec<u8>>, Sto
 }
 
 /// Replace the counter atomically with `bytes`, owner-only.
+#[cfg(unix)]
 fn replace_entries(dir: &Path, counter: HookCounter, bytes: &[u8]) -> Result<(), StoreError> {
     let staged = dir.join(format!(
         "{}.{}.tmp",
@@ -281,7 +291,27 @@ fn replace_entries(dir: &Path, counter: HookCounter, bytes: &[u8]) -> Result<(),
     Ok(())
 }
 
-#[cfg(test)]
+/// Windows: the counter lives beside a ledger, and no ledger directory can be
+/// admitted on this platform, so there is never a counter to append to.
+#[cfg(not(unix))]
+fn try_record(_: &Path, _: &str, _: HookCounter, _: i64) -> Option<()> {
+    None
+}
+
+#[cfg(not(unix))]
+fn read_entries(dir: &Path, counter: HookCounter) -> Result<Option<Vec<u8>>, StoreError> {
+    match std::fs::symlink_metadata(dir.join(counter.file())) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        _ => Err(StoreError::UnsupportedFilesystem),
+    }
+}
+
+#[cfg(not(unix))]
+fn replace_entries(_: &Path, _: HookCounter, _: &[u8]) -> Result<(), StoreError> {
+    Err(StoreError::UnsupportedFilesystem)
+}
+
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
     use std::os::unix::fs::{DirBuilderExt, PermissionsExt};

@@ -183,6 +183,13 @@ Install on **Linux or macOS**. Keep macOS state on a local APFS or HFS+ filesyst
 with Unix permissions. Run `sr capabilities --json` after installation to check
 command and integration availability in your build.
 
+On **Windows**, download `skillranker-vVERSION-x86_64-pc-windows-msvc.zip` and
+its `.sha256` from the release, verify the checksum, and put `sr.exe` on your
+`PATH`. Windows ranks statelessly: the response cache, ledger-backed commands
+(`observe`, `feedback`, `stats`, `ledger`), enforced request allowances, private
+exports, replay case files and cass sessions report that they are unavailable on
+this platform. For the full feature set, use the Linux build under WSL.
+
 ### Installer
 
 The installer selects a release for your platform, verifies its SHA256 checksum,

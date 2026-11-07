@@ -2,6 +2,8 @@
 //! produced it, which agent it belongs to and which native branch is active.
 //! Identical redacted requests from different producers, agents, forks or
 //! source kinds must never share a cached answer or a single-flight lease.
+// Exercises the Unix-only private store; Windows builds refuse it (see docs/platform-boundary.md).
+#![cfg(unix)]
 mod support;
 
 use asupersync::Cx;

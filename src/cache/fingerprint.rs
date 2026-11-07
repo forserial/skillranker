@@ -10,7 +10,6 @@ use crate::identity::{
 };
 use serde::{Deserialize, Serialize};
 use std::fmt;
-use std::io::Read;
 
 /// Domain separation tags to prevent cross-type fingerprint collision.
 const DOMAIN_REQUEST: &[u8] = b"SR_REQ_FP_V1\0";
@@ -52,8 +51,7 @@ impl CacheKey {
     /// Generates a fresh random key from the operating system's CSPRNG.
     pub fn generate() -> Result<Self, std::io::Error> {
         let mut bytes = [0u8; 32];
-        let mut file = std::fs::File::open("/dev/urandom")?;
-        file.read_exact(&mut bytes)?;
+        crate::os_random::fill(&mut bytes)?;
         Ok(Self(bytes))
     }
 

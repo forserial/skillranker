@@ -16,6 +16,7 @@ use crate::config::HookMode;
 use crate::identity::ContentHash;
 use crate::limits::CONFIG_FILE_BYTES;
 use crate::output::JsonSeed;
+#[cfg(unix)]
 use nix::fcntl::{Flock, FlockArg};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
@@ -237,12 +238,9 @@ pub fn resolve_settings_file(
     }
     match harness {
         HookHarness::Claude => {
-            let home = std::env::var_os("HOME")
-                .filter(|p| !p.is_empty())
-                .map(PathBuf::from)
-                .ok_or_else(|| {
-                    InstallerError::InvalidUsage("HOME environment variable is not set".into())
-                })?;
+            let home = crate::platform_path::home_dir().ok_or_else(|| {
+                InstallerError::InvalidUsage("HOME environment variable is not set".into())
+            })?;
             Ok(home.join(".claude/settings.json"))
         }
     }
@@ -271,8 +269,8 @@ pub fn resolve_binary_path(override_path: Option<PathBuf>) -> Result<PathBuf, In
 pub fn resolve_backup_dir() -> Result<PathBuf, InstallerError> {
     let base = if let Some(state) = std::env::var_os("XDG_STATE_HOME").filter(|p| !p.is_empty()) {
         PathBuf::from(state).join("sr/backups")
-    } else if let Some(home) = std::env::var_os("HOME").filter(|p| !p.is_empty()) {
-        PathBuf::from(home).join(".local/state/sr/backups")
+    } else if let Some(home) = crate::platform_path::home_dir() {
+        home.join(".local/state/sr/backups")
     } else {
         PathBuf::from("/tmp/sr-backups")
     };
@@ -325,10 +323,51 @@ pub fn write_backup(
 /// Formats the managed hook command invocation string.
 pub fn make_command_string(binary_path: &Path) -> String {
     let path_str = binary_path.to_string_lossy();
-    if path_str.contains(' ') {
+    if cfg!(windows) {
+        windows_hook_command(&path_str)
+    } else if path_str.contains(' ') {
         format!("\"{path_str}\" hook claude")
     } else {
         format!("{path_str} hook claude")
+    }
+}
+
+/// Claude Code runs hook commands through Git Bash on Windows, where an unquoted
+/// `C:\dir\sr.exe` loses its backslashes and fails with exit 127. Forward slashes
+/// inside double quotes survive Bash; `$` and backtick stay literal when escaped.
+/// A verbatim prefix has no Bash spelling, so the plain drive form is written.
+fn windows_hook_command(path: &str) -> String {
+    let path = path
+        .strip_prefix(r"\\?\")
+        .unwrap_or(path)
+        .replace('\\', "/");
+    let mut quoted = String::with_capacity(path.len() + 2);
+    for character in path.chars() {
+        if matches!(character, '$' | '`') {
+            quoted.push('\\');
+        }
+        quoted.push(character);
+    }
+    format!("\"{quoted}\" hook claude")
+}
+
+#[cfg(test)]
+mod windows_hook_command_tests {
+    use super::windows_hook_command;
+
+    #[test]
+    fn the_command_survives_git_bash() {
+        for (path, expected) in [
+            (r"C:\tools\sr.exe", r#""C:/tools/sr.exe" hook claude"#),
+            (
+                r"C:\Program Files\sr.exe",
+                r#""C:/Program Files/sr.exe" hook claude"#,
+            ),
+            (r"\\?\C:\tools\sr.exe", r#""C:/tools/sr.exe" hook claude"#),
+            (r"C:\a$b`c\sr.exe", r#""C:/a\$b\`c/sr.exe" hook claude"#),
+        ] {
+            assert_eq!(windows_hook_command(path), expected);
+        }
     }
 }
 
@@ -480,7 +519,11 @@ fn read_and_parse_settings(path: &Path) -> Result<ParsedSettings, InstallerError
 
 /// RAII lock guard that serializes cooperating installers using `flock`.
 struct SettingsLockGuard {
+    #[cfg(unix)]
     _flock: Flock<File>,
+    /// Windows: an exclusive `LockFileEx` lock, released when the file closes.
+    #[cfg(windows)]
+    _locked: File,
 }
 
 impl SettingsLockGuard {
@@ -496,14 +539,22 @@ impl SettingsLockGuard {
             .truncate(false)
             .open(&lock_path)?;
 
-        let flock = Flock::lock(file, FlockArg::LockExclusiveNonblock).map_err(|_| {
+        let busy = || {
             InstallerError::LockBusy(format!(
                 "concurrent installer holds lock on {}",
                 lock_path.display()
             ))
-        })?;
-
-        Ok(Self { _flock: flock })
+        };
+        #[cfg(unix)]
+        {
+            let flock = Flock::lock(file, FlockArg::LockExclusiveNonblock).map_err(|_| busy())?;
+            Ok(Self { _flock: flock })
+        }
+        #[cfg(windows)]
+        {
+            file.try_lock().map_err(|_| busy())?;
+            Ok(Self { _locked: file })
+        }
     }
 }
 
@@ -629,6 +680,9 @@ pub fn install_hook(options: &InstallOptions) -> Result<InstallOutcome, Installe
     let classification = classify_existing_entry(arr, &command_str, options.timeout_secs);
 
     let mode_str = match options.effective_mode {
+        HookMode::Shadow if cfg!(windows) => {
+            "shadow (default, no context injected; Windows builds have no ledger, so nothing is recorded)"
+        }
         HookMode::Shadow => "shadow (default, evaluations recorded without injecting context)",
         HookMode::Advisory => "advisory (suggestions enabled)",
     };

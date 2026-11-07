@@ -4,6 +4,15 @@
 
 ### Added
 
+- Windows builds. Ranking, roster discovery, Claude transcript and session reads
+  run on Windows through a no-follow, handle-pinned file layer; components that
+  need an owner-only private store (cache, ledger, enforced allowance, private
+  exports and replay files) and cass sessions fail closed there. `HOME` falls
+  back to `USERPROFILE` on Windows only. A tag-triggered GitHub Actions workflow
+  builds Linux, macOS and Windows release archives.
+- A Windows test suite for the file layer and the `sr` binary, running against real
+  symbolic links, junctions, reserved names and Claude Code hook input.
+
 - An offline corpus-to-frame exporter connects validated adjudicated primary
   cases and explicitly recorded outcomes to `sr eval`. It preserves failures
   and unknown judgments, checks case/roster/split bindings, and publishes private
@@ -11,6 +20,17 @@
   verifiable; preparing a frame does not establish a relevance or rollout gate.
 
 ### Fixed
+
+- Windows: ranking no longer fails with exit 9 for lack of `/dev/urandom`; keys,
+  tokens and sampling seeds use the OS CSPRNG. `install-hook` writes a command
+  Git Bash can run. `sr hook claude` and `--context -` read piped stdin. `sr eval`
+  no longer overflows the main thread's stack. Discovery and roster manifests
+  assign equal skill IDs. A workspace-relative root stays held against rename.
+  Transcript paths refuse reserved names, streams and trailing dots or spaces.
+  Piped `rank` input without a mode reports the mode error rather than discovery.
+- Hook installation no longer tells Windows users to run `sr ledger init`.
+- An oversized file read by `sr eval` reports exit 7 with `oversized-input`,
+  matching the documented mapping, rather than exit 8.
 
 - Queued blocking work rechecks cancellation and its work deadline before
   starting filesystem, regex or SQLite callbacks. Work that already started

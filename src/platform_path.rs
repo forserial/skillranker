@@ -6,6 +6,21 @@
 
 use std::path::PathBuf;
 
+/// The user's home directory: `HOME` when set and non-empty. Windows normally
+/// sets `USERPROFILE` rather than `HOME`, and Claude Code keeps its files
+/// under it (`%USERPROFILE%\.claude`), so it is the fallback there only.
+/// Unix behaviour is exactly `HOME`.
+pub(crate) fn home_dir() -> Option<PathBuf> {
+    if let Some(home) = std::env::var_os("HOME").filter(|path| !path.is_empty()) {
+        return Some(PathBuf::from(home));
+    }
+    #[cfg(windows)]
+    if let Some(profile) = std::env::var_os("USERPROFILE").filter(|path| !path.is_empty()) {
+        return Some(PathBuf::from(profile));
+    }
+    None
+}
+
 /// Expand only macOS's verified root-owned /tmp and /var system aliases.
 pub(crate) fn storage_path(path: PathBuf) -> PathBuf {
     #[cfg(target_os = "macos")]

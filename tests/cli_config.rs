@@ -177,11 +177,14 @@ fn local_inspection_creates_no_effects_and_observer_detects_them() {
     std::fs::create_dir_all(f.root.join("workspace/skills")).unwrap();
     let observes = |path: &std::path::Path| path.exists();
     // Positive control first: a deliberately writing child must be caught.
-    let mut writer = Command::new("sh");
-    writer
-        .env_clear()
-        .current_dir(f.root.join("workspace"))
-        .args(["-c", "echo marker > effect-probe"]);
+    let mut writer = Command::new(if cfg!(windows) { "cmd" } else { "sh" });
+    writer.current_dir(f.root.join("workspace")).args([
+        if cfg!(windows) { "/C" } else { "-c" },
+        "echo marker > effect-probe",
+    ]);
+    if cfg!(not(windows)) {
+        writer.env_clear();
+    }
     let control = writer.output().unwrap();
     assert!(control.status.success());
     assert!(observes(&canary), "positive control must be observable");

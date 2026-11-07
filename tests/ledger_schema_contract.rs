@@ -6,6 +6,8 @@
 //! - Distinct ranking and observation watermarks for session cursors
 //! - Privacy invariants: no skill bodies or secrets in roster snapshots
 //! - Headroom and store replacement protection
+// Exercises the Unix-only private store; Windows builds refuse it (see docs/platform-boundary.md).
+#![cfg(unix)]
 
 use asupersync::Cx;
 use rusqlite::Connection;

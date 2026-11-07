@@ -1,4 +1,6 @@
 //! Satisfies contract boundary `p4_explain_exclusion_stages` (sr-roadmap-l1i.5.14).
+// Exercises the Unix-only private store; Windows builds refuse it (see docs/platform-boundary.md).
+#![cfg(unix)]
 
 mod support;
 
