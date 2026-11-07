@@ -12,6 +12,9 @@
 // Part of this suite needs Unix fixtures; those tests and their helpers are gated.
 #![cfg_attr(not(unix), allow(unused_imports, dead_code))]
 
+#[path = "support/links.rs"]
+mod links;
+use links::symlink;
 use serde_json::json;
 use skillranker::adapter::{ClaudeUserPromptSubmit, UnknownFieldPolicy};
 use skillranker::context::anchor::{
@@ -566,9 +569,16 @@ fn branch_and_worktree() {
 // Unit Property Test: tests/context_contract.rs::claude_prompt_overlay
 // ==============================================================================
 
-#[cfg(unix)]
+/// A path as a JSON string: Windows backslashes must be escaped in hook JSON.
+fn json_path(path: &Path) -> String {
+    serde_json::to_string(path).unwrap()
+}
+
 #[test]
 fn claude_prompt_overlay() {
+    if !links::available() {
+        return;
+    }
     let test_dir = temp_dir("claude-overlay");
     let authorized_root = test_dir.join("authorized");
     fs::create_dir_all(&authorized_root).unwrap();
@@ -594,11 +604,11 @@ fn claude_prompt_overlay() {
             "prompt": "initial requirement",
             "prompt_id": "p1",
             "session_id": "sess-alpha",
-            "transcript_path": "{}",
-            "cwd": "{}"
+            "transcript_path": {},
+            "cwd": {}
         }}"#,
-        absent_transcript.display(),
-        authorized_root.display()
+        json_path(&absent_transcript),
+        json_path(&authorized_root)
     ));
 
     let req_p1 = ClaudeOverlayRequest {
@@ -632,11 +642,11 @@ fn claude_prompt_overlay() {
             "prompt": "second request",
             "prompt_id": "p2",
             "session_id": "sess-alpha",
-            "transcript_path": "{}",
-            "cwd": "{}"
+            "transcript_path": {},
+            "cwd": {}
         }}"#,
-        existing_transcript.display(),
-        authorized_root.display()
+        json_path(&existing_transcript),
+        json_path(&authorized_root)
     ));
     let req_p2 = ClaudeOverlayRequest {
         hook_input: hook_p2,
@@ -670,11 +680,11 @@ fn claude_prompt_overlay() {
             "prompt": "authoritative second request",
             "prompt_id": "p2",
             "session_id": "sess-alpha",
-            "transcript_path": "{}",
-            "cwd": "{}"
+            "transcript_path": {},
+            "cwd": {}
         }}"#,
-        flushed_transcript.display(),
-        authorized_root.display()
+        json_path(&flushed_transcript),
+        json_path(&authorized_root)
     ));
     let req_flushed = ClaudeOverlayRequest {
         hook_input: hook_flushed,
@@ -717,11 +727,11 @@ fn claude_prompt_overlay() {
             "prompt": "run tests",
             "prompt_id": "p3",
             "session_id": "sess-alpha",
-            "transcript_path": "{}",
-            "cwd": "{}"
+            "transcript_path": {},
+            "cwd": {}
         }}"#,
-        repeat_transcript.display(),
-        authorized_root.display()
+        json_path(&repeat_transcript),
+        json_path(&authorized_root)
     ));
     let req_repeat = ClaudeOverlayRequest {
         hook_input: hook_repeat,
@@ -767,11 +777,11 @@ fn claude_prompt_overlay() {
             "prompt": "some prompt",
             "prompt_id": "p_bad",
             "session_id": "sess-alpha",
-            "transcript_path": "{}",
-            "cwd": "{}"
+            "transcript_path": {},
+            "cwd": {}
         }}"#,
-        malformed_transcript.display(),
-        authorized_root.display()
+        json_path(&malformed_transcript),
+        json_path(&authorized_root)
     ));
     let req_malformed = ClaudeOverlayRequest {
         hook_input: hook_malformed,
@@ -785,31 +795,34 @@ fn claude_prompt_overlay() {
         OverlayError::MalformedTranscript(_)
     ));
 
-    // 6. FIFO Rejected
-    let fifo_path = authorized_root.join("named_fifo.jsonl");
-    nix::unistd::mkfifo(&fifo_path, nix::sys::stat::Mode::from_bits_truncate(0o600)).unwrap();
-    let hook_fifo = parse_hook(&format!(
-        r#"{{
+    // 6. FIFO Rejected (Windows has no FIFOs)
+    #[cfg(unix)]
+    {
+        let fifo_path = authorized_root.join("named_fifo.jsonl");
+        nix::unistd::mkfifo(&fifo_path, nix::sys::stat::Mode::from_bits_truncate(0o600)).unwrap();
+        let hook_fifo = parse_hook(&format!(
+            r#"{{
             "hook_event_name": "UserPromptSubmit",
             "prompt": "some prompt",
             "prompt_id": "p_fifo",
             "session_id": "sess-alpha",
-            "transcript_path": "{}",
-            "cwd": "{}"
+            "transcript_path": {},
+            "cwd": {}
         }}"#,
-        fifo_path.display(),
-        authorized_root.display()
-    ));
-    let req_fifo = ClaudeOverlayRequest {
-        hook_input: hook_fifo,
-        transcript_path: Some(fifo_path),
-        authorized_root: Some(authorized_root.clone()),
-    };
-    let err_fifo = apply_claude_prompt_overlay(&req_fifo).expect_err("FIFO must be rejected");
-    assert!(matches!(
-        err_fifo,
-        OverlayError::TranscriptIsDeviceOrFifo(_)
-    ));
+            json_path(&fifo_path),
+            json_path(&authorized_root)
+        ));
+        let req_fifo = ClaudeOverlayRequest {
+            hook_input: hook_fifo,
+            transcript_path: Some(fifo_path),
+            authorized_root: Some(authorized_root.clone()),
+        };
+        let err_fifo = apply_claude_prompt_overlay(&req_fifo).expect_err("FIFO must be rejected");
+        assert!(matches!(
+            err_fifo,
+            OverlayError::TranscriptIsDeviceOrFifo(_)
+        ));
+    }
 
     // 7. Directory Rejected
     let dir_path = authorized_root.join("transcript_dir");
@@ -820,11 +833,11 @@ fn claude_prompt_overlay() {
             "prompt": "some prompt",
             "prompt_id": "p_dir",
             "session_id": "sess-alpha",
-            "transcript_path": "{}",
-            "cwd": "{}"
+            "transcript_path": {},
+            "cwd": {}
         }}"#,
-        dir_path.display(),
-        authorized_root.display()
+        json_path(&dir_path),
+        json_path(&authorized_root)
     ));
     let req_dir = ClaudeOverlayRequest {
         hook_input: hook_dir,
@@ -850,11 +863,11 @@ fn claude_prompt_overlay() {
             "prompt": "some prompt",
             "prompt_id": "p_out",
             "session_id": "sess-alpha",
-            "transcript_path": "{}",
-            "cwd": "{}"
+            "transcript_path": {},
+            "cwd": {}
         }}"#,
-        outside_transcript.display(),
-        authorized_root.display()
+        json_path(&outside_transcript),
+        json_path(&authorized_root)
     ));
     let req_outside = ClaudeOverlayRequest {
         hook_input: hook_outside,
@@ -875,7 +888,7 @@ fn claude_prompt_overlay() {
         &[r#"{"event_id":"s1","role":"user","kind":"message","text":"real target"}"#],
     );
     let valid_symlink = authorized_root.join("valid_symlink.jsonl");
-    std::os::unix::fs::symlink(&symlink_target, &valid_symlink).unwrap();
+    symlink(&symlink_target, &valid_symlink).unwrap();
 
     let hook_symlink = parse_hook(&format!(
         r#"{{
@@ -883,11 +896,11 @@ fn claude_prompt_overlay() {
             "prompt": "prompt via symlink",
             "prompt_id": "p_sym",
             "session_id": "sess-alpha",
-            "transcript_path": "{}",
-            "cwd": "{}"
+            "transcript_path": {},
+            "cwd": {}
         }}"#,
-        valid_symlink.display(),
-        authorized_root.display()
+        json_path(&valid_symlink),
+        json_path(&authorized_root)
     ));
     let req_symlink = ClaudeOverlayRequest {
         hook_input: hook_symlink,
@@ -955,9 +968,11 @@ fn claude_prompt_overlay_missing_workspace_directory() {
     ));
 }
 
-#[cfg(unix)]
 #[test]
 fn claude_prompt_overlay_missing_parent_keeps_authority_failures() {
+    if !links::available() {
+        return;
+    }
     let test_dir = temp_dir("claude-missing-parent-authority");
     let missing_parent = test_dir.join("missing");
     let hook = ClaudeUserPromptSubmit::from_json(
@@ -1000,7 +1015,7 @@ fn claude_prompt_overlay_missing_parent_keeps_authority_failures() {
     ));
     // A broken directory symlink must not masquerade as a new workspace.
     let broken = test_dir.join("broken-parent");
-    std::os::unix::fs::symlink(&missing_parent, &broken).unwrap();
+    symlink(&missing_parent, &broken).unwrap();
     assert!(matches!(
         apply_claude_prompt_overlay(&request(broken.join("session.jsonl"), None)),
         Err(OverlayError::TranscriptPathForbidden(_))

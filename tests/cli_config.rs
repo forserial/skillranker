@@ -1,4 +1,7 @@
 //! Real binary checks of local configuration trust and stream boundaries.
+#[path = "support/links.rs"]
+mod links;
+use links::symlink;
 use serde_json::{Value, json};
 use std::path::PathBuf;
 use std::process::{Command, Output};
@@ -148,12 +151,14 @@ fn help_and_usage_do_not_read_configuration() {
     }
 }
 
-#[cfg(unix)]
 #[test]
 fn project_symlink_escape_is_refused() {
+    if !links::available() {
+        return;
+    }
     let f = Fixture::new();
     std::fs::write(f.root.join("outside.toml"), "[ranking]\ntop=1\n").unwrap();
-    std::os::unix::fs::symlink(
+    symlink(
         f.root.join("outside.toml"),
         f.root.join("workspace/.sr/config.toml"),
     )

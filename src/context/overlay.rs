@@ -623,6 +623,19 @@ fn open_transcript(
             "absolute path required".into(),
         ));
     }
+    // Win32 resolves `..` lexically, even through a directory that does not
+    // exist, so `missing\..\session.jsonl` would open its grandparent as the
+    // authority instead of failing the way Unix does (sr-winpar.25). Refuse
+    // parent components before anything is opened.
+    #[cfg(windows)]
+    if path
+        .components()
+        .any(|part| part == std::path::Component::ParentDir)
+    {
+        return Err(OverlayError::TranscriptPathForbidden(
+            "parent components are not allowed".into(),
+        ));
+    }
     let selected_root = root
         .or_else(|| path.parent())
         .ok_or(OverlayError::CrossSessionReadForbidden)?;

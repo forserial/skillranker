@@ -4,6 +4,12 @@
 
 ### Added
 
+- Most of the test suites that were gated to Unix now run on Windows too: link
+  fixtures use Windows symbolic links (`tests/support/links.rs`), non-UTF-8
+  fixtures use lone UTF-16 surrogates (`tests/support/non_unicode.rs`), and
+  Unix-only parts (FIFOs, `/dev/null`, mode bits) are split out. The remaining
+  gates in `tests/windows_test_matrix.toml` each name the issue that lifts them or
+  a permanent reason.
 - The loopback TLS provider stubs run on Windows (shared interpreter lookup in
   `tests/support/stub_python.rs`, dual-stack listeners, queued reports, a timer
   watchdog in place of `SIGALRM`), so `jev_retry`, `jev_transport`,
@@ -48,6 +54,10 @@
 
 ### Fixed
 
+- Windows: a Claude transcript path with a `..` component is refused before
+  anything is opened. Win32 resolves `..` lexically, even through a folder that
+  does not exist, so `missing\..\session.jsonl` used to open the grandparent as
+  its authority and be accepted as a first prompt, where Unix refuses it.
 - Windows: an absolute path or link target spelled with different case than its
   authorized root is no longer refused. It matches only when the prefix opens to
   the root's own file identity, so a case-sensitive directory's other spelling

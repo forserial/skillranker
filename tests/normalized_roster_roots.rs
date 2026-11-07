@@ -1,10 +1,11 @@
-#![cfg(any(target_os = "linux", target_os = "macos"))]
 //! Real CLI/filesystem checks for explicitly configured roots in normalized
 //! contexts. These establish local layout behavior, not native harness support.
 
+#[path = "support/links.rs"]
+mod links;
+use links::symlink;
 use serde_json::{Value, json};
 use std::fs;
-use std::os::unix::fs::{DirBuilderExt, symlink};
 use std::path::PathBuf;
 use std::process::{Command, Output, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -27,13 +28,17 @@ impl Fixture {
                 .as_nanos(),
             NEXT_FIXTURE.fetch_add(1, Ordering::Relaxed)
         ));
-        fs::DirBuilder::new().mode(0o700).create(&root).unwrap();
+        // Private 0700 directories on Unix; Windows has no mode bits to set.
+        let private = |path: PathBuf, recursive: bool| {
+            let mut builder = fs::DirBuilder::new();
+            builder.recursive(recursive);
+            #[cfg(unix)]
+            std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
+            builder.create(path).unwrap();
+        };
+        private(root.clone(), false);
         for child in ["workspace/.sr", "home/.config/sr", "external"] {
-            fs::DirBuilder::new()
-                .recursive(true)
-                .mode(0o700)
-                .create(root.join(child))
-                .unwrap();
+            private(root.join(child), true);
         }
         Self { root }
     }
@@ -110,6 +115,9 @@ impl Fixture {
 
 #[test]
 fn configured_roots_preview_excludes_implicit_harness_roots() {
+    if !links::available() {
+        return;
+    }
     for harness in ["normalized", "codex"] {
         let f = Fixture::new();
         f.skill(
@@ -228,6 +236,9 @@ fn configured_restrictions_and_exclusions_remain_authoritative() {
 
 #[test]
 fn project_configured_root_cannot_escape_the_workspace() {
+    if !links::available() {
+        return;
+    }
     let f = Fixture::new();
     f.skill("external", "outside", "", "Outside canary");
     f.skill("workspace/inside", "allowed", "", "Contained guidance");

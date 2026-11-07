@@ -1,14 +1,15 @@
-#![cfg(unix)]
 //! Issue #4 through the actual CLI: partial discovery must not become an
 //! empty roster when supported names can still be resolved safely. These
 //! checks are offline and have no credentials or persisted ranking results.
 
+#[path = "support/links.rs"]
+mod links;
+use links::symlink;
 use serde_json::{Value, json};
 use skillranker::identity::ContentHash;
 use skillranker::limits::{DISCOVERY_FILES, DISCOVERY_PARSED_BYTES};
 use std::collections::BTreeSet;
 use std::fs;
-use std::os::unix::fs::{DirBuilderExt, symlink};
 use std::path::PathBuf;
 use std::process::{Command, Output};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -32,7 +33,12 @@ impl Fixture {
                 NEXT.fetch_add(1, Ordering::Relaxed)
             ));
         // Retained for inspection; do not remove the fixture tree on drop.
-        fs::DirBuilder::new().mode(0o700).create(&root).unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::DirBuilderExt::mode(&mut fs::DirBuilder::new(), 0o700)
+            .create(&root)
+            .unwrap();
+        #[cfg(not(unix))]
+        fs::create_dir(&root).unwrap();
         for directory in ["workspace", "home/.claude/skills", "config/sr", "outside"] {
             fs::create_dir_all(root.join(directory)).unwrap();
         }
@@ -155,6 +161,9 @@ fn ids(listing: &Value) -> BTreeSet<String> {
 
 #[test]
 fn a_skill_reached_through_two_names_is_one_candidate() {
+    if !links::available() {
+        return;
+    }
     // One SKILL.md, a second skill directory whose SKILL.md links to it: one
     // physical skill with two bindings. Offering both bindings to the wide
     // request was a duplicate option, and the whole ranking failed.
@@ -174,6 +183,9 @@ fn a_skill_reached_through_two_names_is_one_candidate() {
 
 #[test]
 fn one_unrelated_directory_link_never_turns_three_skills_into_empty_roster() {
+    if !links::available() {
+        return;
+    }
     let fixture = Fixture::new();
     for name in ["alpha", "beta", "gamma"] {
         fixture.skill("home", name, "");
@@ -308,6 +320,8 @@ fn an_oversized_project_skill_does_not_empty_the_personal_roster() {
     fixture.assert_explicit("beta");
 }
 
+// Windows has no FIFOs.
+#[cfg(unix)]
 #[test]
 fn a_fifo_personal_override_is_not_silently_treated_as_absent() {
     let fixture = Fixture::new();

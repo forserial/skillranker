@@ -1,12 +1,13 @@
 // Part of this suite needs Unix fixtures; those tests and their helpers are gated.
 #![cfg_attr(not(unix), allow(unused_imports, dead_code))]
+#[path = "support/links.rs"]
+mod links;
+use links::symlink;
 use skillranker::context::jsonl::{CursorKind, JsonlError, SkipKind, snapshot_jsonl};
 use skillranker::context::{EventKind, Role};
 use skillranker::runtime::ProcessInvocation;
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
-#[cfg(unix)]
-use std::os::unix::fs::symlink;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -204,9 +205,11 @@ fn tail_window_does_not_fabricate_a_cut_prefix() {
     fs::remove_file(&path).unwrap();
 }
 
-#[cfg(unix)]
 #[test]
 fn symlink_and_directory_are_rejected_before_open() {
+    if !links::available() {
+        return;
+    }
     // The property is the rejection reason, not the deadline. Under the default 3 s a
     // starved worker reported Deadline before the path check ran (sr-87gj class).
     let generous = || {

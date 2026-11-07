@@ -11,8 +11,9 @@
 //! 5. Zero persistence, zero filesystem mutation, and zero child-process execution during local inspection.
 //! 6. Consequential boundary rereads via `ConfigFiles::refresh` detecting no-op, superseded, and invalid edits.
 
-#![cfg(unix)]
-
+#[path = "support/links.rs"]
+mod links;
+use links::symlink;
 use serde_json::Value;
 use skillranker::cli::ConfigFiles;
 use skillranker::config::{ConfigSources, PolicyBoundary, PolicyField, RawValue, Revalidation};
@@ -70,6 +71,9 @@ impl Drop for CliFixture {
 
 #[test]
 fn strict_flags_and_provenance() {
+    if !links::available() {
+        return;
+    }
     let f = CliFixture::new();
     let canary = "canary-secret-never-disclose-998877";
 
@@ -231,7 +235,7 @@ fn strict_flags_and_provenance() {
     std::fs::write(f.root.join("outside.toml"), "[ranking]\ntop=1\n").unwrap();
     let symlink_path = f.root.join("workspace/.sr/config.toml");
     let _ = std::fs::remove_file(&symlink_path);
-    std::os::unix::fs::symlink(f.root.join("outside.toml"), &symlink_path).unwrap();
+    symlink(f.root.join("outside.toml"), &symlink_path).unwrap();
     let out_symlink = f.run(&["doctor", "--config"], &[]);
     assert_eq!(out_symlink.status.code(), Some(2));
     let _ = std::fs::remove_file(&symlink_path);

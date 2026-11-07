@@ -1,4 +1,7 @@
 //! Real-file adversarial checks of the production Claude overlay boundary.
+#[path = "support/links.rs"]
+mod links;
+use links::symlink;
 use serde_json::json;
 use skillranker::adapter::{ClaudeUserPromptSubmit, UnknownFieldPolicy};
 use skillranker::context::overlay::{
@@ -940,17 +943,19 @@ fn prompt_identity_cannot_retype_an_assistant_event() {
     assert!(apply_claude_prompt_overlay(&req).is_err());
 }
 
-#[cfg(unix)]
 #[test]
 fn authorized_symlink_works_but_dangling_link_is_not_a_first_prompt() {
+    if !links::available() {
+        return;
+    }
     let mut req = request(&[event("a", None)], "new");
     let root = req.authorized_root.as_ref().unwrap();
     let good = root.join("good-link");
-    std::os::unix::fs::symlink("session.jsonl", &good).unwrap();
+    symlink("session.jsonl", &good).unwrap();
     req.transcript_path = Some(good);
     assert!(apply_claude_prompt_overlay(&req).is_ok());
     let bad = root.join("dangling-link");
-    std::os::unix::fs::symlink("missing.jsonl", &bad).unwrap();
+    symlink("missing.jsonl", &bad).unwrap();
     req.transcript_path = Some(bad);
     assert!(apply_claude_prompt_overlay(&req).is_err());
 }

@@ -390,51 +390,11 @@ reason = "subprocess"
 issue = "sr-winpar.11"
 
 [[gate]]
-file = "tests/cli_config.rs"
-item = "project_symlink_escape_is_refused"
-gate = "cfg(unix)"
-reason = "unix-fixture"
-issue = "sr-winpar.25"
-note = "symlink, FIFO or directory fixtures"
-
-[[gate]]
-file = "tests/cli_contract.rs"
-item = "*"
-gate = "cfg(unix)"
-reason = "unix-fixture"
-issue = "sr-winpar.25"
-note = "symlink fixtures"
-
-[[gate]]
 file = "tests/context_contract.rs"
 item = "cass_adapter"
 gate = "cfg(unix)"
 reason = "subprocess"
 issue = "sr-winpar.11"
-
-[[gate]]
-file = "tests/context_contract.rs"
-item = "claude_prompt_overlay"
-gate = "cfg(unix)"
-reason = "unix-fixture"
-issue = "sr-winpar.25"
-note = "symlink, FIFO or directory fixtures"
-
-[[gate]]
-file = "tests/context_contract.rs"
-item = "claude_prompt_overlay_missing_parent_keeps_authority_failures"
-gate = "cfg(unix)"
-reason = "unix-fixture"
-issue = "sr-winpar.25"
-note = "symlink, FIFO or directory fixtures"
-
-[[gate]]
-file = "tests/context_overlay_safety.rs"
-item = "authorized_symlink_works_but_dangling_link_is_not_a_first_prompt"
-gate = "cfg(unix)"
-reason = "unix-fixture"
-issue = "sr-winpar.25"
-note = "symlink, FIFO or directory fixtures"
 
 [[gate]]
 file = "tests/coordination_contract.rs"
@@ -459,14 +419,6 @@ gate = "cfg(unix)"
 reason = "private-storage"
 issue = "sr-winpar.3"
 also = ["sr-winpar.4", "sr-winpar.11"]
-
-[[gate]]
-file = "tests/eval_cli_contract.rs"
-item = "eval_rejects_nonregular_datasets_without_waiting_for_a_writer"
-gate = "cfg(unix)"
-reason = "unix-fixture"
-issue = "sr-winpar.25"
-note = "symlink, FIFO or directory fixtures"
 
 [[gate]]
 file = "tests/explicit_judgment_contract.rs"
@@ -512,14 +464,6 @@ gate = "cfg(unix)"
 reason = "hook-suite"
 issue = "sr-winpar.17"
 also = ["sr-winpar.7"]
-
-[[gate]]
-file = "tests/jsonl_snapshot.rs"
-item = "symlink_and_directory_are_rejected_before_open"
-gate = "cfg(unix)"
-reason = "unix-fixture"
-issue = "sr-winpar.25"
-note = "symlink, FIFO or directory fixtures"
 
 [[gate]]
 file = "tests/learning_contract.rs"
@@ -606,14 +550,6 @@ reason = "private-storage"
 issue = "sr-winpar.4"
 
 [[gate]]
-file = "tests/normalized_roster_roots.rs"
-item = "*"
-gate = "cfg(any(target_os = \"linux\", target_os = \"macos\"))"
-reason = "unix-fixture"
-issue = "sr-winpar.25"
-note = "symlink fixtures"
-
-[[gate]]
 file = "tests/observation_contract.rs"
 item = "*"
 gate = "cfg(unix)"
@@ -635,14 +571,6 @@ gate = "cfg(unix)"
 reason = "private-storage"
 issue = "sr-winpar.4"
 note = "owner-only refusal diagnostics"
-
-[[gate]]
-file = "tests/p2_gate.rs"
-item = "*"
-gate = "cfg(any(target_os = \"linux\", target_os = \"macos\"))"
-reason = "unix-fixture"
-issue = "sr-winpar.25"
-note = "symlink fixtures"
 
 [[gate]]
 file = "tests/p3_gate.rs"
@@ -701,31 +629,6 @@ item = "*"
 gate = "cfg(unix)"
 reason = "private-storage"
 issue = "sr-winpar.3"
-
-[[gate]]
-file = "tests/rank_discovery_gaps.rs"
-item = "*"
-gate = "cfg(unix)"
-reason = "unix-fixture"
-issue = "sr-winpar.25"
-note = "symlink and FIFO fixtures"
-
-[[gate]]
-file = "tests/rank_inputs.rs"
-item = "*"
-gate = "cfg(unix)"
-reason = "unix-fixture"
-issue = "sr-winpar.25"
-also = ["sr-winpar.11"]
-note = "symlink and FIFO fixtures"
-
-[[gate]]
-file = "tests/rank_partial_roster.rs"
-item = "*"
-gate = "cfg(unix)"
-reason = "unix-fixture"
-issue = "sr-winpar.25"
-note = "symlink and FIFO fixtures"
 
 [[gate]]
 file = "tests/rank_pipeline.rs"
@@ -976,4 +879,18 @@ item = "*"
 gate = "cfg(unix)"
 reason = "private-storage"
 issue = "sr-winpar.4"
+
+[[gate]]
+file = "tests/rank_discovery_gaps.rs"
+item = "a_fifo_personal_override_is_not_silently_treated_as_absent"
+gate = "cfg(unix)"
+reason = "unix-fixture"
+issue = "permanent: Windows has no FIFO or device special files; its non-regular names (reserved devices, streams) are refused in tests/windows_platform.rs and tests/authorized_read_windows.rs"
+
+[[gate]]
+file = "tests/rank_inputs.rs"
+item = "explicit_roster_files_are_bounded_regular_files"
+gate = "cfg(unix)"
+reason = "unix-fixture"
+issue = "permanent: Windows has no FIFO or device special files; its non-regular names (reserved devices, streams) are refused in tests/windows_platform.rs and tests/authorized_read_windows.rs"
 

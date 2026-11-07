@@ -1,8 +1,10 @@
-#![cfg(unix)]
 //! Real binary checks of how `sr rank` reads its inputs and derives its
 //! effects: bounded regular-file context and roster reads, the trusted context
 //! profile, and gate-derived source restrictions. No provider is contacted:
 //! every case runs offline or as a dry run.
+#[path = "support/links.rs"]
+mod links;
+use links::symlink;
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -77,14 +79,22 @@ impl Fixture {
         path
     }
     fn run(&self, args: &[&str]) -> Output {
-        Command::new(env!("CARGO_BIN_EXE_sr"))
+        let mut command = Command::new(env!("CARGO_BIN_EXE_sr"));
+        command
             .env_clear()
             .env("HOME", self.root.join("home"))
             .env("XDG_CONFIG_HOME", self.root.join("config"))
             .current_dir(self.workspace())
-            .args(args)
-            .output()
-            .unwrap()
+            .args(args);
+        // Every Windows process has these: sr finds Git under %ProgramFiles%
+        // (sr-winpar.10), and its children need SystemRoot.
+        #[cfg(windows)]
+        for name in ["ProgramFiles", "SystemRoot"] {
+            if let Some(value) = std::env::var_os(name) {
+                command.env(name, value);
+            }
+        }
+        command.output().unwrap()
     }
     fn error_kind(&self, args: &[&str]) -> (Option<i32>, String) {
         let output = self.run(args);
@@ -111,6 +121,9 @@ fn dry_run_request_bytes(output: &Output) -> u64 {
 
 #[test]
 fn context_files_are_bounded_regular_files() {
+    if !links::available() {
+        return;
+    }
     let f = Fixture::new();
     // Positive twin: an ordinary context file previews.
     f.context("context.json", "test result: FAILED");
@@ -121,18 +134,21 @@ fn context_files_are_bounded_regular_files() {
     std::fs::write(&big, vec![b' '; 1024 * 1024 + 1]).unwrap();
     let (code, kind) = f.error_kind(&["rank", "--context", "big.json", "--dry-run", "--json"]);
     assert_eq!((code, kind.as_str()), (Some(7), "oversized-input"));
-    // A FIFO is refused without blocking.
-    nix::unistd::mkfifo(
-        &f.workspace().join("fifo.json"),
-        nix::sys::stat::Mode::S_IRWXU,
-    )
-    .unwrap();
-    let (code, kind) = f.error_kind(&["rank", "--context", "fifo.json", "--dry-run", "--json"]);
-    assert_eq!((code, kind.as_str()), (Some(7), "unsupported-input"));
+    // A FIFO is refused without blocking (Windows has no FIFOs).
+    #[cfg(unix)]
+    {
+        nix::unistd::mkfifo(
+            &f.workspace().join("fifo.json"),
+            nix::sys::stat::Mode::S_IRWXU,
+        )
+        .unwrap();
+        let (code, kind) = f.error_kind(&["rank", "--context", "fifo.json", "--dry-run", "--json"]);
+        assert_eq!((code, kind.as_str()), (Some(7), "unsupported-input"));
+    }
     // A symlink leaving its directory is refused.
     let outside = f.root.join("outside.json");
     std::fs::copy(f.workspace().join("context.json"), &outside).unwrap();
-    std::os::unix::fs::symlink(&outside, f.workspace().join("link.json")).unwrap();
+    symlink(&outside, f.workspace().join("link.json")).unwrap();
     let (code, kind) = f.error_kind(&["rank", "--context", "link.json", "--dry-run", "--json"]);
     assert_eq!((code, kind.as_str()), (Some(7), "unsupported-input"));
     let text = String::from_utf8_lossy(
@@ -146,6 +162,8 @@ fn context_files_are_bounded_regular_files() {
     );
 }
 
+// Windows has no FIFOs.
+#[cfg(unix)]
 #[test]
 fn explicit_roster_files_are_bounded_regular_files() {
     let f = Fixture::new();

@@ -9,6 +9,9 @@
 //!   network-free disclosure preflight, and scores baselines from the same answers.
 //! - `--labels` scores a labeled case frame; `--sample-size`/`--seed` freeze a sample first.
 
+#[path = "support/links.rs"]
+mod links;
+use links::symlink;
 use serde_json::Value;
 use std::fs;
 use std::path::PathBuf;
@@ -265,26 +268,33 @@ fn a_live_batch_needs_labels_consent_a_cap_and_a_key_before_reading_input() {
     assert_eq!(out.status.code(), Some(0), "{out:?}");
 }
 
-#[cfg(unix)]
 #[test]
 fn eval_rejects_nonregular_datasets_without_waiting_for_a_writer() {
+    if !links::available() {
+        return;
+    }
     let root = temp_root();
-    let fifo = root.join("workspace/dataset.fifo");
-    nix::unistd::mkfifo(
-        &fifo,
-        nix::sys::stat::Mode::S_IRUSR | nix::sys::stat::Mode::S_IWUSR,
-    )
-    .expect("create real FIFO without a writer");
     let escaped = root.join("outside.jsonl");
     fs::write(&escaped, make_replay_case_json()).unwrap();
     let link = root.join("workspace/escape.jsonl");
-    std::os::unix::fs::symlink(&escaped, &link).unwrap();
-    for dataset in [
-        &fifo,
-        &root.join("workspace"),
-        &PathBuf::from("/dev/null"),
-        &link,
-    ] {
+    symlink(&escaped, &link).unwrap();
+    let mut datasets = vec![root.join("workspace"), link];
+    // A FIFO without a writer and the null device: Unix has both, Windows
+    // has no FIFOs and names its null device NUL.
+    #[cfg(unix)]
+    {
+        let fifo = root.join("workspace/dataset.fifo");
+        nix::unistd::mkfifo(
+            &fifo,
+            nix::sys::stat::Mode::S_IRUSR | nix::sys::stat::Mode::S_IWUSR,
+        )
+        .expect("create real FIFO without a writer");
+        datasets.push(fifo);
+        datasets.push(PathBuf::from("/dev/null"));
+    }
+    #[cfg(windows)]
+    datasets.push(PathBuf::from("NUL"));
+    for dataset in &datasets {
         let out = run_sr(
             &root,
             &["eval", "--dataset", dataset.to_str().unwrap(), "--json"],

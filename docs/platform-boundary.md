@@ -130,6 +130,11 @@ discovery-scope proofs, roster import, transcript snapshots and session
 discovery use the same primitives. Locks for hook installation and snoozes use
 `File::try_lock` (`LockFileEx`).
 
+A Claude transcript path with a `..` component is refused on Windows before
+anything is opened: Win32 resolves `..` lexically, even through a missing
+directory, so the Unix refusal (opening a missing parent fails) would not
+happen there.
+
 An absolute path or link target spelled with different case than its authorized
 root still matches it, but only by identity: its leading components must equal
 the root's ignoring case, and then that prefix is opened and must have the held

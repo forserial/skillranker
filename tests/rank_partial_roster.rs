@@ -1,8 +1,10 @@
-#![cfg(unix)]
 //! Production ranking over partial filesystem inventories. Only Jev transport
 //! is replaced: real discovery, reads, option maps, both codecs, eligibility,
 //! scoring and publication revalidation run. No provider is contacted.
 
+#[path = "support/links.rs"]
+mod links;
+use links::symlink;
 mod support;
 
 use asupersync::Cx;
@@ -23,7 +25,6 @@ use skillranker::roster::LocalPath;
 use skillranker::runtime::{EntryClock, ProcessInvocation};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
-use std::os::unix::fs::symlink;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -209,6 +210,7 @@ impl Fixture {
                     .set_len(DISCOVERY_PARSED_BYTES.max() as u64 + 1)
                     .unwrap();
             }
+            #[cfg(unix)]
             "fifo" => nix::unistd::mkfifo(&slot, nix::sys::stat::Mode::S_IRWXU).unwrap(),
             "directory" => fs::create_dir(&slot).unwrap(),
             _ => panic!("unexpected fixture kind"),
@@ -351,6 +353,8 @@ fn unchanged_discovery_gaps_allow_complete_two_stage_ranking() {
 #[test]
 fn invalid_personal_overrides_are_excluded_from_both_provider_stages() {
     for (kind, name) in [
+        // Windows has no FIFOs.
+        #[cfg(unix)]
         ("fifo", CANARY),
         ("directory", CANARY),
         ("oversized", CANARY),

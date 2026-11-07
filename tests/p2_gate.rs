@@ -1,11 +1,13 @@
-#![cfg(any(target_os = "linux", target_os = "macos"))]
 //! P2 acceptance gate: every eligible output of discovery, resolution and
 //! retrieval maps to a currently authorized local record. Each admitted option
 //! names a file inside a documented root whose present bytes hash to the
 //! recorded content. Manual-only records never become options, a malformed
 //! or escaping record leaves no eligible output at all, and a changed file is
 //! detected rather than reused.
+#[path = "support/links.rs"]
+mod links;
 use asupersync::Cx;
+use links::symlink;
 use skillranker::authorized_read::{AuthorizedRoot, AuthorizedRoots};
 use skillranker::identity::SkillId;
 use skillranker::limits::{DurationMillis, SKILL_FILE_BYTES};
@@ -105,7 +107,7 @@ impl Fixture {
         let target = write(&outside, "escape", "");
         let escape = self.project().join("aa-escape");
         fs::create_dir_all(&escape).unwrap();
-        std::os::unix::fs::symlink(&target, escape.join("SKILL.md")).unwrap();
+        symlink(&target, escape.join("SKILL.md")).unwrap();
         target
     }
     /// A malformed skill file sharing an invocation name with an existing project skill.
