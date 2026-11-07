@@ -1,3 +1,6 @@
+#[path = "support/links.rs"]
+mod links;
+use links::symlink;
 use skillranker::authorized_read::{AuthorizedRoot, AuthorizedRoots};
 use skillranker::identity::{LogicalSkillKey, SourceId};
 use skillranker::limits::{DurationMillis, SKILL_FILE_BYTES};
@@ -503,15 +506,17 @@ fn malformed_winner_withholds_its_name_but_unsupported_layout_claims_no_name() {
     assert!(runtime.shutdown());
 }
 
-#[cfg(unix)]
 #[test]
 fn read_failure_and_escaping_symlink_continue_and_scope_withholding() {
+    if !links::available() {
+        return;
+    }
     let root = tree();
     let outside = tree();
     write(&outside, "escaped.md", "# Escaped\n\nbody");
     // Place escaping symlink alphabetically before valid candidate
     fs::create_dir_all(root.join(".claude/skills/aa-escape")).unwrap();
-    std::os::unix::fs::symlink(
+    symlink(
         outside.join("escaped.md"),
         root.join(".claude/skills/aa-escape/SKILL.md"),
     )
@@ -620,10 +625,11 @@ fn mixed_contracts_are_ambiguous_and_unverified_singletons_stay_unverified() {
     assert!(runtime.shutdown());
 }
 
-#[cfg(unix)]
 #[test]
 fn authorized_file_symlink_deduplicates_but_escape_withholds_authority() {
-    use std::os::unix::fs::symlink;
+    if !links::available() {
+        return;
+    }
     let root = tree();
     let outside = tree();
     let original = write(
@@ -794,10 +800,11 @@ fn concurrent_real_rosters_preserve_listing_at_choice_and_batch_boundaries() {
     }
 }
 
-#[cfg(unix)]
 #[test]
 fn concurrent_rejections_and_aliases_preserve_safe_shadowing_and_positives() {
-    use std::os::unix::fs::symlink;
+    if !links::available() {
+        return;
+    }
     let root = tree();
     let home = tree();
     let outside = tree();

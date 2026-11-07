@@ -3,6 +3,9 @@
 // Part of this suite needs Unix fixtures; those tests and their helpers are gated.
 #![cfg_attr(not(unix), allow(unused_imports, dead_code))]
 
+#[path = "support/links.rs"]
+mod links;
+use links::symlink;
 use skillranker::limits::{
     DISCOVERY_FILES, DISCOVERY_PARSED_BYTES, DurationMillis, SKILL_FILE_BYTES,
 };
@@ -15,8 +18,6 @@ use skillranker::roster::{InvocationKind, Visibility};
 use skillranker::runtime::{EntryClock, ProcessInvocation};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
-#[cfg(unix)]
-use std::os::unix::fs::symlink;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -111,9 +112,11 @@ fn assert_withheld(roster: &ResolvedRoster, name: &str) {
     }
 }
 
-#[cfg(unix)]
 #[test]
 fn unrelated_symlink_preserves_three_skills_ids_and_option_authority() {
+    if !links::available() {
+        return;
+    }
     let workspace = tree();
     let home = tree();
     let outside = tree();
@@ -160,9 +163,11 @@ fn unrelated_symlink_preserves_three_skills_ids_and_option_authority() {
     );
 }
 
-#[cfg(unix)]
 #[test]
 fn skipped_directory_and_dangling_skill_link_withhold_only_their_names() {
+    if !links::available() {
+        return;
+    }
     let workspace = tree();
     let home = tree();
     let outside = tree();
@@ -354,9 +359,11 @@ fn exhausted_parse_budget_does_not_revoke_already_parsed_names() {
     assert!(roster.is_partial());
 }
 
-#[cfg(unix)]
 #[test]
 fn recovery_preserves_precedence_manual_only_and_authorized_file_aliases() {
+    if !links::available() {
+        return;
+    }
     let workspace = tree();
     let home = tree();
     let outside = tree();
@@ -393,9 +400,11 @@ fn recovery_preserves_precedence_manual_only_and_authorized_file_aliases() {
     assert_eq!(resolve(&plan).advisory().count(), 0); // A proof never upgrades visibility.
 }
 
-#[cfg(unix)]
 #[test]
 fn same_diagnostic_count_cannot_hide_a_new_competitor_at_publication() {
+    if !links::available() {
+        return;
+    }
     let workspace = tree();
     let home = tree();
     let outside = tree();

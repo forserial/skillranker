@@ -795,17 +795,9 @@ issue = "sr-winpar.4"
 file = "tests/roster_cli.rs"
 item = "configured_project_and_user_roots_reach_roster_doctor_and_snapshot"
 gate = "cfg(unix)"
-reason = "unix-fixture"
-issue = "sr-winpar.25"
-note = "symlink, FIFO or directory fixtures"
-
-[[gate]]
-file = "tests/roster_cli.rs"
-item = "project_root_symlink_cannot_grant_external_reads_but_contained_root_works"
-gate = "cfg(unix)"
-reason = "unix-fixture"
-issue = "sr-winpar.25"
-note = "symlink, FIFO or directory fixtures"
+reason = "private-storage"
+issue = "sr-winpar.6"
+note = "ends with roster --snapshot, an owner-only export Windows refuses until sr-winpar.6"
 
 [[gate]]
 file = "tests/roster_contract.rs"
@@ -832,65 +824,8 @@ issue = "permanent: RLIMIT_NOFILE descriptor limits are a Unix mechanism"
 file = "tests/roster_discovery.rs"
 item = "discovery_is_independent_of_another_reader_of_the_pinned_root"
 gate = "cfg(unix)"
-reason = "unix-fixture"
-issue = "sr-winpar.25"
-note = "symlink, FIFO or directory fixtures"
-
-[[gate]]
-file = "tests/roster_discovery.rs"
-item = "symlinked_directories_are_skipped_and_symlinked_skill_files_are_flagged"
-gate = "cfg(unix)"
-reason = "unix-fixture"
-issue = "sr-winpar.25"
-note = "symlink, FIFO or directory fixtures"
-
-[[gate]]
-file = "tests/roster_discovery_gaps.rs"
-item = "recovery_preserves_precedence_manual_only_and_authorized_file_aliases"
-gate = "cfg(unix)"
-reason = "unix-fixture"
-issue = "sr-winpar.25"
-note = "symlink, FIFO or directory fixtures"
-
-[[gate]]
-file = "tests/roster_discovery_gaps.rs"
-item = "same_diagnostic_count_cannot_hide_a_new_competitor_at_publication"
-gate = "cfg(unix)"
-reason = "unix-fixture"
-issue = "sr-winpar.25"
-note = "symlink, FIFO or directory fixtures"
-
-[[gate]]
-file = "tests/roster_discovery_gaps.rs"
-item = "skipped_directory_and_dangling_skill_link_withhold_only_their_names"
-gate = "cfg(unix)"
-reason = "unix-fixture"
-issue = "sr-winpar.25"
-note = "symlink, FIFO or directory fixtures"
-
-[[gate]]
-file = "tests/roster_discovery_gaps.rs"
-item = "unrelated_symlink_preserves_three_skills_ids_and_option_authority"
-gate = "cfg(unix)"
-reason = "unix-fixture"
-issue = "sr-winpar.25"
-note = "symlink, FIFO or directory fixtures"
-
-[[gate]]
-file = "tests/roster_import.rs"
-item = "escaped_and_unauthorized_paths_are_refused"
-gate = "cfg(unix)"
-reason = "unix-fixture"
-issue = "sr-winpar.25"
-note = "symlink, FIFO or directory fixtures"
-
-[[gate]]
-file = "tests/roster_import.rs"
-item = "importing_a_roster_mutates_nothing"
-gate = "cfg(unix)"
-reason = "unix-fixture"
-issue = "sr-winpar.25"
-note = "symlink, FIFO or directory fixtures"
+reason = "unix-only"
+issue = "permanent: shares a nix::dir stream on the pinned root's raw descriptor, a Unix descriptor mechanism; Windows walks held handles"
 
 [[gate]]
 file = "tests/roster_import.rs"
@@ -898,38 +833,6 @@ item = "roster_file_reads_are_bounded_regular_files"
 gate = "cfg(unix)"
 reason = "unix-fixture"
 issue = "permanent: Windows has no FIFO or device special files; its non-regular names (reserved devices, streams) are refused in tests/windows_platform.rs and tests/authorized_read_windows.rs"
-
-[[gate]]
-file = "tests/roster_rejections.rs"
-item = "nonregular_personal_slots_cannot_promote_the_project_definition"
-gate = "cfg(unix)"
-reason = "unix-fixture"
-issue = "sr-winpar.25"
-note = "symlink, FIFO or directory fixtures"
-
-[[gate]]
-file = "tests/roster_resolution.rs"
-item = "authorized_file_symlink_deduplicates_but_escape_withholds_authority"
-gate = "cfg(unix)"
-reason = "unix-fixture"
-issue = "sr-winpar.25"
-note = "symlink, FIFO or directory fixtures"
-
-[[gate]]
-file = "tests/roster_resolution.rs"
-item = "concurrent_rejections_and_aliases_preserve_safe_shadowing_and_positives"
-gate = "cfg(unix)"
-reason = "unix-fixture"
-issue = "sr-winpar.25"
-note = "symlink, FIFO or directory fixtures"
-
-[[gate]]
-file = "tests/roster_resolution.rs"
-item = "read_failure_and_escaping_symlink_continue_and_scope_withholding"
-gate = "cfg(unix)"
-reason = "unix-fixture"
-issue = "sr-winpar.25"
-note = "symlink, FIFO or directory fixtures"
 
 [[gate]]
 file = "tests/roster_snapshot.rs"

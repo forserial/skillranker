@@ -1,5 +1,8 @@
 // Part of this suite needs Unix fixtures; those tests and their helpers are gated.
 #![cfg_attr(not(unix), allow(unused_imports, dead_code))]
+#[path = "support/links.rs"]
+mod links;
+use links::symlink;
 use serde_json::{Value, json};
 use skillranker::identity::{ContentHash, HarnessId};
 use skillranker::limits::{DurationMillis, EXPLICIT_ROSTER_JSON_BYTES, EXPLICIT_ROSTER_RECORDS};
@@ -13,8 +16,6 @@ use skillranker::roster::{InvocationKind, InvocationRestrictions, Visibility};
 use skillranker::runtime::{EntryClock, ProcessInvocation};
 use std::collections::BTreeMap;
 use std::fs;
-#[cfg(unix)]
-use std::os::unix::fs::symlink;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -189,9 +190,11 @@ fn verified_inventory_replaces_discovery_with_discovery_identities() {
     assert_eq!(empty.skills().len(), 0);
 }
 
-#[cfg(unix)]
 #[test]
 fn escaped_and_unauthorized_paths_are_refused() {
+    if !links::available() {
+        return;
+    }
     let f = Fixture::new();
     f.user("deploy/SKILL.md", &skill("deploy", ""));
     let outside = tree();
@@ -204,9 +207,13 @@ fn escaped_and_unauthorized_paths_are_refused() {
         f.project_root().join("linked"),
     )
     .unwrap();
-    let fifo = f.project_root().join("fifo");
-    fs::create_dir_all(&fifo).unwrap();
-    nix::unistd::mkfifo(&fifo.join("SKILL.md"), nix::sys::stat::Mode::S_IRWXU).unwrap();
+    // Windows has no FIFOs; the other non-regular and escaping cases remain.
+    #[cfg(unix)]
+    {
+        let fifo = f.project_root().join("fifo");
+        fs::create_dir_all(&fifo).unwrap();
+        nix::unistd::mkfifo(&fifo.join("SKILL.md"), nix::sys::stat::Mode::S_IRWXU).unwrap();
+    }
     // A symlinked skill *file* into another authorized root stays loadable.
     let alias = f.project_root().join("alias");
     fs::create_dir_all(&alias).unwrap();
@@ -229,14 +236,16 @@ fn escaped_and_unauthorized_paths_are_refused() {
             (0, RecordProblem::InvalidPath),
         );
     }
-    let cases = [
+    #[cfg_attr(not(unix), allow(unused_mut))]
+    let mut cases = vec![
         ("evil/SKILL.md", RecordProblem::EscapesAuthorizedRoots),
         ("linked/SKILL.md", RecordProblem::UnsupportedLayout),
-        ("fifo/SKILL.md", RecordProblem::NotRegularFile),
         ("ghost/SKILL.md", RecordProblem::Missing),
         ("deep/nested/SKILL.md", RecordProblem::UnsupportedLayout),
         ("review/README.md", RecordProblem::UnsupportedLayout),
     ];
+    #[cfg(unix)]
+    cases.push(("fifo/SKILL.md", RecordProblem::NotRegularFile));
     for (path, expected) in cases {
         let manifest = files(json!([
             record(USER, "deploy/SKILL.md"),
@@ -661,12 +670,13 @@ fn cancellation_stops_import_before_reading() {
     assert_eq!(error.kind(), None);
 }
 
-#[cfg(unix)]
-/// Every path under `root` with its type, size, mode, modification time and
-/// bytes. Access times are excluded: reading may update them.
+/// Every path under `root` with its type, size, mode (Windows: attributes),
+/// modification time and bytes. Access times are excluded: reading may update them.
 fn tree_state(root: &Path) -> BTreeMap<PathBuf, (u32, u64, i64, i64, ContentHash)> {
     #[cfg(unix)]
     use std::os::unix::fs::MetadataExt;
+    #[cfg(windows)]
+    use std::os::windows::fs::MetadataExt;
     let mut state = BTreeMap::new();
     let mut pending = vec![root.to_path_buf()];
     while let Some(path) = pending.pop() {
@@ -684,10 +694,19 @@ fn tree_state(root: &Path) -> BTreeMap<PathBuf, (u32, u64, i64, i64, ContentHash
         state.insert(
             path.strip_prefix(root).unwrap().to_path_buf(),
             (
+                #[cfg(unix)]
                 meta.mode(),
+                #[cfg(windows)]
+                meta.file_attributes(),
                 meta.len(),
+                #[cfg(unix)]
                 meta.mtime(),
+                #[cfg(windows)]
+                i64::try_from(meta.last_write_time()).unwrap(),
+                #[cfg(unix)]
                 meta.mtime_nsec(),
+                #[cfg(windows)]
+                0,
                 ContentHash::from_bytes(&bytes),
             ),
         );
@@ -695,9 +714,11 @@ fn tree_state(root: &Path) -> BTreeMap<PathBuf, (u32, u64, i64, i64, ContentHash
     state
 }
 
-#[cfg(unix)]
 #[test]
 fn importing_a_roster_mutates_nothing() {
+    if !links::available() {
+        return;
+    }
     let f = Fixture::new();
     f.project("review/SKILL.md", &skill("review", ""));
     f.user("deploy/SKILL.md", &skill("deploy", ""));

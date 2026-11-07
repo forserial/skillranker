@@ -8,6 +8,9 @@
 //! elevated token on Windows; `available()` lets a case skip with that reason
 //! instead of failing, as tests/windows_platform.rs does.
 
+// Each including test uses only some of these helpers.
+#![allow(dead_code)]
+
 use std::io;
 use std::path::Path;
 

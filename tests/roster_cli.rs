@@ -2,6 +2,9 @@
 //! and clean streams, over actual skill trees.
 // Part of this suite needs Unix fixtures; those tests and their helpers are gated.
 #![cfg_attr(not(unix), allow(unused_imports, dead_code))]
+#[path = "support/links.rs"]
+mod links;
+use links::symlink;
 use serde_json::Value;
 use std::collections::BTreeSet;
 use std::path::PathBuf;
@@ -332,10 +335,11 @@ fn configured_project_and_user_roots_reach_roster_doctor_and_snapshot() {
     assert_eq!(comparison.status.code(), Some(0));
 }
 
-#[cfg(unix)]
 #[test]
 fn project_root_symlink_cannot_grant_external_reads_but_contained_root_works() {
-    use std::os::unix::fs::symlink;
+    if !links::available() {
+        return;
+    }
     let f = Fixture::new();
     custom_skill(&f, "external", "must-not-be-read");
     custom_skill(&f, "workspace/inside", "allowed");

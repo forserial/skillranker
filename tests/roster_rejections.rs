@@ -1,6 +1,9 @@
 //! Metadata rejections must not consume useful candidates' read allowance or
 //! let a broken higher-priority slot promote the lower-priority definition.
 
+#[path = "support/links.rs"]
+mod links;
+use links::symlink;
 use skillranker::identity::{HarnessId, SourceId};
 use skillranker::limits::{
     DISCOVERY_FILES, DISCOVERY_PARSED_BYTES, DurationMillis, LimitUnit, ResourceLimit,
@@ -18,8 +21,6 @@ use skillranker::roster::{InvocationKind, Visibility};
 use skillranker::runtime::{EntryClock, ProcessInvocation};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
-#[cfg(unix)]
-use std::os::unix::fs::symlink;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -178,10 +179,17 @@ fn many_oversized_files_do_not_accumulate_a_fictitious_read_budget() {
     );
 }
 
-#[cfg(unix)]
 #[test]
 fn nonregular_personal_slots_cannot_promote_the_project_definition() {
-    for kind in ["fifo", "directory", "linked-fifo", "linked-directory"] {
+    if !links::available() {
+        return;
+    }
+    // Windows has no FIFOs; its other non-regular slots are covered.
+    #[cfg(unix)]
+    let kinds = ["fifo", "directory", "linked-fifo", "linked-directory"];
+    #[cfg(not(unix))]
+    let kinds = ["directory", "linked-directory"];
+    for kind in kinds {
         let workspace = tree();
         let home = tree();
         let outside = tree();
@@ -190,8 +198,10 @@ fn nonregular_personal_slots_cannot_promote_the_project_definition() {
         let path = home.join(".claude/skills/blocked/SKILL.md");
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         match kind {
+            #[cfg(unix)]
             "fifo" => nix::unistd::mkfifo(&path, nix::sys::stat::Mode::S_IRWXU).unwrap(),
             "directory" => fs::create_dir(&path).unwrap(),
+            #[cfg(unix)]
             "linked-fifo" => {
                 let target = outside.join("fifo");
                 nix::unistd::mkfifo(&target, nix::sys::stat::Mode::S_IRWXU).unwrap();

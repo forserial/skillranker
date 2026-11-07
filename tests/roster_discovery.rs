@@ -1,3 +1,6 @@
+#[path = "support/links.rs"]
+mod links;
+use links::symlink;
 use skillranker::identity::{HarnessId, SourceId};
 use skillranker::limits::{DISCOVERY_FILES, DISCOVERY_PARSED_BYTES, LimitUnit, MIB, ResourceLimit};
 use skillranker::roster::Visibility;
@@ -360,17 +363,18 @@ fn deep_trees_stop_at_the_depth_bound() {
     );
 }
 
-#[cfg(unix)]
 #[test]
 fn symlinked_directories_are_skipped_and_symlinked_skill_files_are_flagged() {
+    if !links::available() {
+        return;
+    }
     let tree = temp_tree("links");
     let outside = temp_tree("links-outside");
     write(&tree.join("real/SKILL.md"), "real");
     write(&outside.join("target/SKILL.md"), "outside");
-    std::os::unix::fs::symlink(outside.join("target"), tree.join("linked-dir")).expect("dir link");
+    symlink(outside.join("target"), tree.join("linked-dir")).expect("dir link");
     fs::create_dir_all(tree.join("linked")).expect("link parent");
-    std::os::unix::fs::symlink(tree.join("real/SKILL.md"), tree.join("linked/SKILL.md"))
-        .expect("file link");
+    symlink(tree.join("real/SKILL.md"), tree.join("linked/SKILL.md")).expect("file link");
 
     let plan = plan_with(vec![(
         spec("configured.links", SourceKind::Generic, 10),
