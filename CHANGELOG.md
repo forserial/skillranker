@@ -32,6 +32,12 @@
 
 ### Fixed
 
+- `scripts/validate_public_contracts.py` and `tests/platform_boundary_contract.py`
+  run on Windows. The validator checks shell examples with Git for Windows' bash
+  (never the System32 WSL launcher) and pipes them as bytes, and reports a
+  missing bash by name instead of "invalid documentation input". The platform
+  probe writes `#[path]` attributes as Rust raw strings, which also keeps
+  non-ASCII paths valid.
 - Shadow-mode hooks no longer spend provider requests when nothing can be
   recorded. With `--no-ledger`, `--no-persist`, or a ledger that is missing,
   read-only or cannot be opened (always, on Windows), `sr hook claude` in shadow

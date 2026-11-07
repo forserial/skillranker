@@ -11,8 +11,10 @@ import argparse
 import hashlib
 import json
 import math
+import os
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import sys
 import tomllib
@@ -67,6 +69,23 @@ def shape(value: object) -> object:
     return type(value).__name__
 
 
+def shell_checker() -> tuple[str, dict[str, str]]:
+    """Bash and a minimal environment for `bash -n`.
+
+    On Windows this is Git for Windows' own bash, found beside `git`; the
+    System32 `bash.exe` would start WSL instead. The environment stays minimal
+    there too, so BASH_ENV and exported functions cannot run during -n.
+    """
+    if os.name != "nt":
+        return "/bin/bash", {"PATH": "/usr/bin:/bin", "LC_ALL": "C"}
+    git = shutil.which("git")
+    for parent in Path(git).resolve().parents if git else ():
+        bash = parent / "usr" / "bin" / "bash.exe"
+        if bash.is_file():
+            return str(bash), {"LC_ALL": "C"}
+    raise InvalidDocument("shell examples need Git for Windows' bash (usr/bin/bash.exe beside git)")
+
+
 def anchors(text: str) -> set[str]:
     """GitHub heading IDs for the ordinary Markdown headings used in this repo."""
     found: set[str] = set()
@@ -89,6 +108,7 @@ def validate(root: Path) -> dict[str, object]:
     inputs: dict[str, str] = {}
     examples: dict[str, list[dict[str, object]]] = {}
     texts: dict[str, str] = {}
+    bash: tuple[str, dict[str, str]] | None = None
 
     def read(relative: str) -> str:
         raw = (root / relative).read_bytes()
@@ -102,6 +122,8 @@ def validate(root: Path) -> dict[str, object]:
         for block in FENCE.finditer(text):
             language, body = block[1].strip(), block[2]
             location = f"{name}:{text[:block.start()].count(chr(10)) + 1}"
+            if language in {"bash", "sh", "shell"} and bash is None:
+                bash = shell_checker()  # a missing bash is not a document error
             try:
                 if language == "json":
                     value = strict_json(body)
@@ -114,10 +136,12 @@ def validate(root: Path) -> dict[str, object]:
                 elif language in {"bash", "sh", "shell"}:
                     # --noprofile/--norc plus a minimal environment also prevents
                     # BASH_ENV and exported functions from running during -n.
+                    # Bytes, not text: Windows text pipes would turn \n into \r\n.
+                    assert bash is not None
                     result = subprocess.run(
-                        ["/bin/bash", "--noprofile", "--norc", "-n"],
-                        input=body, text=True, capture_output=True, timeout=5,
-                        env={"PATH": "/usr/bin:/bin", "LC_ALL": "C"}, check=False,
+                        [bash[0], "--noprofile", "--norc", "-n"],
+                        input=body.encode("utf-8"), capture_output=True, timeout=5,
+                        env=bash[1], check=False,
                     )
                     require(result.returncode == 0, "invalid shell syntax")
                     counts["shell_examples"] += 1

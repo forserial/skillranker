@@ -253,8 +253,14 @@ stopped at login on the evidence machine, after the hook had run. Live Jev
 ranking: no `TYPESAFE_API_KEY` was available, so every provider exchange used the
 loopback stub. Hook latency targets. Other Windows versions, ReFS, or a token
 without symlink rights. `ubs` was not available, so its gate did not run.
+
 `tests/platform_boundary_contract.py` and `scripts/validate_public_contracts.py`
-fail on Windows, identically on the unmodified tree, and pass on Linux.
+also pass on Windows (Python 3.14, where the launcher is `python` or `py`, not
+`python3`). The validator checks shell examples with Git for Windows' own
+`usr\bin\bash.exe`, found beside `git`, never the System32 `bash.exe` that
+starts WSL, and pipes them as bytes so Windows does not add carriage returns.
+Without Git for Windows it fails and says so. The probe driver writes its
+`#[path]` attributes as Rust raw strings, which hold Windows paths verbatim.
 
 #### Linux regression run
 

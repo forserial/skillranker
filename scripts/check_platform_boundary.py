@@ -74,6 +74,16 @@ def validate_resolved_lock(root_text: str, probe_text: str) -> None:
             raise ValueError(f"probe changed a locked dependency: {key}")
 
 
+def rust_path(path: Path) -> str:
+    """A Rust raw string holding the path verbatim, as check_native_storage_boundary
+    does: JSON escapes are not Rust escapes for non-ASCII text."""
+    text = str(path)
+    hashes = "#"
+    while f'"{hashes}' in text:
+        hashes += "#"
+    return f'r{hashes}"{text}"{hashes}'
+
+
 def prepare_probe(root: Path, destination: Path) -> str:
     manifest = tomllib.loads((root / "Cargo.toml").read_text())
     sqlite = manifest["dependencies"]["rusqlite"]
@@ -93,7 +103,7 @@ def prepare_probe(root: Path, destination: Path) -> str:
     modules = ['#![forbid(unsafe_code)]\n']
     for name in ("sqlite_engine", "platform_path"):
         path = (root / "src" / f"{name}.rs").resolve(strict=True)
-        modules.append(f'#[path = {json.dumps(str(path))}]\npub mod {name};\n')
+        modules.append(f'#[path = {rust_path(path)}]\npub mod {name};\n')
     modules.append(
         "pub fn normalized_path(path: std::path::PathBuf) -> std::path::PathBuf {\n"
         "    platform_path::storage_path(path)\n}\n"
