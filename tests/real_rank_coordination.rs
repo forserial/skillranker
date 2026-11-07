@@ -12,6 +12,11 @@
 //! 4. Completed lease with absent/partial cache: A completed lease with an absent or partial pair
 //!    in the store forces leadership reacquisition before evaluation.
 //! 5. `--no-cache`, `--no-persist`, and storage unavailable paths preserve documented behavior.
+//!
+//! Leases expire by wall clock. On a host that steps its clock forward during a run (WSL2 does,
+//! about 1.5 s every 30 s), a live leader's lease is cut short and cases 2 and 3 fail with the
+//! leader exiting 6. Run them on a host whose clock is not stepped; docs/platform-boundary.md
+//! records the measurement and what a step means in production (sr-winpar.18).
 
 use serde_json::{Value, json};
 use std::io::{BufRead, BufReader, Read};
@@ -131,7 +136,10 @@ impl Fixture {
         let ca = self.root.join("fixture-ca.pem");
         std::fs::write(&ca, include_bytes!("fixtures/jev-tls/ca.pem")).unwrap();
         let mut command = Command::new(env!("CARGO_BIN_EXE_sr"));
+        // Never the test runner's stdin: under a piped or redirected runner sr
+        // would see supplied input and refuse it without an input mode (sr-winpar.18).
         command
+            .stdin(Stdio::null())
             .env_clear()
             .env("HOME", self.root.join("home"))
             .env("XDG_CONFIG_HOME", self.root.join("config"))

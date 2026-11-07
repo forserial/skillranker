@@ -52,7 +52,10 @@ impl Home {
 
     fn command(&self, port: u16, args: &[&str]) -> Command {
         let mut command = Command::new(env!("CARGO_BIN_EXE_sr"));
+        // Never the test runner's stdin: under a piped or redirected runner sr
+        // would see supplied input and refuse it without an input mode (sr-winpar.18).
         command
+            .stdin(Stdio::null())
             .env_clear()
             .env("HOME", self.root.join("home"))
             .env("XDG_CONFIG_HOME", self.root.join("config"))

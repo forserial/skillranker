@@ -269,7 +269,27 @@ WSL2 (`openclaw`), the same toolchain, on the Linux filesystem: `cargo fmt --che
 pass. `cargo test --locked` ran 158 binaries: 1,794 passed, 10 failed, 11 ignored.
 The ten are multi-process provider tests in `allowance_contract`, `breaker_contract`,
 `rank_acceptance` and `real_rank_coordination`. They fail the same way on the
-unmodified tree in that distro, so they are not regressions, and their cause there
-was not diagnosed. `every_hand_written_cli_pair_matches_the_documented_mapping`,
+unmodified tree in that distro, so they are not regressions. sr-winpar.18 found
+the cause, and a second, intermittent sensitivity:
+
+- All ten spawned `sr` without setting its stdin, so it inherited the test runner's.
+  A runner started from a script or agent has a pipe there, and `sr` correctly
+  refuses supplied input without an explicit mode (exit 2, `stdin requires an
+  explicit input mode`), so the provider was never reached. From a terminal,
+  stdin is a TTY and they passed. Their command builders now give `sr` a null
+  stdin.
+- With stdin fixed, two coordination tests still fail intermittently:
+  `follower_nearing_deadline_while_leader_active_makes_zero_provider_attempts`
+  and `stale_leader_superseded_cannot_overwrite_newer_cache_or_complete_lease`
+  fail when the wall clock steps during the run. WSL2's guest clock runs about
+  5% slow and is stepped forward about 1.5 s every 30 s (measured: 4.5 s over
+  90 s). Coordination leases expire by wall clock (5 s TTL), so a step shortens
+  a live leader's lease: it is superseded and exits 6 instead of 0. Over 20
+  runs every failure coincided with a step of 1.48 to 1.56 s and every pass had
+  none. These tests need a host whose wall clock is not stepped while they run;
+  the same step on a production host makes a second process take over a live
+  lease and spend its own provider requests.
+
+`every_hand_written_cli_pair_matches_the_documented_mapping`,
 which failed before, now passes. Later edits were limited to `cfg(windows)` code and
 Windows-only tests, so this run was not repeated. It is not native macOS evidence.

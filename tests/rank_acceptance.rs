@@ -1358,7 +1358,10 @@ fn sr_rank(f: &Fixture, provider: &Provider, trust_fixture: bool) -> Command {
     let ca = f.root.join("fixture-ca.pem");
     std::fs::write(&ca, include_bytes!("fixtures/jev-tls/ca.pem")).unwrap();
     let mut command = Command::new(env!("CARGO_BIN_EXE_sr"));
+    // Never the test runner's stdin: under a piped or redirected runner sr
+    // would see supplied input and refuse it without an input mode (sr-winpar.18).
     command
+        .stdin(Stdio::null())
         .env_clear()
         .env("HOME", f.root.join("home"))
         .env("XDG_CONFIG_HOME", f.root.join("config"))
