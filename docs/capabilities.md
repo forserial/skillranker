@@ -35,7 +35,7 @@ is its single source:
 | --- | --- |
 | `os` | `std::env::consts::OS` of the build (`linux`, `macos`, `windows`) |
 | `boundaries` | `private-storage`, `owner-only-files`, `owned-subprocess` and `enforced-allowance`, each with `available` and a `reason` that is null exactly when available |
-| `components` | Each dependent component (`ledger`, `response-cache`, `cass-sessions`, ...), the boundary it `requires`, whether it is `available`, and what happens `when_unavailable` |
+| `components` | Each dependent component (`ledger`, `response-cache`, `cass-sessions`, ...), the boundary it `requires`, whether it is `available`, a `reason` that is null exactly when available (the boundary's, or "not yet ported" when the component waits on its own port after its boundary exists), and what happens `when_unavailable` |
 | `modes` | Each command, or command mode such as `budget --apply`, that depends on a component, with the same `available` and `when_unavailable` |
 
 `when_unavailable` is one of `refused` (typed error, nothing written),

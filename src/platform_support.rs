@@ -31,9 +31,15 @@ pub const PRIVATE_STORAGE: bool = cfg!(unix);
 /// Owner-only exports and private case reads (`storage::export`, `replay`).
 pub const OWNER_ONLY_FILES: bool = cfg!(unix);
 /// `subprocess::run` spawns children.
-pub const OWNED_SUBPROCESS: bool = cfg!(any(target_os = "linux", target_os = "macos"));
+pub const OWNED_SUBPROCESS: bool = cfg!(any(target_os = "linux", target_os = "macos", windows));
 /// `allowance` has its guard and accounting modules.
 pub const ENFORCED_ALLOWANCE: bool = cfg!(unix);
+
+/// Components can also wait on their own port after their boundary exists.
+/// cass sessions (`pipeline::cass_source`) run only on Unix; sr-winpar.11.
+pub const CASS_SESSIONS: bool = cfg!(unix);
+/// Git `dirty_paths` (`context::signals`) finds Git only on Unix; sr-winpar.10.
+pub const GIT_SIGNALS: bool = cfg!(unix);
 
 impl Boundary {
     pub const ALL: [Self; 4] = [
@@ -113,68 +119,101 @@ impl Fallback {
 pub struct Component {
     pub name: &'static str,
     pub requires: Boundary,
+    /// Whether the component itself is ported to this platform; `true` unless
+    /// it waits on its own work after the boundary exists.
+    pub implemented: bool,
     pub when_unavailable: Fallback,
+}
+
+impl Component {
+    pub const fn available(&self) -> bool {
+        self.requires.available() && self.implemented
+    }
+
+    /// Why the component is unavailable here, or `None` when it is available.
+    pub const fn unavailable_reason(&self) -> Option<&'static str> {
+        if let Some(reason) = self.requires.unavailable_reason() {
+            return Some(reason);
+        }
+        if self.implemented {
+            None
+        } else {
+            Some("this component is not yet ported to this platform")
+        }
+    }
 }
 
 pub const COMPONENTS: &[Component] = &[
     Component {
         name: "response-cache",
         requires: Boundary::PrivateStorage,
+        implemented: true,
         when_unavailable: Fallback::Skipped,
     },
     Component {
         name: "coordinator-leases",
         requires: Boundary::PrivateStorage,
+        implemented: true,
         when_unavailable: Fallback::Skipped,
     },
     Component {
         name: "provider-breaker-state",
         requires: Boundary::PrivateStorage,
+        implemented: true,
         when_unavailable: Fallback::Skipped,
     },
     Component {
         name: "ledger",
         requires: Boundary::PrivateStorage,
+        implemented: true,
         when_unavailable: Fallback::Refused,
     },
     Component {
         name: "hook-invocation-counter",
         requires: Boundary::PrivateStorage,
+        implemented: true,
         when_unavailable: Fallback::Skipped,
     },
     Component {
         name: "request-allowance",
         requires: Boundary::EnforcedAllowance,
+        implemented: true,
         when_unavailable: Fallback::Refused,
     },
     Component {
         name: "owner-only-exports",
         requires: Boundary::OwnerOnlyFiles,
+        implemented: true,
         when_unavailable: Fallback::Refused,
     },
     Component {
         name: "replay-case-read",
         requires: Boundary::OwnerOnlyFiles,
+        implemented: true,
         when_unavailable: Fallback::Refused,
     },
     Component {
         name: "installer-backups",
         requires: Boundary::OwnerOnlyFiles,
+        implemented: true,
         when_unavailable: Fallback::Unprotected,
     },
     Component {
         name: "policy-files",
         requires: Boundary::OwnerOnlyFiles,
+        implemented: true,
         when_unavailable: Fallback::Unprotected,
     },
     Component {
         name: "cass-sessions",
         requires: Boundary::OwnedSubprocess,
+        implemented: CASS_SESSIONS,
         when_unavailable: Fallback::Refused,
     },
     Component {
         name: "git-dirty-paths",
         requires: Boundary::OwnedSubprocess,
+        implemented: GIT_SIGNALS,
         when_unavailable: Fallback::Omitted,
     },
 ];

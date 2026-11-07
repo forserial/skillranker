@@ -1,16 +1,21 @@
-//! Owned Unix subprocesses with bounded nonblocking pipes and explicit authority.
+//! Owned subprocesses with bounded pipes and explicit authority.
 //!
 //! The caller must trust the executable, its arguments, and its local filesystem.
-//! Process groups contain cooperative descendants, not children that deliberately
-//! escape with setsid. Synchronous OS spawn and uninterruptible kernel I/O cannot
-//! be given a hard wall-time guarantee. Cancellation kills the group and reaps the
-//! direct child before return; no reader or reaper tasks are detached.
-// Off Linux/macOS `run` reports UnsupportedPlatform before spawning, so the
-// process machinery below is unreachable there.
+//! On Linux and macOS, process groups contain cooperative descendants, not
+//! children that deliberately escape with setsid; pipes are nonblocking. On
+//! Windows (`windows` module) a Job Object holds the tree and joined worker
+//! threads service blocking pipes. Synchronous OS spawn and uninterruptible
+//! kernel I/O cannot be given a hard wall-time guarantee. Cancellation kills the
+//! tree and reaps the direct child before return; no reader, writer or reaper
+//! outlives `run`.
+// Off Linux/macOS the Unix process machinery below is unreachable: Windows uses
+// its own module, and other targets report UnsupportedPlatform before spawning.
 #![cfg_attr(
     not(any(target_os = "linux", target_os = "macos")),
     allow(dead_code, unused_imports)
 )]
+#[cfg(windows)]
+mod windows;
 use crate::runtime::EntryClock;
 use asupersync::Cx;
 use asupersync::io::{AsyncRead, AsyncWrite, ReadBuf};
@@ -21,6 +26,9 @@ use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::task::{Context, Poll, Waker};
 use std::time::Duration;
+#[cfg(windows)]
+#[doc(hidden)]
+pub use windows::live_pipe_workers;
 
 pub const MAX_PIPE_BYTES: usize = 8 * 1024 * 1024;
 pub const MAX_ARGUMENT_BYTES: usize = 256 * 1024;
@@ -92,6 +100,12 @@ impl TrustedExecutable {
 /// Environment is empty by default. Only these non-routing scalar variables can
 /// be supplied: LANG, LC_ALL, TZ. PATH, HOME, loader, provider, proxy and Git
 /// configuration variables are not forwarded. Programs must use absolute argv.
+///
+/// Windows differences: the executable must be an `.exe` (no `.cmd` or `.bat`
+/// shims); the child also receives `SystemRoot`, without which Winsock cannot
+/// start; and `directory` must name `sr`'s current directory, because the
+/// exact-image spawn cannot set one. Pass another directory to the program
+/// itself (for example Git's `-C`), never through a shell.
 pub struct ChildRequest {
     pub executable: TrustedExecutable,
     pub args: Vec<OsString>,
@@ -193,9 +207,9 @@ fn read_pipe<R: AsyncRead + Unpin>(
 }
 
 // `platform_support::OWNED_SUBPROCESS` reports whether `run` spawns here.
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
 const _: () = assert!(crate::platform_support::OWNED_SUBPROCESS);
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
 const _: () = assert!(!crate::platform_support::OWNED_SUBPROCESS);
 
 /// Drives one owned child without detached workers. The returned future must be
@@ -207,7 +221,11 @@ pub async fn run(
     request: ChildRequest,
 ) -> Result<ChildOutput, SubprocessError> {
     request.validate()?;
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    #[cfg(windows)]
+    {
+        windows::run(cx, clock, request).await
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
     {
         let _ = (cx, clock);
         Err(SubprocessError::UnsupportedPlatform)

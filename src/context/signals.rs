@@ -154,6 +154,12 @@ fn omitted(error: SubprocessError) -> Omission {
     }
 }
 
+// `platform_support::GIT_SIGNALS` reports whether Git can be found here.
+#[cfg(unix)]
+const _: () = assert!(crate::platform_support::GIT_SIGNALS);
+#[cfg(not(unix))]
+const _: () = assert!(!crate::platform_support::GIT_SIGNALS);
+
 #[cfg(unix)]
 fn executable(path: &Path) -> bool {
     use std::os::unix::fs::PermissionsExt;

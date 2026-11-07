@@ -73,12 +73,15 @@ use std::sync::{Arc, Mutex};
 
 #[cfg(unix)]
 mod cass_source;
+// `platform_support::CASS_SESSIONS` reports which cass source this build has.
+#[cfg(unix)]
+const _: () = assert!(crate::platform_support::CASS_SESSIONS);
 /// cass is a Unix subprocess adapter; on other platforms `--session` is an
 /// unsupported source mode, reported before any process is started.
 #[cfg(not(unix))]
 mod cass_source {
-    // cass runs through `subprocess::run`; see `platform_support::OWNED_SUBPROCESS`.
-    const _: () = assert!(!crate::platform_support::OWNED_SUBPROCESS);
+    // See `platform_support::CASS_SESSIONS` (sr-winpar.11).
+    const _: () = assert!(!crate::platform_support::CASS_SESSIONS);
     use super::{PipelineFailure, failure};
     use crate::context::NormalizedContext;
     use crate::context::source::SourcePolicy;

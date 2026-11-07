@@ -219,7 +219,16 @@ fn platform_availability_is_complete_and_internally_consistent() {
             .iter()
             .find(|b| b["name"] == entry["requires"])
             .unwrap_or_else(|| panic!("unknown boundary in {entry}"));
-        assert_eq!(entry["available"], boundary["available"], "{entry}");
+        // A component needs its boundary, and may still wait on its own port.
+        if boundary["available"] == false {
+            assert_eq!(entry["available"], false, "{entry}");
+            assert_eq!(entry["reason"], boundary["reason"], "{entry}");
+        }
+        assert_eq!(
+            entry["reason"].is_null(),
+            entry["available"] == true,
+            "{entry}"
+        );
     }
 
     let modes = platform["modes"].as_array().unwrap();
@@ -250,9 +259,15 @@ fn platform_availability_is_complete_and_internally_consistent() {
 #[test]
 fn windows_reports_every_unqualified_boundary_as_unavailable() {
     let platform = &registry()["platform"];
+    // Owned subprocesses run on Windows (sr-winpar.9); storage does not yet.
     for boundary in platform["boundaries"].as_array().unwrap() {
-        assert_eq!(boundary["available"], false, "{boundary}");
-        assert!(boundary["reason"].is_string(), "{boundary}");
+        let ported = boundary["name"] == "owned-subprocess";
+        assert_eq!(boundary["available"], ported, "{boundary}");
+        assert_eq!(boundary["reason"].is_string(), !ported, "{boundary}");
+    }
+    // Their callers, cass (sr-winpar.11) and Git (sr-winpar.10), are not ported.
+    for component in platform["components"].as_array().unwrap() {
+        assert_eq!(component["available"], false, "{component}");
     }
     for mode in platform["modes"].as_array().unwrap() {
         assert_eq!(mode["available"], false, "{mode}");

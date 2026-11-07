@@ -195,7 +195,8 @@ pub fn platform_availability() -> Value {
             json!({
                 "name": entry.name,
                 "requires": entry.requires.name(),
-                "available": entry.requires.available(),
+                "available": entry.available(),
+                "reason": entry.unavailable_reason(),
                 "when_unavailable": entry.when_unavailable.name(),
             })
         })
@@ -205,7 +206,6 @@ pub fn platform_availability() -> Value {
         .map(|entry| {
             let available = component(entry.component)
                 .expect("every mode names a listed component")
-                .requires
                 .available();
             json!({
                 "command": entry.command,

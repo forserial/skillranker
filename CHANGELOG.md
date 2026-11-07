@@ -4,6 +4,13 @@
 
 ### Added
 
+- Windows runs owned subprocesses. `subprocess::run` spawns an exact `.exe` in a
+  kill-on-close Job Object through asupersync's `ExactImageCommand`, services its
+  blocking pipes on worker threads that are always joined before it returns, and
+  keeps the deadline, cancellation, output limits and exact environment (plus
+  `SystemRoot`). The child runs in `sr`'s current directory. cass sessions and Git
+  `dirty_paths` still wait on their own ports, and `sr capabilities --json` now
+  reports a component's own porting status separately from its boundary.
 - Windows builds. Ranking, roster discovery, Claude transcript and session reads
   run on Windows through a no-follow, handle-pinned file layer; components that
   need an owner-only private store (cache, ledger, enforced allowance, private

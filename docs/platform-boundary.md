@@ -99,7 +99,7 @@ owner-only private store fails closed instead of being emulated:
 | Hook invocation counter | Never written (it lives beside a ledger) |
 | Shadow-mode hooks | Skip ranking before any provider request, since nothing could be recorded; one stderr line says why. Advisory mode ranks and publishes |
 | Owner-only exports, roster snapshots and replay case files | Refused: Windows ACLs are not inspected, so owner-only access cannot be established |
-| cass sessions (`--session`), Git `dirty_paths` | Unsupported source mode / omitted signal: subprocesses are Linux/macOS only |
+| cass sessions (`--session`), Git `dirty_paths` | Unsupported source mode / omitted signal. The owned-subprocess boundary they need runs on Windows (see below); their callers are not ported yet (sr-winpar.11, sr-winpar.10) |
 | Hook installer backups, calibration policy files | Written without owner-only protection (sr-winpar.7 for backups) |
 | `sr gaps` without `--input` | Reads no ledger and reports zero events |
 
@@ -133,6 +133,39 @@ discovery use the same primitives. Locks for hook installation and snoozes use
 `HOME` remains authoritative when set. Windows normally sets only
 `USERPROFILE`, which Claude Code uses for `%USERPROFILE%\.claude`, so it is
 the fallback there; Unix still reads only `HOME`.
+
+### Owned subprocesses
+
+`subprocess::run` uses asupersync's `ExactImageCommand` on Windows: `CreateProcessW`
+gets the explicit `.exe` image (no `PATH` search, no `.cmd`/`.bat` shims, no
+shell), exactly the supplied environment, three private pipes and an explicit
+inheritable-handle list, and the child enters a kill-on-close Job Object
+atomically (Windows 10 / Server 2016 or newer). The job does not allow breakaway,
+so descendants stay in it.
+
+Windows anonymous pipes have no readiness wait, so one worker thread reads stdout,
+one reads stderr and one writes stdin; the async loop drains their channel and
+checks the deadline and cancellation every pass, as on Unix. When the direct child
+exits, the whole job is terminated, as the Unix path kills the process group. On
+every exit (success, limit, deadline, cancellation, or an early drop of the
+future) the job is terminated first, which closes every write end the tree held,
+so blocked reads end and a blocked stdin write fails; then every worker is joined
+before `run` returns. A test counts live workers, and a unit test proves `cleanup`
+waits for a slow one. If Windows refuses to terminate the job, `run` reports
+`Cleanup` without joining, because the join could then wait forever; the
+workers hold only pipe handles and end with the process. `sr` spawns processes
+only through this module, so no unrestricted `CreateProcess` can inherit the pipe
+handles in between.
+
+Two Windows rules for callers: the child receives `SystemRoot` in addition to
+the allowed `LANG`, `LC_ALL` and `TZ` (Winsock and parts of the C runtime fail
+without it; it carries no routing or credentials), and `directory` must name the
+current directory, because the exact-image spawn cannot set one. Another
+directory is passed to the program itself (Git's `-C`), never through a shell.
+`tests/subprocess_windows.rs` covers output, 512 KiB in both directions, the
+output limit, the deadline, cancellation, a grandchild holding the pipes,
+a child that never reads its input, the exact environment, and refusal of
+scripts, relative paths and other directories.
 
 ### Other Windows differences
 

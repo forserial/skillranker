@@ -1224,8 +1224,8 @@ note = "nested inside a gated file"
 file = "tests/subprocess_contract.rs"
 item = "*"
 gate = "cfg(any(target_os = \"linux\", target_os = \"macos\"))"
-reason = "subprocess"
-issue = "sr-winpar.9"
+reason = "platform-twin"
+issue = "permanent: Unix fixtures (/bin/sh, /bin/sleep, /proc); the Windows twin is tests/subprocess_windows.rs"
 
 [[gate]]
 file = "tests/subprocess_contract.rs"
