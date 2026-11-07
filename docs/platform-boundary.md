@@ -140,6 +140,21 @@ the fallback there; Unix still reads only `HOME`.
 
 Cross-compiled for `x86_64-pc-windows-gnu` (MinGW-w64): `cargo check` and
 `cargo clippy -- -D warnings` for the library and binary pass with no warnings.
-Linux `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings` pass.
-Windows tests (`--all-targets`) are not compiled: the existing suites use Unix
-fixtures (modes, symlinks, FIFOs) and are not yet gated per platform.
+Linux `cargo fmt --check` and `cargo clippy --all-targets -- -D warnings` pass.
+The full Linux suite ran 158 test binaries: 1,797 passed, 11 ignored, and one
+failed, `every_hand_written_cli_pair_matches_the_documented_mapping`, which fails
+identically at the pre-port base `ffff0c6` (an existing `8`/`oversized-input`
+pair in `src/cli.rs`).
+
+The MinGW release `sr.exe` was run under Wine 9.0: `--version`,
+`capabilities --json` and `demo --case useful --json` exit 0; `roster --json`
+discovers a project skill through the ported walk; `ledger status --json`
+exits 9 with `storage-failure` ("requires a qualified local filesystem"). Wine
+presents host symlinks as plain directories and cannot create junctions, so
+link refusal was not exercised there. (Cross-linking with MinGW on Linux needs
+a `libKernel32.a` alias for a dependency's capitalized import; MSVC is
+unaffected.)
+
+Not established: execution on real Windows, the Windows test suite (existing
+suites use Unix fixtures such as modes, symlinks and FIFOs and are not gated per
+platform), link/junction refusal, and the Claude Code hook end to end.
