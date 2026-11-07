@@ -130,6 +130,15 @@ discovery-scope proofs, roster import, transcript snapshots and session
 discovery use the same primitives. Locks for hook installation and snoozes use
 `File::try_lock` (`LockFileEx`).
 
+An absolute path or link target spelled with different case than its authorized
+root still matches it, but only by identity: its leading components must equal
+the root's ignoring case, and then that prefix is opened and must have the held
+root's volume serial and file index. Case folding only selects the candidate,
+because a directory can be case-sensitive: there `Root` and `root` are different
+directories, and the other spelling is refused. Each candidate costs one open, so
+the work is bounded by the number of roots, and any failure refuses the match.
+Unix still compares components exactly.
+
 `HOME` remains authoritative when set. Windows normally sets only
 `USERPROFILE`, which Claude Code uses for `%USERPROFILE%\.claude`, so it is
 the fallback there; Unix still reads only `HOME`.
@@ -225,8 +234,6 @@ can run out and report `Budget`, as on any loaded host.
   stdin and at most one chunk, publishes nothing, and ends with the process.
   AGENTS.md's no-detached-workers rule is relaxed for this one leaf, because
   cancelling it would need `unsafe` code the crate forbids.
-- Root matching compares path components case-sensitively. A link target spelled
-  with different case than its authorized root is refused, which fails closed.
 - `sr roster --snapshot` is refused along with other owner-only exports.
   `--diff` reads a saved snapshot, but Windows cannot write one.
 - A full storage port needs an audited owner-only ACL check and an admitted

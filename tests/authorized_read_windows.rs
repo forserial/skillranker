@@ -424,3 +424,85 @@ fn diagnostics_name_no_paths_or_targets() {
         assert!(!error.contains(private), "{error}");
     }
 }
+
+/// The same path with every letter after the drive upper-cased.
+fn other_case(path: &Path) -> PathBuf {
+    let text = path.to_str().expect("utf-8 temp path");
+    let (drive, rest) = text.split_at(2);
+    PathBuf::from(format!("{drive}{}", rest.to_uppercase()))
+}
+
+#[test]
+fn a_root_spelled_with_other_case_is_matched_by_its_identity() {
+    let tree = temp_tree("case");
+    write(&tree.join("sub").join("real.md"), "inside");
+    let upper = other_case(&tree);
+    assert_ne!(upper, tree);
+    // A junction (no privilege needed) whose stored target differs in case.
+    junction(&tree.join("linked"), &upper.join("sub"));
+    let roots = roots_of(&tree);
+    assert_eq!(read(&roots, "linked/real.md").unwrap().bytes(), b"inside");
+    // An absolute path spelled with other case reaches the same root.
+    assert_eq!(
+        roots
+            .read_absolute(&upper.join("SUB").join("REAL.MD"), SKILL_FILE_BYTES)
+            .unwrap()
+            .bytes(),
+        b"inside"
+    );
+}
+
+#[test]
+fn a_case_sensitive_directory_never_matches_the_other_spelling() {
+    let tree = temp_tree("casesensitive");
+    let sensitive = tree.join("cs");
+    fs::create_dir(&sensitive).unwrap();
+    let enabled = Command::new("fsutil")
+        .args(["file", "setCaseSensitiveInfo"])
+        .arg(&sensitive)
+        .arg("enable")
+        .output()
+        .expect("run fsutil");
+    if !enabled.status.success() {
+        eprintln!(
+            "skipped: this token or volume cannot enable per-directory case sensitivity: {enabled:?}"
+        );
+        return;
+    }
+    write(&sensitive.join("root").join("a.md"), "right");
+    write(&sensitive.join("Root").join("a.md"), "wrong");
+    let roots = roots_of(&sensitive.join("root"));
+    assert_eq!(
+        roots
+            .read_absolute(&sensitive.join("root").join("a.md"), SKILL_FILE_BYTES)
+            .unwrap()
+            .bytes(),
+        b"right"
+    );
+    // `Root` is a different directory: its identity is not the root's.
+    assert_eq!(
+        roots
+            .read_absolute(&sensitive.join("Root").join("a.md"), SKILL_FILE_BYTES)
+            .unwrap_err(),
+        ReadError::EscapesAuthorizedRoots
+    );
+    // `ROOT` names nothing here, so it cannot be proven to be the root.
+    assert_eq!(
+        roots
+            .read_absolute(&sensitive.join("ROOT").join("a.md"), SKILL_FILE_BYTES)
+            .unwrap_err(),
+        ReadError::EscapesAuthorizedRoots
+    );
+    // A link from another root to the other spelling is refused as well.
+    let other = temp_tree("casesensitive-other");
+    junction(&other.join("to-wrong"), &sensitive.join("Root"));
+    let both = AuthorizedRoots::new(vec![
+        AuthorizedRoot::open_absolute(&other).unwrap(),
+        AuthorizedRoot::open_absolute(&sensitive.join("root")).unwrap(),
+    ]);
+    assert_eq!(
+        both.read_bounded(0, Path::new("to-wrong/a.md"), SKILL_FILE_BYTES)
+            .unwrap_err(),
+        ReadError::EscapesAuthorizedRoots
+    );
+}

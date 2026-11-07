@@ -44,6 +44,10 @@
 
 ### Fixed
 
+- Windows: an absolute path or link target spelled with different case than its
+  authorized root is no longer refused. It matches only when the prefix opens to
+  the root's own file identity, so a case-sensitive directory's other spelling
+  is still refused.
 - `scripts/validate_public_contracts.py` and `tests/platform_boundary_contract.py`
   run on Windows. The validator checks shell examples with Git for Windows' bash
   (never the System32 WSL launcher) and pipes them as bytes, and reports a

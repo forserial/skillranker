@@ -242,22 +242,37 @@ impl AuthorizedRoots {
     }
 
     /// Longest-prefix match of an absolute path against the authorized roots.
+    ///
+    /// Components compare exactly. On Windows a prefix spelled with different
+    /// case also matches, but only after it is opened and proven to be the same
+    /// directory as the held root (volume serial and file index): names are
+    /// usually case-insensitive there, yet a directory can be case-sensitive,
+    /// so case folding alone could select a different directory.
     fn locate(&self, absolute: &Path) -> Option<(usize, Vec<OsString>)> {
         let mut best: Option<(usize, Vec<OsString>)> = None;
         for (index, root) in self.roots.iter().enumerate() {
-            let Ok(rest) = absolute.strip_prefix(&root.absolute) else {
+            let depth = root.absolute.components().count();
+            if best.as_ref().is_some_and(|(current, _)| {
+                depth <= self.roots[*current].absolute.components().count()
+            }) {
+                continue;
+            }
+            let rest: Vec<OsString> = if let Ok(rest) = absolute.strip_prefix(&root.absolute) {
+                rest.components()
+                    .map(|component| component.as_os_str().to_os_string())
+                    .collect()
+            } else {
+                #[cfg(windows)]
+                {
+                    match same_root_other_case(root, absolute) {
+                        Some(rest) => rest,
+                        None => continue,
+                    }
+                }
+                #[cfg(not(windows))]
                 continue;
             };
-            let depth = root.absolute.components().count();
-            if best.as_ref().is_none_or(|(current, _)| {
-                depth > self.roots[*current].absolute.components().count()
-            }) {
-                let components: Vec<OsString> = rest
-                    .components()
-                    .map(|component| component.as_os_str().to_os_string())
-                    .collect();
-                best = Some((index, components));
-            }
+            best = Some((index, rest));
         }
         best
     }
@@ -518,6 +533,48 @@ impl<'a> Walk<'a> {
         ];
         self.names.clear();
         Ok(components)
+    }
+}
+
+/// The components of `absolute` below `root`, when its leading components name
+/// the root with different case and open to the root's own identity.
+///
+/// The case comparison only selects a candidate; the identity decides. In a
+/// case-sensitive directory holding `Root` and `root`, the other spelling opens a
+/// different directory, or none, and is refused. Each candidate costs one open,
+/// so the work is bounded by the number of roots; any failure refuses the match.
+#[cfg(windows)]
+fn same_root_other_case(root: &AuthorizedRoot, absolute: &Path) -> Option<Vec<OsString>> {
+    let mut given = absolute.components();
+    let mut prefix = PathBuf::new();
+    for expected in root.absolute.components() {
+        let actual = given.next()?;
+        if !same_ignoring_case(expected.as_os_str(), actual.as_os_str()) {
+            return None;
+        }
+        prefix.push(actual.as_os_str());
+    }
+    let (_held, stat) = sys::open_root(&prefix).ok()?;
+    if sys::identity(&stat) != root.identity {
+        return None;
+    }
+    Some(
+        given
+            .map(|component| component.as_os_str().to_os_string())
+            .collect(),
+    )
+}
+
+/// Case-insensitive equality as a candidate filter only. Names that are not
+/// valid Unicode must match exactly.
+#[cfg(windows)]
+fn same_ignoring_case(left: &OsStr, right: &OsStr) -> bool {
+    match (left.to_str(), right.to_str()) {
+        (Some(left), Some(right)) => left
+            .chars()
+            .flat_map(char::to_uppercase)
+            .eq(right.chars().flat_map(char::to_uppercase)),
+        _ => left == right,
     }
 }
 
