@@ -260,11 +260,9 @@ fn flat_pending_prompt_and_empty_prompt_only_context_keep_working() {
     ));
 }
 
-#[cfg(unix)]
 #[test]
 fn offline_cli_never_turns_a_sibling_directive_into_an_explicit_request() {
     use std::fs;
-    use std::os::unix::fs::DirBuilderExt;
     use std::process::Command;
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -276,7 +274,13 @@ fn offline_cli_never_turns_a_sibling_directive_into_an_explicit_request() {
             .unwrap()
             .as_nanos(),
     ));
-    fs::DirBuilder::new().mode(0o700).create(&root).unwrap();
+    // A private 0700 root on Unix; Windows has no mode bits to set.
+    #[cfg(unix)]
+    std::os::unix::fs::DirBuilderExt::mode(&mut fs::DirBuilder::new(), 0o700)
+        .create(&root)
+        .unwrap();
+    #[cfg(not(unix))]
+    fs::create_dir(&root).unwrap();
     for directory in ["workspace/.claude/skills/alpha", "home", "config/sr"] {
         fs::create_dir_all(root.join(directory)).unwrap();
     }

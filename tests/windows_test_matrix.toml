@@ -452,30 +452,6 @@ issue = "sr-winpar.25"
 note = "non-UTF-8 environment bytes; port with unpaired surrogates"
 
 [[gate]]
-file = "tests/config_contract.rs"
-item = "project_roots_stay_inside_the_workspace_and_lists_only_grow"
-gate = "cfg(unix)"
-reason = "unaudited"
-issue = "sr-winpar.25"
-note = "Unix path syntax or non-UTF-8 environment"
-
-[[gate]]
-file = "tests/config_contract.rs"
-item = "security_sensitive_keys_follow_an_independent_layer_matrix"
-gate = "cfg(unix)"
-reason = "unaudited"
-issue = "sr-winpar.25"
-note = "Unix path syntax or non-UTF-8 environment"
-
-[[gate]]
-file = "tests/config_contract.rs"
-item = "workspace_relative_roots_normalize_lexically"
-gate = "cfg(unix)"
-reason = "unaudited"
-issue = "sr-winpar.25"
-note = "Unix path syntax or non-UTF-8 environment"
-
-[[gate]]
 file = "tests/context_contract.rs"
 item = "cass_adapter"
 gate = "cfg(unix)"
@@ -513,13 +489,6 @@ gate = "cfg(any(target_os = \"linux\", target_os = \"macos\"))"
 reason = "private-storage"
 issue = "sr-winpar.3"
 note = "coordinator leases"
-
-[[gate]]
-file = "tests/demo_contract.rs"
-item = "*"
-gate = "cfg(unix)"
-reason = "unaudited"
-issue = "sr-winpar.25"
 
 [[gate]]
 file = "tests/effect_gate.rs"
@@ -597,14 +566,6 @@ gate = "cfg(unix)"
 reason = "unix-fixture"
 issue = "sr-winpar.25"
 note = "non-UTF-8 path bytes; port with unpaired surrogates"
-
-[[gate]]
-file = "tests/jev_smoke.rs"
-item = "*"
-gate = "cfg(unix)"
-reason = "unaudited"
-issue = "sr-winpar.25"
-note = "consented live smoke; skips without credentials"
 
 [[gate]]
 file = "tests/jsonl_snapshot.rs"
@@ -730,13 +691,6 @@ issue = "sr-winpar.4"
 note = "owner-only refusal diagnostics"
 
 [[gate]]
-file = "tests/p1_gate.rs"
-item = "*"
-gate = "cfg(unix)"
-reason = "unaudited"
-issue = "sr-winpar.25"
-
-[[gate]]
 file = "tests/p2_gate.rs"
 item = "*"
 gate = "cfg(any(target_os = \"linux\", target_os = \"macos\"))"
@@ -787,20 +741,6 @@ item = "*"
 gate = "cfg(any(target_os = \"linux\", target_os = \"macos\"))"
 reason = "private-storage"
 issue = "sr-winpar.4"
-
-[[gate]]
-file = "tests/p9_gate.rs"
-item = "*"
-gate = "cfg(any(target_os = \"linux\", target_os = \"macos\"))"
-reason = "unaudited"
-issue = "sr-winpar.25"
-
-[[gate]]
-file = "tests/passages_contract.rs"
-item = "*"
-gate = "cfg(any(target_os = \"linux\", target_os = \"macos\"))"
-reason = "unaudited"
-issue = "sr-winpar.25"
 
 [[gate]]
 file = "tests/project_signals.rs"
@@ -884,22 +824,6 @@ gate = "cfg(unix)"
 reason = "private-storage"
 issue = "sr-winpar.3"
 note = "coordinator leases"
-
-[[gate]]
-file = "tests/render_history_scope.rs"
-item = "production_dry_run_contains_active_history_but_no_sibling_prose"
-gate = "cfg(unix)"
-reason = "unaudited"
-issue = "sr-winpar.25"
-note = "Unix modes only for 0700 setup directories"
-
-[[gate]]
-file = "tests/render_tool_labels.rs"
-item = "production_dry_run_redacts_tool_labels_and_no_tools_omits_them"
-gate = "cfg(unix)"
-reason = "unaudited"
-issue = "sr-winpar.25"
-note = "Unix modes only for 0700 setup directories"
 
 [[gate]]
 file = "tests/replay_case_completeness.rs"
@@ -1038,13 +962,6 @@ reason = "unix-fixture"
 issue = "permanent: Windows has no FIFO or device special files; its non-regular names (reserved devices, streams) are refused in tests/windows_platform.rs and tests/authorized_read_windows.rs"
 
 [[gate]]
-file = "tests/roster_real_layout.rs"
-item = "*"
-gate = "cfg(unix)"
-reason = "unaudited"
-issue = "sr-winpar.25"
-
-[[gate]]
 file = "tests/roster_rejections.rs"
 item = "nonregular_personal_slots_cannot_promote_the_project_definition"
 gate = "cfg(unix)"
@@ -1139,13 +1056,6 @@ reason = "private-storage"
 issue = "sr-winpar.6"
 
 [[gate]]
-file = "tests/session_discovery.rs"
-item = "*"
-gate = "cfg(unix)"
-reason = "unaudited"
-issue = "sr-winpar.25"
-
-[[gate]]
 file = "tests/shadow_spending_contract.rs"
 item = "shadow_with_a_ready_ledger_ranks_and_records"
 gate = "cfg(unix)"
@@ -1220,30 +1130,9 @@ issue = "permanent: Linux-only mechanism (tmpfs, /proc, pidfd or statfs magic) w
 note = "nested inside a gated file"
 
 [[gate]]
-file = "tests/task_history_scope.rs"
-item = "offline_cli_never_turns_a_sibling_directive_into_an_explicit_request"
-gate = "cfg(unix)"
-reason = "unaudited"
-issue = "sr-winpar.25"
-note = "Unix modes only for 0700 setup directories"
-
-[[gate]]
 file = "tests/trace_continuation.rs"
 item = "*"
 gate = "cfg(unix)"
 reason = "private-storage"
 issue = "sr-winpar.4"
 
-[[gate]]
-file = "tests/transcript_request.rs"
-item = "*"
-gate = "cfg(unix)"
-reason = "unaudited"
-issue = "sr-winpar.25"
-
-[[gate]]
-file = "tests/tui_contract.rs"
-item = "*"
-gate = "cfg(any(target_os = \"linux\", target_os = \"macos\"))"
-reason = "unaudited"
-issue = "sr-winpar.25"

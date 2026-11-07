@@ -15,6 +15,17 @@ fn s(text: &str) -> RawValue {
     RawValue::String(text.to_owned())
 }
 
+/// An absolute path in this platform's syntax: `/a/b` on Unix, `C:\a\b` on
+/// Windows, where a path like `/a/b` is rooted but has no drive and is not
+/// absolute (sr-winpar.25).
+fn abs(unix: &str) -> String {
+    if cfg!(windows) {
+        format!("C:{}", unix.replace('/', "\\"))
+    } else {
+        unix.to_owned()
+    }
+}
+
 fn list(items: &[&str]) -> RawValue {
     RawValue::StringList(items.iter().map(|item| (*item).to_owned()).collect())
 }
@@ -161,12 +172,12 @@ enum Expect {
     UnknownEnvironmentName,
 }
 
-#[cfg(unix)]
 /// Written independently of `KEY_SPECS`: a registry edit that loosens trust
 /// must also change this table to pass.
 #[test]
 fn security_sensitive_keys_follow_an_independent_layer_matrix() {
     use Expect::{Accepted as A, Forbidden as F, Reserved as R, UnknownEnvironmentName as U};
+    let transcripts = abs("/transcripts");
     #[rustfmt::skip]
     let matrix: &[(&str, &str, RawValue, &str, [Expect; 4])] = &[
         // path                      env name               file or CLI value            env text               user/project/env/cli
@@ -184,7 +195,7 @@ fn security_sensitive_keys_follow_an_independent_layer_matrix() {
         ("context.no_tools",         "SR_NO_TOOLS",         RawValue::Bool(true),        "true",                [A, A, U, A]),
         ("context.messages",         "SR_MESSAGES",         RawValue::Integer(6),        "6",                   [A, A, A, A]),
         ("context.budget_chars",     "SR_BUDGET_CHARS",     RawValue::Integer(4_000),    "4000",                [A, A, A, A]),
-        ("context.transcript_roots", "SR_TRANSCRIPT_ROOTS", list(&["/transcripts"]),     "/t",                  [A, F, U, F]),
+        ("context.transcript_roots", "SR_TRANSCRIPT_ROOTS", list(&[&transcripts]),       "/t",                  [A, F, U, F]),
         ("roster.roots",             "SR_ROSTER_ROOTS",     list(&["skills"]),           "skills",              [A, A, U, F]),
         ("ranking.timeout_ms",       "SR_TIMEOUT_MS",       RawValue::Integer(2_500),    "2500",                [A, F, A, A]),
         ("privacy.redaction",        "SR_REDACTION",        RawValue::Bool(false),       "false",               [R, R, U, R]),
@@ -376,7 +387,6 @@ fn project_cannot_widen_trusted_disclosure_or_advice_authority() {
     );
 }
 
-#[cfg(unix)]
 #[test]
 fn project_roots_stay_inside_the_workspace_and_lists_only_grow() {
     let root_error = |value: &str| {
@@ -389,7 +399,7 @@ fn project_roots_stay_inside_the_workspace_and_lists_only_grow() {
     };
     use ConfigProblem::InvalidRoot;
     assert_eq!(
-        root_error("/etc/skills"),
+        root_error(&abs("/etc/skills")),
         InvalidRoot(RootError::AbsoluteNotAllowed)
     );
     assert_eq!(root_error(".."), InvalidRoot(RootError::EscapesWorkspace));
@@ -405,7 +415,7 @@ fn project_roots_stay_inside_the_workspace_and_lists_only_grow() {
 
     let config = resolve(ConfigSources {
         trusted_user: vec![
-            entry("roster.roots", list(&["/opt/team skills", "local"])),
+            entry("roster.roots", list(&[&abs("/opt/team skills"), "local"])),
             entry("ranking.exclude_skills", list(&["noisy-skill"])),
         ],
         project: vec![
@@ -421,7 +431,7 @@ fn project_roots_stay_inside_the_workspace_and_lists_only_grow() {
     let roots = config.effective().roster_roots();
     assert_eq!(roots.len(), 3, "union deduplicates normalized roots");
     assert!(
-        matches!(&roots[0], SkillRoot::TrustedAbsolute(r) if r.as_path() == std::path::Path::new("/opt/team skills"))
+        matches!(&roots[0], SkillRoot::TrustedAbsolute(r) if r.as_path() == std::path::Path::new(&abs("/opt/team skills")))
     );
     assert!(
         matches!(&roots[1], SkillRoot::WorkspaceRelative(r) if r.as_path() == std::path::Path::new("local"))
@@ -445,7 +455,7 @@ fn project_roots_stay_inside_the_workspace_and_lists_only_grow() {
     // Only a trusted user can grant an outside root, and never with '..'.
     let err = resolve(user(vec![entry(
         "context.transcript_roots",
-        list(&["/home/x/../y"]),
+        list(&[&abs("/home/x/../y")]),
     )]))
     .unwrap_err();
     assert_eq!(
@@ -463,7 +473,6 @@ fn project_roots_stay_inside_the_workspace_and_lists_only_grow() {
     );
 }
 
-#[cfg(unix)]
 #[test]
 fn workspace_relative_roots_normalize_lexically() {
     for (input, expected) in [
@@ -492,10 +501,10 @@ fn workspace_relative_roots_normalize_lexically() {
         WorkspaceRelativeRoot::parse(&too_long),
         Err(RootError::TooLong)
     );
-    let absolute = TrustedAbsoluteRoot::parse("/private/user/skills/").unwrap();
+    let absolute = TrustedAbsoluteRoot::parse(&abs("/private/user/skills/")).unwrap();
     assert_eq!(
         absolute.as_path(),
-        std::path::Path::new("/private/user/skills")
+        std::path::Path::new(&abs("/private/user/skills"))
     );
     assert_eq!(format!("{absolute:?}"), "TrustedAbsoluteRoot(<private>)");
 }

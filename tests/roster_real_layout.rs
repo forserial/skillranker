@@ -1,4 +1,3 @@
-#![cfg(unix)]
 //! What a real, untidy skills root reports (sr-gl5j).
 //!
 //! A skills directory on a working machine contains more than skills: editor

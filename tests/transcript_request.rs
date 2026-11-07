@@ -1,4 +1,3 @@
-#![cfg(unix)]
 //! The current request of a native Claude transcript is the latest prompt the
 //! user submitted. Claude also writes `user` records the user never typed:
 //! injected meta content, local command output, interrupt markers and task

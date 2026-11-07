@@ -14,8 +14,6 @@
 //! 5. Strict rejection of invalid cases, missing arguments, and conflicting format flags.
 //! 6. Zero file creation, zero credential leakage, and zero provider network traffic.
 
-#![cfg(unix)]
-
 use serde_json::Value;
 use skillranker::demo::DemoCase;
 use skillranker::output::{ArtifactKind, CliExit, OutputDocument, OutputKind};

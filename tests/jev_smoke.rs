@@ -1,4 +1,3 @@
-#![cfg(unix)]
 //! Bounded live Jev contract spike and consented provider smoke test.
 //!
 //! Exercises `p1_jev_contract_smoke` (sr-roadmap-l1i.2.10), mapped in
@@ -102,16 +101,31 @@ fn live_api_key(
     Ok(key.trim().to_owned())
 }
 
+/// An OS string that is not valid Unicode: a non-UTF-8 byte on Unix, a lone
+/// UTF-16 surrogate on Windows. `to_str` refuses both.
+fn non_unicode() -> OsString {
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStringExt;
+        OsString::from_vec(vec![0xff])
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStringExt;
+        OsString::from_wide(&[0xD800])
+    }
+}
+
 #[test]
 fn live_consent_precedes_credential_lookup() {
-    use std::os::unix::ffi::OsStringExt;
+    assert!(non_unicode().to_str().is_none());
     for consent in [
         None,
         Some(OsString::from("0")),
         Some(OsString::from("false")),
         Some(OsString::from("TRUE")),
         Some(OsString::from(" 1")),
-        Some(OsString::from_vec(vec![0xff])),
+        Some(non_unicode()),
     ] {
         assert!(live_api_key(consent, || panic!("credential lookup before consent")).is_err());
     }
@@ -121,7 +135,7 @@ fn live_consent_precedes_credential_lookup() {
             Ok("synthetic-test-key".to_owned())
         );
     }
-    for key in [None, Some(" ".into()), Some(OsString::from_vec(vec![0xff]))] {
+    for key in [None, Some(" ".into()), Some(non_unicode())] {
         assert!(live_api_key(Some("1".into()), || key).is_err());
     }
 }
@@ -490,7 +504,6 @@ fn capacity_requests(model: &str) -> [Request; 2] {
     use skillranker::privacy::ContextProfile;
     use skillranker::roster::resolution::{BindingSpec, ResolvedRoster, SkillEntry};
     use skillranker::roster::{InvocationName, InvocationRestrictions, Visibility};
-    use std::os::unix::fs::DirBuilderExt;
     use std::path::Path;
     use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -504,10 +517,11 @@ fn capacity_requests(model: &str) -> [Request; 2] {
             .as_nanos(),
         NEXT.fetch_add(1, Ordering::Relaxed)
     ));
-    std::fs::DirBuilder::new()
-        .mode(0o700)
-        .create(&root)
-        .unwrap();
+    #[cfg_attr(not(unix), allow(unused_mut))]
+    let mut builder = std::fs::DirBuilder::new();
+    #[cfg(unix)]
+    std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
+    builder.create(&root).unwrap();
     let roots = AuthorizedRoots::single(AuthorizedRoot::open_absolute(&root).unwrap());
     let run = TestContext::new(30_000, 500);
     let entries = (0..254)

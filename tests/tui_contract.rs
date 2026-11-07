@@ -1,4 +1,3 @@
-#![cfg(any(target_os = "linux", target_os = "macos"))]
 //! Phase P9 optional nine-row FrankenTUI inspection, watch-generation fencing,
 //! non-TTY fallback refusal, and clean terminal recovery (sr-roadmap-l1i.10.7).
 //!

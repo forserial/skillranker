@@ -201,11 +201,9 @@ fn session_and_label_receipts_combine_and_insufficient_context_stays_insufficien
     receipt.verify_against_payload(&payload).unwrap();
 }
 
-#[cfg(unix)]
 #[test]
 fn production_dry_run_redacts_tool_labels_and_no_tools_omits_them() {
     use std::fs;
-    use std::os::unix::fs::DirBuilderExt;
     use std::process::Command;
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -219,7 +217,13 @@ fn production_dry_run_redacts_tool_labels_and_no_tools_omits_them() {
                 .unwrap()
                 .as_nanos(),
         ));
-    fs::DirBuilder::new().mode(0o700).create(&root).unwrap();
+    // A private 0700 root on Unix; Windows has no mode bits to set.
+    #[cfg(unix)]
+    std::os::unix::fs::DirBuilderExt::mode(&mut fs::DirBuilder::new(), 0o700)
+        .create(&root)
+        .unwrap();
+    #[cfg(not(unix))]
+    fs::create_dir(&root).unwrap();
     for path in ["workspace/.claude/skills/alpha", "home", "config/sr"] {
         fs::create_dir_all(root.join(path)).unwrap();
     }

@@ -1,4 +1,3 @@
-#![cfg(any(target_os = "linux", target_os = "macos"))]
 //! Phase P9 bounded Quill passage selection within chosen skills
 //! (sr-roadmap-l1i.10.1).
 //!

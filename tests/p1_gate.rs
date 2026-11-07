@@ -1,4 +1,3 @@
-#![cfg(unix)]
 //! Phase P1 Acceptance Gate: Transport and Runtime Readiness.
 //!
 //! Satisfies contract boundary `p1_acceptance_gate` (sr-roadmap-l1i.2.12)

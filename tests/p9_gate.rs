@@ -1,4 +1,3 @@
-#![cfg(any(target_os = "linux", target_os = "macos"))]
 //! Phase P9 acceptance gate: bounded Quill passage retrieval, multi-query RRF
 //! overflow fusion, content-hash-bound description overlays, description
 //! diagnostics, coverage-gap analysis, FrankenTUI inspection, and explicit

@@ -212,11 +212,9 @@ fn profile_omissions_and_scope_omissions_are_reconciled_without_double_counting(
     );
 }
 
-#[cfg(unix)]
 #[test]
 fn production_dry_run_contains_active_history_but_no_sibling_prose() {
     use std::fs;
-    use std::os::unix::fs::DirBuilderExt;
     use std::process::Command;
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -228,7 +226,13 @@ fn production_dry_run_contains_active_history_but_no_sibling_prose() {
             .unwrap()
             .as_nanos(),
     ));
-    fs::DirBuilder::new().mode(0o700).create(&root).unwrap();
+    // A private 0700 root on Unix; Windows has no mode bits to set.
+    #[cfg(unix)]
+    std::os::unix::fs::DirBuilderExt::mode(&mut fs::DirBuilder::new(), 0o700)
+        .create(&root)
+        .unwrap();
+    #[cfg(not(unix))]
+    fs::create_dir(&root).unwrap();
     for path in ["workspace/.claude/skills/alpha", "home", "config/sr"] {
         fs::create_dir_all(root.join(path)).unwrap();
     }

@@ -1,5 +1,3 @@
-#![cfg(unix)]
-
 use skillranker::context::discovery::{
     HEAD_BYTES, TAIL_BYTES, attribution, discover_claude_sessions,
     discover_claude_sessions_before_cleanup, parse_utc_ms,
@@ -22,8 +20,23 @@ fn tree() -> (PathBuf, PathBuf, PathBuf) {
     let workspace = root.join("workspace");
     std::fs::create_dir_all(&workspace).unwrap();
     let workspace = std::fs::canonicalize(workspace).unwrap();
+    // Windows: Claude Code runs in the plain drive form of the directory and
+    // names its project folder by replacing every non-alphanumeric character
+    // (`C:\Users\me` -> `C--Users-me`), as `project_directories` expects.
+    #[cfg(windows)]
+    let (workspace, name) = {
+        let text = workspace.to_str().unwrap();
+        let plain = text.strip_prefix(r"\\?\").unwrap_or(text).to_owned();
+        let name: String = plain
+            .chars()
+            .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+            .collect();
+        (PathBuf::from(plain), name)
+    };
+    #[cfg(not(windows))]
+    let name = workspace.to_str().unwrap().replace('/', "-");
     let projects = root.join("projects");
-    let directory = projects.join(workspace.to_str().unwrap().replace('/', "-"));
+    let directory = projects.join(name);
     std::fs::create_dir_all(&directory).unwrap();
     (workspace, projects, directory)
 }
