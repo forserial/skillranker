@@ -349,14 +349,6 @@ issue = "sr-winpar.25"
 note = "symlink, FIFO or directory fixtures"
 
 [[gate]]
-file = "tests/bootstrap_cli.rs"
-item = "non_utf8_arguments_are_usage_errors_without_panicking"
-gate = "cfg(unix)"
-reason = "unix-fixture"
-issue = "sr-winpar.25"
-note = "non-UTF-8 argument bytes; port with unpaired surrogates"
-
-[[gate]]
 file = "tests/breaker_contract.rs"
 item = "*"
 gate = "cfg(any(target_os = \"linux\", target_os = \"macos\"))"
@@ -442,14 +434,6 @@ gate = "cfg(unix)"
 reason = "unix-fixture"
 issue = "sr-winpar.25"
 note = "symlink fixtures"
-
-[[gate]]
-file = "tests/config_contract.rs"
-item = "non_utf8_environment_is_rejected_only_in_the_strict_namespace"
-gate = "cfg(unix)"
-reason = "unix-fixture"
-issue = "sr-winpar.25"
-note = "non-UTF-8 environment bytes; port with unpaired surrogates"
 
 [[gate]]
 file = "tests/context_contract.rs"
@@ -558,14 +542,6 @@ gate = "cfg(unix)"
 reason = "hook-suite"
 issue = "sr-winpar.17"
 also = ["sr-winpar.7"]
-
-[[gate]]
-file = "tests/identity_contract.rs"
-item = "local_paths_preserve_native_bytes_without_leaking_in_debug"
-gate = "cfg(unix)"
-reason = "unix-fixture"
-issue = "sr-winpar.25"
-note = "non-UTF-8 path bytes; port with unpaired surrogates"
 
 [[gate]]
 file = "tests/jsonl_snapshot.rs"
@@ -748,14 +724,6 @@ item = "*"
 gate = "cfg(unix)"
 reason = "platform-twin"
 issue = "permanent: Unix Git paths, modes and non-UTF-8 names; the Windows twin is tests/project_signals_windows.rs"
-
-[[gate]]
-file = "tests/provider_configuration.rs"
-item = "non_utf8_unused_provider_values_stay_local_and_fail_when_selected"
-gate = "cfg(unix)"
-reason = "unix-fixture"
-issue = "sr-winpar.25"
-note = "non-UTF-8 environment bytes; port with unpaired surrogates"
 
 [[gate]]
 file = "tests/rank_acceptance.rs"

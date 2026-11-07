@@ -1,3 +1,6 @@
+#[path = "support/non_unicode.rs"]
+mod non_unicode;
+
 use skillranker::context::{
     ContextError, CurrentRequest, EventKind, EvidenceOrigin, NormalizedContext, NormalizedEvent,
     PrivateText, Role, SuppliedLoadClaim, parse_normalized_context,
@@ -546,13 +549,14 @@ fn untrusted_option_and_roster_names_do_not_leak_through_debug() {
     );
 }
 
-#[cfg(unix)]
 #[test]
 fn local_paths_preserve_native_bytes_without_leaking_in_debug() {
-    use std::ffi::OsString;
-    use std::os::unix::ffi::{OsStrExt, OsStringExt};
-    let bytes = b"/private/\xff-skill".to_vec();
-    let local = LocalPath::new(OsString::from_vec(bytes.clone()).into());
-    assert_eq!(local.as_path().as_os_str().as_bytes(), bytes);
+    // Not valid Unicode: a 0xff byte on Unix, a lone surrogate on Windows.
+    let mut native = non_unicode::with_prefix("/private/");
+    native.push("-skill");
+    assert!(native.to_str().is_none());
+    let local = LocalPath::new(native.clone().into());
+    // OsStr equality compares the exact native encoding, so nothing was replaced.
+    assert_eq!(local.as_path().as_os_str(), native.as_os_str());
     assert_eq!(format!("{local:?}"), "LocalPath(<private>)");
 }

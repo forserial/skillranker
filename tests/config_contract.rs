@@ -1,5 +1,8 @@
 // Part of this suite needs Unix fixtures; those tests and their helpers are gated.
 #![cfg_attr(not(unix), allow(unused_imports, dead_code))]
+#[path = "support/non_unicode.rs"]
+mod non_unicode;
+
 use skillranker::config::*;
 use skillranker::context::parse_normalized_context;
 use skillranker::identity::ContentHash;
@@ -829,15 +832,13 @@ fn list_layer_and_diagnostic_bounds_are_enforced() {
     assert!(!unprintable.to_string().contains('\u{1b}'));
 }
 
-#[cfg(unix)]
 #[test]
 fn non_utf8_environment_is_rejected_only_in_the_strict_namespace() {
-    use std::os::unix::ffi::OsStringExt;
     let err = resolve(ConfigSources {
         environment: vec![
-            (OsString::from_vec(b"SR_\xff".to_vec()), "1".into()),
-            ("SR_MODEL".into(), OsString::from_vec(b"jev-\xff".to_vec())),
-            (OsString::from_vec(b"OTHER_\xff".to_vec()), "1".into()),
+            (non_unicode::with_prefix("SR_"), "1".into()),
+            ("SR_MODEL".into(), non_unicode::with_prefix("jev-")),
+            (non_unicode::with_prefix("OTHER_"), "1".into()),
         ],
         ..ConfigSources::default()
     })

@@ -1,6 +1,9 @@
 //! Provider selection through the real resolver and the pipeline's endpoint seam.
 //! Synthetic credentials only; constructing a client never sends a request.
 
+#[path = "support/non_unicode.rs"]
+mod non_unicode;
+
 use skillranker::config::{
     ConfigLayer, ConfigProblem, ConfigSources, IssueKey, ManagedPolicyMutation, PolicyBoundary,
     PolicyField, Provider, PublicationKind, RawValue, ResolvedConfig, Revalidation, SettingKey,
@@ -170,17 +173,14 @@ fn unused_provider_does_not_relax_duplicate_or_unknown_environment_keys() {
     ));
 }
 
-#[cfg(unix)]
 #[test]
 fn non_utf8_unused_provider_values_stay_local_and_fail_when_selected() {
-    use std::os::unix::ffi::OsStringExt;
     for name in ["CLOUDFLARE_API_TOKEN", "CLOUDFLARE_ACCOUNT_ID"] {
         let mut sources = inputs("typesafe");
         sources.environment.retain(|(key, _)| key != name);
-        sources.environment.push((
-            name.into(),
-            OsString::from_vec(b"PRIVATE-CANARY\xff".to_vec()),
-        ));
+        sources
+            .environment
+            .push((name.into(), non_unicode::with_prefix("PRIVATE-CANARY")));
         let config = resolve(sources);
         let error = config
             .reresolve_files(vec![setting("provider.kind", "cloudflare")], Vec::new(), 2)

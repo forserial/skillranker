@@ -1,3 +1,6 @@
+#[path = "support/non_unicode.rs"]
+mod non_unicode;
+
 use std::process::Command;
 
 #[test]
@@ -56,13 +59,11 @@ fn bare_sr_ranks_instead_of_reporting_usage() {
     assert!(result.stderr.is_empty());
 }
 
-#[cfg(unix)]
 #[test]
 fn non_utf8_arguments_are_usage_errors_without_panicking() {
-    use std::os::unix::ffi::OsStringExt;
     let result = Command::new(env!("CARGO_BIN_EXE_sr"))
         .env_clear()
-        .arg(std::ffi::OsString::from_vec(vec![0xff]))
+        .arg(non_unicode::with_prefix(""))
         .output()
         .unwrap();
     assert_eq!(result.status.code(), Some(2));
