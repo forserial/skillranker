@@ -267,7 +267,6 @@ item = "*"
 gate = "cfg(unix)"
 reason = "hook-suite"
 issue = "sr-winpar.17"
-also = ["sr-winpar.7"]
 
 [[gate]]
 file = "tests/owner_only_refusal_names_the_path.rs"

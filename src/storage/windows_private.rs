@@ -598,6 +598,40 @@ pub(crate) fn create_store_file(directory: &Path, name: &std::ffi::OsStr) -> io:
     create_new_file_with(&directory.join(name), &file_sddl(user))
 }
 
+/// Write `bytes` to the new owner-only file `name` in the private directory
+/// `path`, such as an installer settings backup (sr-winpar.7). Missing
+/// folders are created with the private descriptor; the walk admits each
+/// ancestor (rule 3), the volume (rule 5) and `path` itself as a store
+/// directory (rules 1 and 2). The file is created new with the private file
+/// descriptor (rule 7), flushed, admitted as a single-link owner-only file
+/// (rule 4) and the directory revalidated (rule 9). Nothing existing is
+/// repaired or replaced; a partly written file of ours is removed.
+pub(crate) fn write_private_file(
+    path: &Path,
+    name: &std::ffi::OsStr,
+    bytes: &[u8],
+) -> Result<PathBuf, StoreError> {
+    use std::io::Write;
+    if !crate::authorized_read::valid_component(name) || name == "." || name == ".." {
+        return Err(StoreError::UnsafePath);
+    }
+    let held = walk(path, true, || Ok(()))?;
+    let target = held.path.join(name);
+    let mut file = create_store_file(&held.path, name).map_err(|error| io_error(&error))?;
+    let written = file
+        .write_all(bytes)
+        .and_then(|()| file.sync_all())
+        .map_err(|error| io_error(&error))
+        .and_then(|()| admitted_file(&file).map(drop))
+        .and_then(|()| revalidate(&held, Leaf::Store));
+    if let Err(error) = written {
+        drop(file);
+        let _ = std::fs::remove_file(&target);
+        return Err(error);
+    }
+    Ok(target)
+}
+
 /// A root for unit-test stores: `%LOCALAPPDATA%\sr-tests`. `%TEMP%` may grant
 /// other local accounts the right to replace its children, which rule 3
 /// refuses.

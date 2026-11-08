@@ -4,6 +4,12 @@
 
 ### Added
 
+- Windows writes hook-installer and snooze backups owner-only, in
+  `%LOCALAPPDATA%\skillranker\backups`. If a backup cannot be made
+  owner-only, `install-hook`, `uninstall-hook` and `snooze --apply` fail with
+  `storage-failure` before changing anything. Backups that earlier builds left
+  in `%USERPROFILE%\.local\state\sr\backups` are not touched; review and
+  delete them by hand.
 - Windows writes owner-only exports: `sr roster --snapshot` and
   `sr rank --save-case` publish a file only the user and SYSTEM can open, with
   `MoveFileExW` (no replace, write-through), so an existing or raced-in target

@@ -266,6 +266,12 @@ pub fn resolve_binary_path(override_path: Option<PathBuf>) -> Result<PathBuf, In
 }
 
 /// Resolves the private state directory used for owner-only backups.
+///
+/// Unix: `$XDG_STATE_HOME/sr/backups`, else `<home>/.local/state/sr/backups`.
+/// Windows: `%LOCALAPPDATA%\skillranker\backups`, beside the cache and ledger
+/// (sr-winpar.7); without `LOCALAPPDATA` there is no private location and the
+/// backup, and with it the settings change, is refused.
+#[cfg(unix)]
 pub fn resolve_backup_dir() -> Result<PathBuf, InstallerError> {
     let base = if let Some(state) = std::env::var_os("XDG_STATE_HOME").filter(|p| !p.is_empty()) {
         PathBuf::from(state).join("sr/backups")
@@ -276,29 +282,49 @@ pub fn resolve_backup_dir() -> Result<PathBuf, InstallerError> {
     };
 
     fs::create_dir_all(&base)?;
-    #[cfg(unix)]
-    {
-        let _ = fs::set_permissions(&base, fs::Permissions::from_mode(0o700));
-    }
+    let _ = fs::set_permissions(&base, fs::Permissions::from_mode(0o700));
     Ok(base)
 }
 
-// `platform_support::INSTALLER_BACKUPS` reports whether backups get owner-only modes.
-#[cfg(unix)]
-const _: () = assert!(crate::platform_support::INSTALLER_BACKUPS);
+/// See the Unix `resolve_backup_dir`. The directory is created and admitted
+/// by [`write_backup`], not here.
+#[cfg(windows)]
+pub fn resolve_backup_dir() -> Result<PathBuf, InstallerError> {
+    match crate::platform_path::windows_store_dir("backups") {
+        Ok(Some(path)) => Ok(path),
+        Ok(None) => Err(backup_failure(
+            "LOCALAPPDATA is not set, so there is no private location for it",
+        )),
+        Err(reason) => Err(backup_failure(reason)),
+    }
+}
+
+/// Other targets have no owner-only backup location.
+#[cfg(not(any(unix, windows)))]
+pub fn resolve_backup_dir() -> Result<PathBuf, InstallerError> {
+    Err(backup_failure(
+        "owner-only backups are not supported on this platform",
+    ))
+}
+
 #[cfg(not(unix))]
+fn backup_failure(reason: &str) -> InstallerError {
+    InstallerError::Io(std::io::Error::other(format!(
+        "the settings backup could not be made owner-only, so the settings were not changed: {reason}"
+    )))
+}
+
+// `platform_support::INSTALLER_BACKUPS` reports whether backups get owner-only modes.
+#[cfg(any(unix, windows))]
+const _: () = assert!(crate::platform_support::INSTALLER_BACKUPS);
+#[cfg(not(any(unix, windows)))]
 const _: () = assert!(!crate::platform_support::INSTALLER_BACKUPS);
 
-/// Writes an owner-only backup of original settings bytes before publication.
-pub fn write_backup(
-    settings_file: &Path,
-    original_bytes: &[u8],
-) -> Result<PathBuf, InstallerError> {
-    let backup_dir = resolve_backup_dir()?;
+fn backup_name(settings_file: &Path) -> String {
     let now = SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
         .unwrap_or_default();
-    let filename = format!(
+    format!(
         "{}.sr-backup.{}_{}_{}",
         settings_file
             .file_name()
@@ -307,23 +333,73 @@ pub fn write_backup(
         now.as_secs(),
         now.subsec_nanos(),
         TMP_COUNTER.fetch_add(1, Ordering::Relaxed)
-    );
-    let backup_path = backup_dir.join(filename);
+    )
+}
+
+/// Writes an owner-only backup of original settings bytes before publication.
+#[cfg(unix)]
+pub fn write_backup(
+    settings_file: &Path,
+    original_bytes: &[u8],
+) -> Result<PathBuf, InstallerError> {
+    let backup_dir = resolve_backup_dir()?;
+    let backup_path = backup_dir.join(backup_name(settings_file));
 
     let mut file = OpenOptions::new()
         .create_new(true)
         .write(true)
         .open(&backup_path)?;
 
-    #[cfg(unix)]
-    {
-        let _ = fs::set_permissions(&backup_path, fs::Permissions::from_mode(0o600));
-    }
+    let _ = fs::set_permissions(&backup_path, fs::Permissions::from_mode(0o600));
 
     use std::io::Write;
     file.write_all(original_bytes)?;
     file.sync_all()?;
     Ok(backup_path)
+}
+
+/// Writes an owner-only backup of original settings bytes before publication
+/// (Windows, sr-winpar.7): a new file only the user and SYSTEM can open, in a
+/// private store directory (docs/windows-private-storage.md, "Backups"). Any
+/// failure is an error, so the caller never publishes a settings change
+/// without its backup.
+#[cfg(windows)]
+pub fn write_backup(
+    settings_file: &Path,
+    original_bytes: &[u8],
+) -> Result<PathBuf, InstallerError> {
+    use crate::storage::StoreError;
+    let backup_dir = resolve_backup_dir()?;
+    let name = backup_name(settings_file);
+    crate::storage::windows_private::write_private_file(
+        &backup_dir,
+        name.as_ref(),
+        original_bytes,
+    )
+    .map_err(|error| {
+        backup_failure(match error {
+            StoreError::Missing | StoreError::UnsafePath => {
+                "%LOCALAPPDATA%\\skillranker\\backups or one of its folders is a link or junction, or not a plain directory"
+            }
+            StoreError::Permissions => {
+                "%LOCALAPPDATA%\\skillranker\\backups is not private (owned by you, with access for you and SYSTEM only), or a folder above it can be changed by another account"
+            }
+            StoreError::UnsupportedFilesystem => {
+                "%LOCALAPPDATA% is not on a local fixed NTFS or ReFS volume"
+            }
+            _ => "the backup file could not be written",
+        })
+    })
+}
+
+#[cfg(not(any(unix, windows)))]
+pub fn write_backup(
+    _settings_file: &Path,
+    _original_bytes: &[u8],
+) -> Result<PathBuf, InstallerError> {
+    Err(resolve_backup_dir()
+        .err()
+        .unwrap_or_else(|| backup_failure("owner-only backups are not supported on this platform")))
 }
 
 /// Formats the managed hook command invocation string.

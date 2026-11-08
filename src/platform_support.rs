@@ -45,9 +45,9 @@ pub const LEDGER_STORAGE: bool = cfg!(any(unix, windows));
 /// Provider breaker state (`breaker::store`): Unix, and Windows since
 /// sr-winpar.3.
 pub const BREAKER_STORAGE: bool = cfg!(any(unix, windows));
-/// Owner-only installer backups (`installer::write_backup`): Unix only;
-/// Windows writes them unprotected until sr-winpar.7.
-pub const INSTALLER_BACKUPS: bool = cfg!(unix);
+/// Owner-only installer backups (`installer::write_backup`): Unix, and
+/// Windows since sr-winpar.7.
+pub const INSTALLER_BACKUPS: bool = cfg!(any(unix, windows));
 /// Owner-only policy files (`learning`): Unix only; Windows writes them
 /// unprotected until sr-winpar.23.
 pub const POLICY_FILES: bool = cfg!(unix);

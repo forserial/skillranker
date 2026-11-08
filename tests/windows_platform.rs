@@ -3,6 +3,8 @@
 //! installation, and the stateful commands that must refuse rather than emulate.
 #![cfg(windows)]
 
+mod support;
+
 use serde_json::{Value, json};
 use skillranker::privacy::TrustedAbsoluteRoot;
 use std::fs;
@@ -22,7 +24,9 @@ struct Fixture {
 
 impl Fixture {
     fn new() -> Self {
-        let root = std::env::temp_dir().join(format!(
+        // Under %LOCALAPPDATA%\sr-tests: %TEMP% may let other local accounts
+        // replace its children, which owner-only backups and exports refuse.
+        let root = support::tmp_root().join(format!(
             "sr-windows-{}-{}",
             std::process::id(),
             SEQUENCE.fetch_add(1, Ordering::Relaxed)
@@ -63,6 +67,20 @@ impl Fixture {
 
     fn run(&self, args: &[&str]) -> Output {
         self.command(args).stdin(Stdio::null()).output().unwrap()
+    }
+
+    /// The fixture's own `LOCALAPPDATA`, where the cache, ledger and
+    /// installer backups live.
+    fn local_app_data(&self) -> PathBuf {
+        self.root.join("local")
+    }
+
+    fn run_with_local_app_data(&self, args: &[&str]) -> Output {
+        self.command(args)
+            .env("LOCALAPPDATA", self.local_app_data())
+            .stdin(Stdio::null())
+            .output()
+            .unwrap()
     }
 
     fn roster(&self) -> Value {
@@ -410,8 +428,23 @@ fn installing_writes_a_command_git_bash_can_run_and_removing_restores_settings()
     assert!(!text.contains("has no ledger"), "{text}");
     assert!(text.contains("evaluations recorded"), "{text}");
 
+    // Without LOCALAPPDATA there is no private place for the settings backup,
+    // so the change is refused and the settings are untouched (sr-winpar.7).
+    let refused = f.run(&["install-hook", "claude", "--settings-file", path, "--apply"]);
+    assert_eq!(refused.status.code(), Some(9), "{refused:?}");
+    assert_eq!(kind(&refused), "storage-failure");
+    assert_eq!(
+        fs::read_to_string(&settings).unwrap(),
+        r#"{"model":"keep-me"}"#
+    );
     for _ in 0..2 {
-        let apply = f.run(&["install-hook", "claude", "--settings-file", path, "--apply"]);
+        let apply = f.run_with_local_app_data(&[
+            "install-hook",
+            "claude",
+            "--settings-file",
+            path,
+            "--apply",
+        ]);
         assert_eq!(apply.status.code(), Some(0), "{apply:?}");
     }
     let installed: Value = serde_json::from_str(&fs::read_to_string(&settings).unwrap()).unwrap();
@@ -425,7 +458,7 @@ fn installing_writes_a_command_git_bash_can_run_and_removing_restores_settings()
         "Git Bash would eat this: {command}"
     );
 
-    let remove = f.run(&[
+    let remove = f.run_with_local_app_data(&[
         "uninstall-hook",
         "claude",
         "--settings-file",
@@ -435,12 +468,23 @@ fn installing_writes_a_command_git_bash_can_run_and_removing_restores_settings()
     assert_eq!(remove.status.code(), Some(0), "{remove:?}");
     let removed: Value = serde_json::from_str(&fs::read_to_string(&settings).unwrap()).unwrap();
     assert_eq!(removed, json!({"model": "keep-me"}));
+    // One backup per applied change, each owner-only, in the private backups
+    // folder; nothing under the profile.
+    let backups = f.local_app_data().join("skillranker").join("backups");
+    let names: Vec<PathBuf> = fs::read_dir(&backups)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .collect();
+    assert_eq!(names.len(), 2, "{names:?}");
+    for backup in &names {
+        support::assert_owner_only_file(backup);
+    }
+    assert!(!f.profile().join(".local").exists());
 }
 
 #[test]
 fn stateful_commands_refuse_instead_of_emulating_a_private_store() {
     let f = Fixture::new();
-    let snapshot = f.root.join("snapshot.json");
     for args in [
         vec!["ledger", "status", "--json"],
         vec!["ledger", "init", "--json"],
@@ -454,12 +498,20 @@ fn stateful_commands_refuse_instead_of_emulating_a_private_store() {
             "--apply",
             "--json",
         ],
-        vec!["roster", "--snapshot", snapshot.to_str().unwrap()],
     ] {
         let output = f.run(&args);
         assert_eq!(output.status.code(), Some(9), "{args:?}: {output:?}");
         assert_eq!(kind(&output), "storage-failure", "{args:?}");
     }
+    // Snapshots need no store since sr-winpar.6, but still refuse a
+    // destination other accounts can write.
+    let shared = f.root.join("shared");
+    fs::create_dir(&shared).unwrap();
+    support::share_with_everyone(&shared);
+    let snapshot = shared.join("snapshot.json");
+    let output = f.run(&["roster", "--snapshot", snapshot.to_str().unwrap()]);
+    assert_eq!(output.status.code(), Some(9), "{output:?}");
+    assert_eq!(kind(&output), "storage-failure");
     assert!(!snapshot.exists());
     assert!(!f.profile().join(".local").exists(), "no state was created");
 }

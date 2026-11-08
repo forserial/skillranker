@@ -10,8 +10,8 @@ security descriptors under `#![forbid(unsafe_code)]`
 ([Cache](#cache-sr-winpar3)) and the ledger with its hook counter
 ([Ledger](#ledger-sr-winpar4)), the enforced allowance
 ([Allowance](#allowance-sr-winpar5)) and owner-only exports
-([Exports](#exports-sr-winpar6)) implement it; backups are still written
-unprotected until their issue lands
+([Exports](#exports-sr-winpar6)) and installer backups
+([Backups](#backups-sr-winpar7)) implement it
 ([platform boundary](platform-boundary.md#windows)).
 
 The user approved the defaults on 2026-11-07 and, after the observation below,
@@ -129,7 +129,8 @@ Mirrors: `XDG_DATA_HOME`, `XDG_CACHE_HOME` and their `~/.local/share` and
 On Windows the stores live under `%LOCALAPPDATA%\skillranker`: `cache\` (the
 response cache and the allowance accounting, as `$XDG_CACHE_HOME/sr` holds both),
 `ledger\` (the ledger and hook counter, as `$XDG_DATA_HOME/sr`) and
-`state\backups\` (installer backups, as `$XDG_STATE_HOME/sr/backups`). The
+`backups\` (installer backups, as `$XDG_STATE_HOME/sr/backups`; the user chose
+this flat name over `state\backups\` on 2026-11-08). The
 location comes from the `LOCALAPPDATA` environment variable, as Unix takes `HOME`
 from the environment, and must be absolute; XDG variables are not honored on
 Windows. An explicit directory (`--dir`, `LedgerLocation::Directory`,
@@ -142,9 +143,9 @@ The cache, the provider breaker state and the allowance accounting resolve
 (`platform_path::windows_store_dir`, used by `user_cache_root`,
 `CacheLocation::Platform` and `AllowancePaths::for_user`), and the ledger
 `%LOCALAPPDATA%\skillranker\ledger` since sr-winpar.4
-(`default_ledger_directory`). Installer backups still resolve elsewhere until
-sr-winpar.7: `resolve_backup_dir` gives
-`%USERPROFILE%\.local\state\sr\backups`.
+(`default_ledger_directory`), and installer backups
+`%LOCALAPPDATA%\skillranker\backups` since sr-winpar.7
+(`installer::resolve_backup_dir`).
 
 ### 7. Creation
 
@@ -506,3 +507,51 @@ Native evidence:
   (`roster_snapshot`, `roster_cli`, `roster_contract`, `save_case_contract`,
   `replay_cli_contract`, `replay_case_completeness`, `replay_contract`,
   `p5_gate`).
+
+## Backups (sr-winpar.7)
+
+`sr install-hook claude --apply`, `sr uninstall-hook claude --apply` and
+`sr snooze --apply` back up the file they are about to change (Claude settings
+or `snoozes.toml`, which may hold secrets) before publishing. On Windows the
+backup is written by `storage::windows_private::write_private_file`:
+
+- **Location.** `%LOCALAPPDATA%\skillranker\backups`, beside the cache and
+  ledger (the user's choice on 2026-11-08). Without `LOCALAPPDATA`, or with a
+  relative one, there is no private location: the command fails with
+  `storage-failure` (exit 9) before the settings change. There is no fallback
+  location; the old `/tmp/sr-backups` fallback was a root-relative path on
+  Windows.
+- **Folder.** The path is walked from the volume root without following
+  links or junctions. Ancestors are checked under rule 3, the volume under
+  rule 5, and the backups folder itself as a store directory (rules 1 and 2).
+  Missing folders are created with the private descriptor. An existing folder
+  that fails is refused, never repaired.
+- **File.** Each backup is a new file
+  (`<name>.sr-backup.<seconds>_<nanoseconds>_<n>`) created with the private
+  file descriptor: owned by the user, with a protected DACL for the user and
+  SYSTEM. It is flushed and then admitted as a single-link owner-only file, and
+  the folder is revalidated. If any step fails, the partly written backup is
+  removed and the settings are not changed.
+
+Backups accumulate; `sr` never deletes them. To review or remove old ones, list
+`%LOCALAPPDATA%\skillranker\backups` and delete the files you no longer need.
+Each name starts with the file it backs up and carries the Unix time of the
+change. Builds before sr-winpar.7 left backups with inherited, not owner-only,
+permissions in `%USERPROFILE%\.local\state\sr\backups`. `sr` neither reads
+nor removes them; review and delete them by hand.
+
+Native evidence:
+- `tests/installer_backup_windows_contract.rs` (5 cases):
+  - an owner-only backup in a protected folder before the settings change;
+  - a backups folder with an Everyone entry, refused and left unrepaired;
+  - an ancestor Everyone can modify, refused;
+  - a junction in the path, refused;
+  - no `LOCALAPPDATA`, refused with no fallback.
+
+  Each refusal leaves the settings byte-identical and says so.
+- `tests/windows_platform.rs`
+  `installing_writes_a_command_git_bash_can_run_and_removing_restores_settings`:
+  refused without `LOCALAPPDATA`; with it, one owner-only backup per applied
+  change.
+- `tests/snooze_contract.rs` and `tests/onboarding_contract.rs` apply changes
+  through the same backup.
