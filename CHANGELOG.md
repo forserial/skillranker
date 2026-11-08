@@ -4,6 +4,9 @@
 
 ### Added
 
+- Windows writes the snooze configuration (`sr\snoozes.toml`) owner-only, as
+  Unix writes it 0600: `sr snooze --apply` creates missing folders privately
+  and the file only you and SYSTEM can open.
 - Windows names the folder and the access entry that cause an owner-only
   store refusal, with the `icacls` command that fixes it when you can run it
   yourself. Example: "...\ledger grants Everyone (S-1-1-0) read and execute ...

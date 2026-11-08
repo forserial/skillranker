@@ -635,3 +635,15 @@ Administrators, SYSTEM); others appear as their SID, which `icacls` accepts as
 `tests/owner_only_refusal_names_the_path.rs` checks each row and then runs the
 suggested command exactly as printed, confirming that `sr ledger init`
 succeeds afterwards.
+
+## Snooze file (sr-winpar.30)
+
+`sr snooze ... --apply` writes the trusted snooze configuration
+(`sr\snoozes.toml` under the configuration root) as Unix writes it 0600: the
+temporary file is created new with the private file descriptor (owned by the
+user, a protected access list for the user and SYSTEM, whatever the folder
+grants), flushed, and renamed over the target under the snooze lock after the
+external-modification check. Missing folders are created with the private
+descriptor, as Unix creates them 0700; an existing folder is left as it is, as
+on Unix. Its backups are owner-only ([Backups](#backups-sr-winpar7)).
+`tests/snooze_contract.rs` checks the published file's descriptor.

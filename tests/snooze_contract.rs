@@ -14,8 +14,6 @@ use support::PlatformEnv;
 
 use serde_json::{Value, json};
 use std::io::{BufRead, BufReader};
-#[cfg(unix)]
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdout, Command, Output, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -281,16 +279,10 @@ fn a_skill_snooze_withholds_only_that_skill_in_its_own_session() {
     );
     assert_eq!(applied["applied"], true, "{applied}");
     assert_eq!(applied["entries_after"], 1);
-    // Unix mode; on Windows the snooze file is still written with the
-    // permissions it inherits from its folder (not yet tracked by an issue).
-    #[cfg(unix)]
-    {
-        let mode = std::fs::metadata(home.snooze_file())
-            .unwrap()
-            .permissions()
-            .mode();
-        assert_eq!(mode & 0o777, 0o600, "owner-only trusted configuration");
-    }
+    // Owner-only trusted configuration: mode 0600 on Unix; on Windows owned
+    // by the user with a protected access list for the user and SYSTEM
+    // (sr-winpar.30).
+    support::assert_owner_only_file(home.snooze_file());
     // Echoing the event ID is not an exposure of its advice.
     let stats_snoozed = home.json(1, &["stats", "--json"]);
     assert_eq!(

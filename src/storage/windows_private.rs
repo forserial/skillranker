@@ -762,6 +762,27 @@ pub(crate) fn create_store_file(directory: &Path, name: &std::ffi::OsStr) -> io:
     create_new_file_with(&directory.join(name), &file_sddl(user))
 }
 
+/// Create `path` and any missing folders above it with the private directory
+/// descriptor (rule 7), the Windows form of `DirBuilder::recursive(true)
+/// .mode(0o700)`. Like that builder, folders that already exist are left as
+/// they are and not checked; callers that need admission walk instead.
+pub(crate) fn create_private_dirs(path: &Path) -> io::Result<()> {
+    if path.is_dir() {
+        return Ok(());
+    }
+    if let Some(parent) = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        create_private_dirs(parent)?;
+    }
+    let user = user().map_err(|_| io::Error::new(io::ErrorKind::PermissionDenied, "token user"))?;
+    match create_directory_with(path, &directory_sddl(user)) {
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists && path.is_dir() => Ok(()),
+        result => result,
+    }
+}
+
 /// Write `bytes` to the new owner-only file `name` in the private directory
 /// `path`, such as an installer settings backup (sr-winpar.7). Missing
 /// folders are created with the private descriptor; the walk admits each

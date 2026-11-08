@@ -248,9 +248,6 @@ can run out and report `Budget`, as on any loaded host.
 - The cache, ledger, allowance, export, backup and policy-file
   implementations and their limits are recorded in
   [Windows private storage](windows-private-storage.md).
-- The snooze configuration file (`sr\snoozes.toml`) is written with the
-  permissions its folder gives it, not owner-only; its backups are owner-only
-  (sr-winpar.30).
 - An export's destination must be on a local fixed NTFS or ReFS volume:
   removable, network and RAM-disk destinations are refused, where Unix exports
   accept any filesystem. Windows has no directory flush from a read-only handle,

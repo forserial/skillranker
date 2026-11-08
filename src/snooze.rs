@@ -543,12 +543,23 @@ pub fn apply(
         TMP_COUNTER.fetch_add(1, Ordering::Relaxed)
     ));
     let write = || -> std::io::Result<()> {
-        let mut handle = OpenOptions::new().create_new(true).write(true).open(&tmp)?;
         #[cfg(unix)]
-        {
+        let mut handle = {
             use std::os::unix::fs::PermissionsExt;
+            let handle = OpenOptions::new().create_new(true).write(true).open(&tmp)?;
             fs::set_permissions(&tmp, fs::Permissions::from_mode(0o600))?;
-        }
+            handle
+        };
+        // Windows (sr-winpar.30): created new with the private file
+        // descriptor, owned by the user with a protected access list for the
+        // user and SYSTEM, whatever the folder grants.
+        #[cfg(windows)]
+        let mut handle = crate::storage::windows_private::create_store_file(
+            parent,
+            tmp.file_name().unwrap_or_default(),
+        )?;
+        #[cfg(not(any(unix, windows)))]
+        let mut handle = OpenOptions::new().create_new(true).write(true).open(&tmp)?;
         handle.write_all(planned.next.encode().as_bytes())?;
         handle.sync_all()
     };
@@ -568,16 +579,24 @@ pub fn apply(
 }
 
 fn create_private_dir(dir: &Path) -> Result<(), SnoozeError> {
-    let mut builder = fs::DirBuilder::new();
-    builder.recursive(true);
-    #[cfg(unix)]
+    // Windows (sr-winpar.30): missing folders get the private descriptor, as
+    // they get mode 0700 on Unix; existing folders are left as they are.
+    #[cfg(windows)]
+    return crate::storage::windows_private::create_private_dirs(dir)
+        .map_err(|e| SnoozeError::Io(e.kind().to_string()));
+    #[cfg(not(windows))]
     {
-        use std::os::unix::fs::DirBuilderExt;
-        builder.mode(0o700);
+        let mut builder = fs::DirBuilder::new();
+        builder.recursive(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::DirBuilderExt;
+            builder.mode(0o700);
+        }
+        builder
+            .create(dir)
+            .map_err(|e| SnoozeError::Io(e.kind().to_string()))
     }
-    builder
-        .create(dir)
-        .map_err(|e| SnoozeError::Io(e.kind().to_string()))
 }
 
 #[cfg(test)]
