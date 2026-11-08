@@ -1,6 +1,8 @@
 //! Both public rendering APIs must exclude non-active prose before windowing
 //! and preserve honest disclosure counts for the exact final payload.
 
+mod support;
+
 use skillranker::context::{
     CurrentRequest, EventKind, NormalizedContext, NormalizedEvent, PrivateText,
     RenderContextOptions, Role, ToolEvent, ToolStatus, render_context, render_context_and_receipt,
@@ -216,16 +218,8 @@ fn profile_omissions_and_scope_omissions_are_reconciled_without_double_counting(
 fn production_dry_run_contains_active_history_but_no_sibling_prose() {
     use std::fs;
     use std::process::Command;
-    use std::time::{SystemTime, UNIX_EPOCH};
 
-    let root = std::env::temp_dir().join(format!(
-        "sr-render-history-{}-{}",
-        std::process::id(),
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos(),
-    ));
+    let root = std::env::temp_dir().join(format!("sr-render-history-{}", support::unique_suffix()));
     // A private 0700 root on Unix; Windows has no mode bits to set.
     #[cfg(unix)]
     std::os::unix::fs::DirBuilderExt::mode(&mut fs::DirBuilder::new(), 0o700)

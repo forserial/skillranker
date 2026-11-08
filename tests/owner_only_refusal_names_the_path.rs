@@ -9,6 +9,8 @@
 //! one.
 //!
 //! These cases drive the built binary, because the wording is what a person reads.
+mod support;
+
 use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -17,13 +19,9 @@ fn temp_root(label: &str) -> PathBuf {
     // Linux's root-owned sticky /tmp is the one ancestor the store accepts, so a test that wants a
     // REJECTED ancestor has to create it here itself.
     let root = PathBuf::from("/tmp").join(format!(
-        "sr-owner-refusal-{}-{}-{}",
+        "sr-owner-refusal-{}-{}",
         label,
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
+        support::unique_suffix()
     ));
     std::fs::DirBuilder::new()
         .mode(0o700)

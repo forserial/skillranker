@@ -24,12 +24,8 @@ fn directory() -> PathBuf {
 #[cfg(unix)]
 fn directory() -> PathBuf {
     let path = PathBuf::from(format!(
-        "/tmp/sr-cache-read-view-{}-{}",
-        std::process::id(),
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
+        "/tmp/sr-cache-read-view-{}",
+        support::unique_suffix()
     ));
     std::fs::DirBuilder::new()
         .mode(0o700)

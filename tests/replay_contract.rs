@@ -15,13 +15,9 @@ use std::path::PathBuf;
 
 fn temp_replay_dir(name: &str) -> PathBuf {
     let dir = support::tmp_root().join(format!(
-        "sr-replay-test-{}-{}-{}",
+        "sr-replay-test-{}-{}",
         name,
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
+        support::unique_suffix()
     ));
     support::create_private_dir(&dir);
     dir

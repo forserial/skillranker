@@ -21,7 +21,6 @@ use skillranker::runtime::ProcessInvocation;
 use skillranker::storage::ledger::*;
 use std::path::PathBuf;
 use std::process::Command;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 fn test_invocation() -> (ProcessInvocation, Cx) {
     let inv = ProcessInvocation::enter().expect("process invocation");
@@ -31,13 +30,9 @@ fn test_invocation() -> (ProcessInvocation, Cx) {
 
 fn temp_private_dir(prefix: &str) -> PathBuf {
     let dir = support::tmp_root().join(format!(
-        "sr-test-paired-{}-{}-{}",
+        "sr-test-paired-{}-{}",
         prefix,
-        std::process::id(),
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
+        support::unique_suffix()
     ));
     support::create_private_dir(&dir);
     dir

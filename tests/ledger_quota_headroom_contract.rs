@@ -19,20 +19,11 @@ use skillranker::storage::ledger::*;
 use skillranker::storage::*;
 use std::fs;
 use std::path::PathBuf;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 fn temp_private_dir(prefix: &str) -> PathBuf {
     // RCH's TMPDIR can have ancestors owned by a different user. Exercise
     // storage under Linux's root-owned sticky /tmp with private 0700 permissions.
-    let dir = support::tmp_root().join(format!(
-        "sr-{}-{}-{}",
-        prefix,
-        std::process::id(),
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
+    let dir = support::tmp_root().join(format!("sr-{}-{}", prefix, support::unique_suffix()));
     support::create_private_dir(&dir);
     dir
 }

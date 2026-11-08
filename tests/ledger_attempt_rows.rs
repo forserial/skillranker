@@ -26,7 +26,6 @@ use skillranker::runtime::{EntryClock, ProcessInvocation};
 use skillranker::storage::StoreError;
 use skillranker::storage::ledger::*;
 use std::path::PathBuf;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 /// A wall-clock base far from zero, so an unconverted monotonic offset cannot
 /// pass for a converted one.
@@ -64,13 +63,9 @@ fn temp_ledger_dir(test_name: &str) -> PathBuf {
     // user, so use Linux's root-owned sticky /tmp rather than relaxing the store's
     // own ancestor checks.
     let dir = support::tmp_root().join(format!(
-        "sr-attempt-row-{}-{}-{}",
+        "sr-attempt-row-{}-{}",
         test_name,
-        std::process::id(),
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
+        support::unique_suffix()
     ));
     support::create_private_dir(&dir);
     dir

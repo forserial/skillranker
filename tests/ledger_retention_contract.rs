@@ -23,15 +23,7 @@ use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 fn temp_private_dir(prefix: &str) -> PathBuf {
-    let dir = support::tmp_root().join(format!(
-        "sr-ret-{}-{}-{}",
-        prefix,
-        std::process::id(),
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
+    let dir = support::tmp_root().join(format!("sr-ret-{}-{}", prefix, support::unique_suffix()));
     support::create_private_dir(&dir);
     dir
 }

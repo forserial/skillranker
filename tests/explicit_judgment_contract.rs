@@ -28,13 +28,9 @@ fn test_invocation() -> (ProcessInvocation, Cx) {
 
 fn temp_private_dir(prefix: &str) -> PathBuf {
     let dir = support::tmp_root().join(format!(
-        "sr-test-judg-{}-{}-{}",
+        "sr-test-judg-{}-{}",
         prefix,
-        std::process::id(),
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
+        support::unique_suffix()
     ));
     support::create_private_dir(&dir);
     dir

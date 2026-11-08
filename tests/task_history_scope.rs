@@ -1,6 +1,8 @@
 //! Directives and continuation anchors must come from the selected history,
 //! not a sibling, another agent, a future turn, or stale prompt text.
 
+mod support;
+
 use skillranker::context::{
     AnchorProvenance, AnchorResolution, CurrentRequest, EventKind, NormalizedContext,
     NormalizedEvent, PrivateText, Role, resolve_task_anchor,
@@ -264,16 +266,8 @@ fn flat_pending_prompt_and_empty_prompt_only_context_keep_working() {
 fn offline_cli_never_turns_a_sibling_directive_into_an_explicit_request() {
     use std::fs;
     use std::process::Command;
-    use std::time::{SystemTime, UNIX_EPOCH};
 
-    let root = std::env::temp_dir().join(format!(
-        "sr-task-history-{}-{}",
-        std::process::id(),
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos(),
-    ));
+    let root = std::env::temp_dir().join(format!("sr-task-history-{}", support::unique_suffix()));
     // A private 0700 root on Unix; Windows has no mode bits to set.
     #[cfg(unix)]
     std::os::unix::fs::DirBuilderExt::mode(&mut fs::DirBuilder::new(), 0o700)

@@ -21,7 +21,6 @@ use skillranker::runtime::ProcessInvocation;
 use skillranker::storage::StoreError;
 use skillranker::storage::ledger::*;
 use std::path::PathBuf;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 fn test_invocation() -> (ProcessInvocation, Cx) {
     let inv = ProcessInvocation::enter().expect("process invocation");
@@ -35,13 +34,9 @@ fn temp_ledger_dir(test_name: &str) -> PathBuf {
     // another user, so use Linux's root-owned sticky /tmp rather than relaxing
     // the store's own ancestor checks.
     let dir = support::tmp_root().join(format!(
-        "sr-ledger-attempt-{}-{}-{}",
+        "sr-ledger-attempt-{}-{}",
         test_name,
-        std::process::id(),
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
+        support::unique_suffix()
     ));
     support::create_private_dir(&dir);
     dir

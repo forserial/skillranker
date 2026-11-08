@@ -32,14 +32,7 @@ fn directory() -> PathBuf {
 
 #[cfg(unix)]
 fn directory() -> PathBuf {
-    let dir = PathBuf::from(format!(
-        "/tmp/sr-cache-fence-{}-{}",
-        std::process::id(),
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
+    let dir = PathBuf::from(format!("/tmp/sr-cache-fence-{}", support::unique_suffix()));
     std::fs::DirBuilder::new().mode(0o700).create(&dir).unwrap();
     dir
 }

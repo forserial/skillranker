@@ -2,6 +2,8 @@
 //!
 //! Planned commands name their phase and published inventory. The implemented
 //! Claude hook instead keeps its quiet failure boundary, even without input.
+mod support;
+
 use serde_json::Value;
 use std::process::Command;
 
@@ -35,14 +37,8 @@ fn a_planned_command_names_the_phase_it_waits_for() {
 fn implemented_stats_reaches_storage_instead_of_a_planned_refusal() {
     // Explicitly select a missing store so this does not depend on the user's
     // real platform data. Populated-store success is exercised separately.
-    let missing = std::env::temp_dir().join(format!(
-        "sr-planned-stats-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
+    let missing =
+        std::env::temp_dir().join(format!("sr-planned-stats-{}", support::unique_suffix()));
     let (code, value) = run(&["stats", "--json", "--dir", missing.to_str().unwrap()]);
     assert_eq!(code, Some(9), "{value}");
     assert_eq!(value["error"]["kind"], "storage-failure", "{value}");

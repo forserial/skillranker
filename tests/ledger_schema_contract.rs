@@ -19,7 +19,6 @@ use skillranker::storage::ledger::*;
 #[cfg(unix)]
 use std::fs;
 use std::path::PathBuf;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 fn snapshot_fixture() -> NewRosterSnapshot {
     NewRosterSnapshot {
@@ -661,13 +660,9 @@ fn temp_ledger_dir(test_name: &str) -> PathBuf {
     // RCH's TMPDIR can have ancestors owned by a different user. Exercise
     // storage under Linux's root-owned sticky /tmp without relaxing checks.
     let dir = support::tmp_root().join(format!(
-        "sr-ledger-test-{}-{}-{}",
+        "sr-ledger-test-{}-{}",
         test_name,
-        std::process::id(),
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
+        support::unique_suffix()
     ));
     support::create_private_dir(&dir);
     dir

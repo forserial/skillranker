@@ -1,4 +1,6 @@
 //! Native parser identities must remain usable for branch isolation.
+mod support;
+
 use serde_json::json;
 use skillranker::context::jsonl::{SkipKind, parse_line};
 use skillranker::context::{BranchResolutionTarget, resolve_active_branch};
@@ -104,14 +106,8 @@ fn omitted_and_null_optional_ids_remain_unknown_not_invented() {
 fn prior_parser_cursor_rebuilds_so_dropped_attribution_is_recovered() {
     use skillranker::context::jsonl::{CursorKind, PARSER_VERSION, snapshot_jsonl};
     use skillranker::runtime::ProcessInvocation;
-    let path = std::env::temp_dir().join(format!(
-        "sr-native-identity-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
+    let path =
+        std::env::temp_dir().join(format!("sr-native-identity-{}", support::unique_suffix()));
     use std::io::Write;
     let mut file = std::fs::OpenOptions::new()
         .write(true)
@@ -154,14 +150,8 @@ fn rejected_records_share_the_record_budget_and_leave_a_resumable_cursor() {
     use skillranker::context::jsonl::{CursorKind, snapshot_jsonl};
     use skillranker::runtime::ProcessInvocation;
     use std::io::Write;
-    let path = std::env::temp_dir().join(format!(
-        "sr-native-record-cap-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
+    let path =
+        std::env::temp_dir().join(format!("sr-native-record-cap-{}", support::unique_suffix()));
     let mut file = std::fs::OpenOptions::new()
         .write(true)
         .create_new(true)

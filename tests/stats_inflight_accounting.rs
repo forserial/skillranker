@@ -24,19 +24,14 @@ use asupersync::Cx;
 use skillranker::runtime::ProcessInvocation;
 use skillranker::storage::ledger::*;
 use std::path::PathBuf;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 const BASE_MS: u64 = 1_700_000_000_000;
 
 fn temp_private_dir(prefix: &str) -> PathBuf {
     let dir = support::tmp_root().join(format!(
-        "sr-inflight-{}-{}-{}",
+        "sr-inflight-{}-{}",
         prefix,
-        std::process::id(),
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
+        support::unique_suffix()
     ));
     support::create_private_dir(&dir);
     dir

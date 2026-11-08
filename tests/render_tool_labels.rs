@@ -1,6 +1,8 @@
 //! Tool metadata must not bypass redaction or evict useful context. Local tool
 //! dispatch keeps the original names; only the provider view is transformed.
 
+mod support;
+
 use skillranker::context::render::{
     RenderContextOptions, RenderedLoadedReference, TOOL_LABEL_SCALARS, render_context,
     render_context_and_receipt,
@@ -205,18 +207,10 @@ fn session_and_label_receipts_combine_and_insufficient_context_stays_insufficien
 fn production_dry_run_redacts_tool_labels_and_no_tools_omits_them() {
     use std::fs;
     use std::process::Command;
-    use std::time::{SystemTime, UNIX_EPOCH};
 
     let root = fs::canonicalize(std::env::temp_dir())
         .unwrap()
-        .join(format!(
-            "sr-tool-labels-{}-{}",
-            std::process::id(),
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_nanos(),
-        ));
+        .join(format!("sr-tool-labels-{}", support::unique_suffix()));
     // A private 0700 root on Unix; Windows has no mode bits to set.
     #[cfg(unix)]
     std::os::unix::fs::DirBuilderExt::mode(&mut fs::DirBuilder::new(), 0o700)

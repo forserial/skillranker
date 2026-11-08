@@ -19,19 +19,14 @@ use skillranker::storage::StoreError;
 use skillranker::storage::ledger::*;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 fn temp_ledger_dir(test_name: &str) -> PathBuf {
     // RCH's TMPDIR can have ancestors owned by a different user. Exercise
     // storage under Linux's root-owned sticky /tmp with private 0700 permissions.
     let dir = support::tmp_root().join(format!(
-        "sr-ledger-fence-{}-{}-{}",
+        "sr-ledger-fence-{}-{}",
         test_name,
-        std::process::id(),
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
+        support::unique_suffix()
     ));
     support::create_private_dir(&dir);
     dir

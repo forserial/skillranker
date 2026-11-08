@@ -586,14 +586,8 @@ fn all_p4_invariants_verified() {
     // =========================================================================
     #[cfg(unix)]
     let cache_dir = {
-        let cache_dir = Path::new("/tmp").join(format!(
-            "sr-p4-cache-gate-{}-{}",
-            std::process::id(),
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
+        let cache_dir =
+            Path::new("/tmp").join(format!("sr-p4-cache-gate-{}", support::unique_suffix()));
         fs::DirBuilder::new()
             .mode(0o700)
             .create(&cache_dir)

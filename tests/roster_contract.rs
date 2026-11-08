@@ -427,14 +427,7 @@ fn export_dir(label: &str) -> std::path::PathBuf {
     let base = std::fs::canonicalize("/tmp").unwrap();
     #[cfg(windows)]
     let base = support::tmp_root();
-    let dir = base.join(format!(
-        "sr-{label}-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
+    let dir = base.join(format!("sr-{label}-{}", support::unique_suffix()));
     support::private_dir(&dir);
     dir
 }

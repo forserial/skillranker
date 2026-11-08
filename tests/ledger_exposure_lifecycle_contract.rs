@@ -22,7 +22,6 @@ use skillranker::storage::StoreError;
 use skillranker::storage::ledger::*;
 use std::fs;
 use std::path::PathBuf;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 fn test_invocation() -> (ProcessInvocation, Cx) {
     let inv = ProcessInvocation::enter().expect("process invocation");
@@ -32,13 +31,9 @@ fn test_invocation() -> (ProcessInvocation, Cx) {
 
 fn temp_private_dir(prefix: &str) -> PathBuf {
     let dir = support::tmp_root().join(format!(
-        "sr-test-exposure-{}-{}-{}",
+        "sr-test-exposure-{}-{}",
         prefix,
-        std::process::id(),
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
+        support::unique_suffix()
     ));
     support::create_private_dir(&dir);
     dir
