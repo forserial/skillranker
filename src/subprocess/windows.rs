@@ -387,19 +387,27 @@ mod tests {
             workers: Vec::new(),
             done: false,
         };
-        let before = live_pipe_workers();
+        // This test's own worker reports its end. The process-wide
+        // `live_pipe_workers()` count is not used: other tests in this binary
+        // start and end pipe workers concurrently (sr-winpar.26).
+        let finished = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let flag = std::sync::Arc::clone(&finished);
         owner.workers.push(
-            spawn_worker("sr-subprocess-test", || {
+            spawn_worker("sr-subprocess-test", move || {
                 std::thread::sleep(Duration::from_millis(300));
+                flag.store(true, Ordering::SeqCst);
             })
             .unwrap(),
         );
-        assert_eq!(live_pipe_workers(), before + 1);
+        assert!(
+            !finished.load(Ordering::SeqCst),
+            "the worker must still be running when cleanup starts"
+        );
         owner.cleanup().unwrap();
-        assert_eq!(
-            live_pipe_workers(),
-            before,
+        assert!(
+            finished.load(Ordering::SeqCst),
             "cleanup returned before its worker ended"
         );
+        assert!(owner.workers.is_empty(), "cleanup joined every worker");
     }
 }
