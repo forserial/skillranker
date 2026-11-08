@@ -280,3 +280,42 @@ fn shallower_skills_in_every_root_precede_another_roots_nested_support_files() {
         );
     }
 }
+
+#[test]
+fn version_control_metadata_is_counted_but_never_descended() {
+    // A skills folder kept under version control (sr-winpar.31). Each VCS
+    // folder holds a stray SKILL.md and nested history that would exhaust a
+    // small budget if it were walked.
+    let root = tree();
+    fs::create_dir(root.join("alpha")).unwrap();
+    fs::write(root.join("alpha/SKILL.md"), "body").unwrap();
+    for vcs in [".git", ".HG", ".svn"] {
+        let objects = root.join(vcs).join("objects");
+        fs::create_dir_all(&objects).unwrap();
+        fs::write(root.join(vcs).join("SKILL.md"), "not a skill").unwrap();
+        for index in 0..50 {
+            fs::write(objects.join(format!("object-{index}")), "x").unwrap();
+        }
+    }
+    let mut plan = DiscoveryPlan::new(HarnessId::new("claude_code").unwrap());
+    plan.push_root(PlannedRoot::open(spec("vcs"), &root).unwrap().unwrap());
+    // 4 root entries (alpha and three VCS folders) + alpha's SKILL.md.
+    let discovery = plan.discover_with(limits(5, 100));
+    assert_eq!(discovery.entries_examined(), 5);
+    assert!(discovery.diagnostics().is_empty(), "complete, not partial");
+    let relative: Vec<_> = discovery
+        .candidates()
+        .iter()
+        .map(|c| c.relative().to_path_buf())
+        .collect();
+    assert_eq!(relative, vec![PathBuf::from("alpha").join("SKILL.md")]);
+
+    // An ordinary dot-folder is still walked: only VCS metadata is skipped.
+    let other = tree();
+    fs::create_dir_all(other.join(".hidden/beta")).unwrap();
+    fs::write(other.join(".hidden/beta/SKILL.md"), "body").unwrap();
+    let mut plan = DiscoveryPlan::new(HarnessId::new("claude_code").unwrap());
+    plan.push_root(PlannedRoot::open(spec("dot"), &other).unwrap().unwrap());
+    let discovery = plan.discover_with(limits(100, 100));
+    assert_eq!(discovery.candidates().len(), 1);
+}

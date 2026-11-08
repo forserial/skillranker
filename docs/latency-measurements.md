@@ -597,3 +597,48 @@ asked the model to report whether a SkillRanker note was present.
   skills. The configured root (303 skills) is wider than what Claude sees
   through `~\.claude\skills` (53 links), which is why `sr` marks configured
   roots `unverified`.
+
+## 2026-11-08, Windows local-phase profile (sr-winpar.31)
+
+Same host, isolated folders, roster and transcript as the live run above. All
+runs were offline, with no provider request. Stage times come from temporary
+timers removed before the commit; wall times come from the release binary.
+
+Where an offline hook run spent its time at `aaf2948` (one representative
+run; process start to exit, about 520 ms):
+
+| Stage | Elapsed at end | Note |
+| --- | ---: | --- |
+| Configuration, context capture, branch | about 40 ms | transcript tail of a 10 MB file |
+| Discovery walk | about 190-210 ms | reached the 10,000-entry limit inside the skills folder's `.git` (7,821 entries) |
+| Skill file reads and parsing | about 230-255 ms | 372 candidates, two blocking workers |
+| Name proof for skipped links | about 280-300 ms | runs because 53 personal skills are symlinks (sr-winpar.32) |
+| Git `dirty_paths`, joined with the roster | about 330 ms | `git status` through `Git\cmd\git.exe`: about 100 ms, of which about 90 ms is starting the launcher and Git |
+| Cache store open and lookup | about 360 ms | private-store checks |
+| Failure or publication path, runtime shutdown and exit | about 500-520 ms | |
+
+Change: discovery no longer descends into version-control metadata (`.git`,
+`.hg`, `.svn`; the entry still counts toward the budget). It finds the same
+303 skills, and the roster is no longer cut off by the entry limit.
+
+| Offline measurement (release) | `aaf2948`, n = 10 | After, n = 15 (two passes) |
+| --- | ---: | ---: |
+| `sr --version` | 27 ms p50 | 23-25 ms p50 |
+| `sr roster --json` (303 skills) | 375 ms p50 | 256-260 ms p50 |
+| `sr hook claude --offline` (whole local phase) | 518 ms p50 | 437-459 ms p50 |
+
+The hook gains less than `sr roster`: `git status` runs in parallel with the
+roster and is now the slower of the two. The exact-cache and network targets
+(exact-cache p95 at most 100 ms, warm network p50 at most 600 ms) are not
+met. They were not re-measured, because that needs new provider requests;
+the local phase alone is still about 450 ms. Remaining options, each
+measured above:
+
+- Starting Git directly (`ucrt64\bin\git.exe`) rather than through the
+  `cmd` launcher saves about 30 ms. That changes which executable sr trusts
+  (sr-winpar.10's decision).
+- The name proof (about 50 ms) disappears if symlinked personal skills are
+  admitted (sr-winpar.32).
+- Reusing a verified roster across invocations would remove most of the
+  discovery and read cost. That is a design change: the snapshot must be
+  revalidated against content changes.

@@ -641,7 +641,10 @@ impl Discovery {
                             limits,
                         );
                     }
-                    Type::Directory => subdirectories.push(name.to_owned()),
+                    Type::Directory if !is_vcs_metadata(name) => {
+                        subdirectories.push(name.to_owned());
+                    }
+                    Type::Directory => {}
                     Type::Symlink => {
                         self.note(Diagnostic::SymlinkedDirectorySkipped(
                             planned.spec.source.clone(),
@@ -749,6 +752,20 @@ fn sflag_to_type(mode: nix::sys::stat::mode_t) -> Type {
         SFlag::S_IFBLK => Type::BlockDevice,
         _ => Type::File,
     }
+}
+
+/// Version-control metadata folders (`.git`, `.hg`, `.svn`, in any case).
+/// No skill lives in one, and a skills folder kept under version control
+/// would otherwise spend the discovery entry budget walking its history: a
+/// git-managed folder of 303 skills reached the 10,000-entry limit inside
+/// `.git` and was reported partial (sr-winpar.31). The entry itself still
+/// counts toward the budget; it is not descended.
+fn is_vcs_metadata(name: &OsStr) -> bool {
+    name.to_str().is_some_and(|name| {
+        [".git", ".hg", ".svn"]
+            .iter()
+            .any(|vcs| name.eq_ignore_ascii_case(vcs))
+    })
 }
 
 /// Windows walk. Windows has no `openat`/`readdir` pair, so each visited
@@ -865,7 +882,7 @@ impl Discovery {
                     self.note(Diagnostic::SymlinkedDirectorySkipped(
                         planned.spec.source.clone(),
                     ));
-                } else if kind.is_dir() {
+                } else if kind.is_dir() && !is_vcs_metadata(&name) {
                     subdirectories.push(name);
                 }
                 checkpoint()?;

@@ -106,6 +106,10 @@
 
 ### Fixed
 
+- Roster discovery no longer walks version-control metadata (`.git`, `.hg`,
+  `.svn`). A skills folder kept under git spent the 10,000-entry discovery
+  budget inside `.git`, which made the roster partial and slow; with 303 skills
+  on Windows, `sr roster` went from 375 ms to about 258 ms (p50).
 - Concurrent rankings no longer time out waiting for the request allowance
   on Windows. Each admission now opens and checks the accounting store
   before taking the shared lock, reads the guard through the lock's
