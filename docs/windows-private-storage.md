@@ -4,8 +4,8 @@ This is the policy the Windows storage port implements (sr-winpar.1). It defines
 what "owner-only private storage" means on Windows, rule by rule, with the Unix
 rule each one mirrors and what it refuses. `.3` (cache), `.4` (ledger and hook
 counter), `.5` (enforced allowance), `.6` (exports, snapshots, replay cases) and
-`.7` (installer backups) implement it; `.2` decides how `sr` reads and sets
-security descriptors under `#![forbid(unsafe_code)]`. Until those land, every
+`.7` (installer backups) implement it; `.2` chose how `sr` reads and sets
+security descriptors under `#![forbid(unsafe_code)]` ([Mechanism](#mechanism-sr-winpar2)). Until those land, every
 Windows store open still reports `UnsupportedFilesystem`
 ([platform boundary](platform-boundary.md#windows-stateless-ranking)).
 
@@ -196,9 +196,86 @@ NTFS volume on Windows, not a cross-compile or Wine.
 
 ## What the implementation needs from Windows
 
-Recorded for `.2`, which chooses the mechanism: by handle, the owner SID and DACL
-(including the protected flag and each ACE's type, flags, mask and SID); creation
-with an explicit security descriptor; the volume's filesystem name and remote
-status; the drive type and final path of a handle; free bytes available to the
-caller. Everything is read from held handles, not by re-resolving paths, so the
-checks bind to the objects the walk holds.
+By handle, the owner SID and DACL (including the protected flag and each ACE's
+type, flags, mask and SID); creation with an explicit security descriptor; the
+volume's filesystem name and remote status; the drive type and final path of a
+handle; free bytes available to the caller; and the process token's user SID.
+Everything is read from held handles, not by re-resolving paths, so the checks
+bind to the objects the walk holds.
+
+## Mechanism (sr-winpar.2)
+
+Decision, approved by the user on 2026-11-07 (option B; quoted on sr-winpar.2):
+the Win32 calls live in `crates/sr-win-sys`, a second workspace package and the
+only one that may contain unsafe code. `skillranker` keeps
+`#![forbid(unsafe_code)]` and the `unsafe_code = "forbid"` lint unchanged. The
+root manifest's `default-members` include both packages, so the plain gate
+commands (`cargo fmt --check`, `cargo check`, `cargo clippy`, `cargo test`) cover
+both.
+
+Why not the alternatives:
+
+- **A, a safe-wrapper crate**: none qualified. `windows-permissions` 0.2.4 (MIT,
+  winapi 0.3) reads owner and DACL by handle but has no protected-bit accessor, no
+  creation with a security descriptor and no token user SID, and exposes unsafe
+  functions itself; `windows-acl` 0.3.0 (MIT, last release January 2021) has no
+  owner getter or protected bit; `windows-security` is raw generated bindings; `sddl`
+  is GPL-3.0. No crate reads the volume filesystem name or remote status by handle.
+  Any combination still needed unsafe calls for the rest.
+- **C, one allowed module inside `skillranker`**: would change the crate-root
+  `forbid` to `deny`.
+- **D, defer**: would leave every store refused on Windows.
+
+Dependency: `windows-sys` `=0.61.2` (MIT OR Apache-2.0, microsoft/windows-rs), a
+Windows-only dependency of `sr-win-sys`, already in the Windows graph at this
+version through asupersync. Features: `Win32_Foundation`, `Win32_Security`,
+`Win32_Security_Authorization`, `Win32_Storage_FileSystem`,
+`Win32_System_Threading`. No code is copied, so no third-party notice applies.
+
+API surface (`sr_win_sys::windows`, reads implemented and tested by the spike):
+
+| Function | Win32 calls | Returns |
+|---|---|---|
+| `token_user_sid()` | `OpenProcessToken`, `GetTokenInformation(TokenUser)`, `GetLengthSid` | the process user `Sid` |
+| `security_of(&File)` | `GetSecurityInfo(SE_FILE_OBJECT, OWNER \| DACL)`, `GetSecurityDescriptorControl`, `GetAclInformation`, `GetAce`, `LocalFree` | `Descriptor { owner, control, dacl: Option<Vec<Ace>> }` (`None` is a NULL DACL) |
+| `volume_of(&File)` | `GetVolumeInformationByHandleW`, `GetFinalPathNameByHandleW` (DOS and GUID), `GetDriveTypeW`, `GetFileInformationByHandleEx(FileRemoteProtocolInfo)` | filesystem name, serial, flags, final path, GUID root, drive type, remote-protocol outcome |
+| `free_bytes_for_caller(&File)` | `GetDiskFreeSpaceExW` on the handle's GUID volume root | bytes available to the caller |
+
+Creation with an explicit descriptor (rule 7) is not in the spike; `.3` adds it
+to this package (`CreateDirectoryW`/`CreateFileW` with a `SECURITY_ATTRIBUTES`
+holding the protected user+SYSTEM DACL and owner), under the same rules.
+`skillranker` does not depend on `sr-win-sys` until `.3` wires it in.
+
+Audit rules for `crates/sr-win-sys`:
+
+1. Unsafe code appears only in `src/windows.rs`; `sid.rs` and `acl.rs` carry
+   `#![forbid(unsafe_code)]`, and the whole package forbids it on non-Windows
+   targets.
+2. One unsafe operation per block, each with a `// SAFETY:` argument
+   (`clippy::multiple_unsafe_ops_per_block` and
+   `clippy::undocumented_unsafe_blocks` are denied); `unsafe_op_in_unsafe_fn` is
+   denied.
+3. Calls take handles borrowed from a live `&File`, the process pseudo-handle, or
+   an `OwnedHandle` the function owns; no handle outlives its owner or is closed
+   twice. No caller path is re-resolved.
+4. Memory Windows allocates is freed by a guard after its bytes are copied out.
+   Raw memory is read only as byte slices of lengths Windows reports
+   (`GetLengthSid`, `AceSize`); all interpretation is in the safe `sid` and `acl`
+   parsers, which refuse malformed SIDs and ACEs and report unknown ACE types as
+   `AceKind::Other` with no trustee.
+5. The package exposes facts, not policy: deciding whether a descriptor or volume
+   satisfies the rules above belongs to `skillranker`'s storage code.
+6. Every change to `src/windows.rs` needs native Windows tests in
+   `crates/sr-win-sys/tests/windows_reads.rs` and review of each new block.
+
+Spike evidence (2026-11-07, this machine): `cargo run -p sr-win-sys --example
+probe` on `%LOCALAPPDATA%` printed owner `user`, DACL not protected, eight
+inherited allowed entries (user, SYSTEM and Administrators full control; a local
+group `0x001200A9` read and execute; capability SIDs full control on the object
+plus inherit-only `GENERIC_ALL`), filesystem `NTFS`, drive type `3` (fixed), a
+GUID root, and `FileRemoteProtocolInfo` failing with error 87
+(`ERROR_INVALID_PARAMETER`) for this local volume. `.3` should treat only that
+error as "local" and refuse any other outcome. The native tests read back a
+protected DACL set with `icacls` (one explicit `OI|CI` full-control entry for the
+user plus a deny entry), its inheritance by a new file, and the volume facts of
+the temp directory.

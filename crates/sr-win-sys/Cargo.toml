@@ -1,0 +1,32 @@
+[package]
+name = "sr-win-sys"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.95"
+description = "Audited Win32 security-descriptor and volume reads for SkillRanker; the only package that may use unsafe code"
+license-file = "../../LICENSE"
+repository = "https://github.com/Dicklesworthstone/skillranker"
+publish = false
+
+# windows-sys is already in the Windows graph through asupersync at this exact
+# version (MIT OR Apache-2.0, microsoft/windows-rs). Only these features are
+# used; each one names the module of a call in src/windows.rs.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "=0.61.2", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Threading",
+] }
+
+# Unsafe code is allowed only in src/windows.rs (see src/lib.rs). Every unsafe
+# block states its safety argument, and unsafe functions' bodies are not
+# implicitly unsafe.
+[lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+
+[lints.clippy]
+all = "warn"
+undocumented_unsafe_blocks = "deny"
+multiple_unsafe_ops_per_block = "deny"

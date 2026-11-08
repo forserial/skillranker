@@ -118,7 +118,8 @@ selected provider's setup.
 
 - Start with one Rust package, binary `sr`, and a library exposing pure context
   normalization, question construction, validation, eligibility, and scoring.
-  Avoid premature workspace fragmentation.
+  Avoid premature workspace fragmentation; the only second package is
+  `crates/sr-win-sys` (see unsafe code below).
 - Keep filesystem, subprocess, network, database, and output effects at visible
   boundaries. Ranking and canonicalization should be pure functions of explicit
   inputs wherever possible.
@@ -147,7 +148,11 @@ selected provider's setup.
 - Rust 2024, Cargo, committed `Cargo.lock`, and a toolchain pinned to verified
   dependency requirements. Do not inherit OCR's SIMD/nightly requirements by analogy.
 - Forbid unsafe code at crate roots. This workload does not justify SIMD islands
-  or unsafe parsers.
+  or unsafe parsers. The one approved exception is the workspace package
+  `crates/sr-win-sys` (sr-winpar.2): audited Win32 security-descriptor and volume
+  reads, under the audit rules in
+  [Windows private storage](docs/windows-private-storage.md#mechanism-sr-winpar2).
+  Do not add unsafe code anywhere else or widen that package's role.
 
 ## Identity, Visibility, And User Authority
 
