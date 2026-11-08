@@ -54,6 +54,8 @@ pub use crate::sqlite_engine::{
 };
 use asupersync::Cx;
 use filesystem::PrivateDirectory;
+#[cfg(unix)]
+pub(crate) use filesystem::write_private_file;
 use rusqlite::{
     Connection, ErrorCode, OpenFlags, OptionalExtension, TransactionBehavior, config::DbConfig,
     limits::Limit, params,

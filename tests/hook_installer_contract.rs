@@ -660,3 +660,78 @@ fn a_harness_timeout_that_cannot_bound_the_deadline_is_refused_with_its_numbers(
     assert_eq!(skillranker::installer::minimum_hook_timeout_secs(3_200), 5);
     assert_eq!(skillranker::installer::minimum_hook_timeout_secs(1), 2);
 }
+
+/// A refused backup leaves the settings byte-identical and says why
+/// (sr-winpar.7: permission steps are errors, not best effort).
+fn assert_backup_refused(fixture: &InstallerFixture, out: &Output, original: &[u8]) {
+    assert_eq!(out.status.code(), Some(9), "{out:?}");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        format!("{stdout}{stderr}").contains("settings were not changed"),
+        "{stdout}{stderr}"
+    );
+    assert_eq!(fs::read(fixture.settings_path()).unwrap(), original);
+}
+
+#[test]
+fn a_backups_directory_that_is_not_owner_only_is_refused_not_repaired() {
+    let fixture = InstallerFixture::new();
+    let original = br#"{"model":"keep-me"}"#;
+    fs::write(fixture.settings_path(), original).unwrap();
+    fs::create_dir_all(fixture.state_dir()).unwrap();
+    fs::set_permissions(fixture.state_dir(), fs::Permissions::from_mode(0o755)).unwrap();
+    let out = fixture.run_sr(&["install-hook", "claude", "--apply"]);
+    assert_backup_refused(&fixture, &out, original);
+    let mode = fs::metadata(fixture.state_dir())
+        .unwrap()
+        .permissions()
+        .mode();
+    assert_eq!(mode & 0o777, 0o755, "the directory was left as it was");
+    assert_eq!(fs::read_dir(fixture.state_dir()).unwrap().count(), 0);
+}
+
+#[test]
+fn a_symlinked_backups_directory_is_refused() {
+    let fixture = InstallerFixture::new();
+    let original = br#"{"model":"keep-me"}"#;
+    fs::write(fixture.settings_path(), original).unwrap();
+    let elsewhere = fixture.root.join("elsewhere");
+    fs::create_dir(&elsewhere).unwrap();
+    fs::set_permissions(&elsewhere, fs::Permissions::from_mode(0o700)).unwrap();
+    fs::create_dir_all(fixture.state_dir().parent().unwrap()).unwrap();
+    std::os::unix::fs::symlink(&elsewhere, fixture.state_dir()).unwrap();
+    let out = fixture.run_sr(&["install-hook", "claude", "--apply"]);
+    assert_backup_refused(&fixture, &out, original);
+    assert_eq!(fs::read_dir(&elsewhere).unwrap().count(), 0);
+}
+
+#[test]
+fn without_a_state_or_home_directory_there_is_no_fallback() {
+    let fixture = InstallerFixture::new();
+    let original = br#"{"model":"keep-me"}"#;
+    fs::write(fixture.settings_path(), original).unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_sr"))
+        .env_clear()
+        .env("XDG_CONFIG_HOME", fixture.home().join(".config"))
+        .current_dir(fixture.workspace())
+        .args(["install-hook", "claude", "--apply", "--settings-file"])
+        .arg(fixture.settings_path())
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert_backup_refused(&fixture, &out, original);
+    // A relative XDG_STATE_HOME is not a location either.
+    let out = Command::new(env!("CARGO_BIN_EXE_sr"))
+        .env_clear()
+        .env("HOME", fixture.home())
+        .env("XDG_CONFIG_HOME", fixture.home().join(".config"))
+        .env("XDG_STATE_HOME", "relative/state")
+        .current_dir(fixture.workspace())
+        .args(["install-hook", "claude", "--apply"])
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert_backup_refused(&fixture, &out, original);
+    assert!(!fixture.workspace().join("relative").exists());
+}

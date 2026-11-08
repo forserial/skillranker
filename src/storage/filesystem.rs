@@ -89,6 +89,120 @@ fn inspect_directory(
     }
 }
 
+/// Walk from `/` to the owner-only directory `path` through no-follow
+/// descriptors: every ancestor root- or user-owned and not group- or
+/// other-writable (root-owned sticky directories excepted), the leaf owned by
+/// the user with mode 0700. Missing components are created with mode 0700 when
+/// `create`, after checking that the parent is on an admitted local filesystem
+/// when `require_local`. Existing directories are never repaired. Returns the
+/// held leaf and its identity.
+#[cfg(unix)]
+fn walk_private(
+    path: &Path,
+    create: bool,
+    require_local: bool,
+    mut checkpoint: impl FnMut() -> Result<(), StoreError>,
+) -> Result<(File, DirectoryIdentity), StoreError> {
+    // Bound path parsing before collecting components or making syscalls.
+    if !path.is_absolute() || path.as_os_str().len() > 4096 {
+        return Err(StoreError::UnsafePath);
+    }
+    let components: Vec<_> = path.components().collect();
+    if components.len() < 2
+        || components.len() > 128
+        || components
+            .iter()
+            .skip(1)
+            .any(|c| !matches!(c, Component::Normal(_)))
+    {
+        return Err(StoreError::UnsafePath);
+    }
+    let uid = nix::unistd::geteuid().as_raw();
+    let flags = OFlag::O_RDONLY | OFlag::O_DIRECTORY | OFlag::O_NOFOLLOW | OFlag::O_CLOEXEC;
+    let mut handle = open(Path::new("/"), flags, Mode::empty()).map_err(io_error)?;
+    trusted_ancestor(&fstat(&handle).map_err(io_error)?, uid, false)?;
+    for (i, component) in components.iter().enumerate().skip(1) {
+        checkpoint()?;
+        let name = component.as_os_str();
+        let opened = match openat(&handle, name, flags, Mode::empty()) {
+            Err(Errno::ENOENT) if create => {
+                if require_local && !local_filesystem(&fstatfs(&handle).map_err(io_error)?) {
+                    return Err(StoreError::UnsupportedFilesystem);
+                }
+                match mkdirat(&handle, name, Mode::from_bits_truncate(0o700)) {
+                    Ok(()) | Err(Errno::EEXIST) => {}
+                    Err(error) => return Err(io_error(error)),
+                }
+                openat(&handle, name, flags, Mode::empty()).map_err(io_error)?
+            }
+            result => result.map_err(io_error)?,
+        };
+        trusted_ancestor(
+            &fstat(&opened).map_err(io_error)?,
+            uid,
+            i + 1 == components.len(),
+        )?;
+        handle = opened;
+    }
+    let stat = fstat(&handle).map_err(io_error)?;
+    Ok((handle.into(), (stat.st_dev, stat.st_ino)))
+}
+
+/// Write `bytes` to the new owner-only file `name` in the owner-only directory
+/// `path`, such as an installer settings backup (sr-winpar.7). The directory is
+/// walked and created by [`walk_private`] on any filesystem, as exports accept
+/// any filesystem. The file is created exclusively without following links,
+/// set to mode 0600 (a failure is an error, not ignored), written, flushed,
+/// checked as a single-link 0600 regular file owned by the user, and the
+/// directory is flushed and revalidated. A partly written file of ours is
+/// removed; nothing existing is repaired or replaced.
+#[cfg(unix)]
+pub(crate) fn write_private_file(
+    path: &Path,
+    name: &std::ffi::OsStr,
+    bytes: &[u8],
+) -> Result<PathBuf, StoreError> {
+    use nix::sys::stat::fchmod;
+    use nix::unistd::{UnlinkatFlags, unlinkat};
+    use std::io::Write;
+    use std::os::unix::ffi::OsStrExt;
+    if name.is_empty() || name == "." || name == ".." || name.as_bytes().contains(&b'/') {
+        return Err(StoreError::UnsafePath);
+    }
+    let path = storage_path(path.to_owned());
+    let (directory, identity) = walk_private(&path, true, false, || Ok(()))?;
+    let fd = openat(
+        &directory,
+        name,
+        OFlag::O_WRONLY | OFlag::O_CREAT | OFlag::O_EXCL | OFlag::O_NOFOLLOW | OFlag::O_CLOEXEC,
+        Mode::from_bits_truncate(0o600),
+    )
+    .map_err(io_error)?;
+    let mut file = File::from(fd);
+    let written = (|| {
+        // Exact mode on our own descriptor, whatever the umask.
+        fchmod(&file, Mode::from_bits_truncate(0o600)).map_err(io_error)?;
+        file.write_all(bytes).map_err(|_| StoreError::Io)?;
+        file.sync_all().map_err(|_| StoreError::Io)?;
+        owned_regular(
+            &fstat(&file).map_err(io_error)?,
+            nix::unistd::geteuid().as_raw(),
+        )?;
+        directory.sync_all().map_err(|_| StoreError::Io)?;
+        let (_, current) = walk_private(&path, false, false, || Ok(()))?;
+        if current != identity {
+            return Err(StoreError::StoreReplaced);
+        }
+        Ok(())
+    })();
+    if let Err(error) = written {
+        drop(file);
+        let _ = unlinkat(&directory, name, UnlinkatFlags::NoRemoveDir);
+        return Err(error);
+    }
+    Ok(path.join(name))
+}
+
 #[cfg(unix)]
 pub(super) struct PrivateDirectory {
     pub path: PathBuf,
@@ -308,52 +422,11 @@ impl PrivateDirectory {
         cx: &Cx,
     ) -> Result<Self, StoreError> {
         let path = storage_path(path);
-        // Bound path parsing before collecting components or making syscalls.
-        if !path.is_absolute() || path.as_os_str().len() > 4096 {
-            return Err(StoreError::UnsafePath);
-        }
-        let components: Vec<_> = path.components().collect();
-        if components.len() < 2
-            || components.len() > 128
-            || components
-                .iter()
-                .skip(1)
-                .any(|c| !matches!(c, Component::Normal(_)))
-        {
-            return Err(StoreError::UnsafePath);
-        }
-        let uid = nix::unistd::geteuid().as_raw();
-        let flags = OFlag::O_RDONLY | OFlag::O_DIRECTORY | OFlag::O_NOFOLLOW | OFlag::O_CLOEXEC;
-        let mut handle = open(Path::new("/"), flags, Mode::empty()).map_err(io_error)?;
-        trusted_ancestor(&fstat(&handle).map_err(io_error)?, uid, false)?;
-        for (i, component) in components.iter().enumerate().skip(1) {
-            check_work(clock, cx)?;
-            let name = component.as_os_str();
-            let opened = match openat(&handle, name, flags, Mode::empty()) {
-                Err(Errno::ENOENT) if create => {
-                    if !local_filesystem(&fstatfs(&handle).map_err(io_error)?) {
-                        return Err(StoreError::UnsupportedFilesystem);
-                    }
-                    match mkdirat(&handle, name, Mode::from_bits_truncate(0o700)) {
-                        Ok(()) | Err(Errno::EEXIST) => {}
-                        Err(error) => return Err(io_error(error)),
-                    }
-                    openat(&handle, name, flags, Mode::empty()).map_err(io_error)?
-                }
-                result => result.map_err(io_error)?,
-            };
-            trusted_ancestor(
-                &fstat(&opened).map_err(io_error)?,
-                uid,
-                i + 1 == components.len(),
-            )?;
-            handle = opened;
-        }
-        let stat = fstat(&handle).map_err(io_error)?;
+        let (handle, identity) = walk_private(&path, create, true, || check_work(clock, cx))?;
         let directory = Self {
             path,
-            handle: handle.into(),
-            identity: (stat.st_dev, stat.st_ino),
+            handle,
+            identity,
         };
         if create {
             directory.admit_space_with(|| check_work(clock, cx))?;
@@ -372,21 +445,8 @@ impl PrivateDirectory {
         // changed ancestor or leaf before each effect; NOFOLLOW also protects
         // its main-file open. Same-uid hostile filesystem mutation is outside
         // this owner-only boundary, as it can already modify private contents.
-        let flags = OFlag::O_RDONLY | OFlag::O_DIRECTORY | OFlag::O_NOFOLLOW | OFlag::O_CLOEXEC;
-        let mut fd = open(Path::new("/"), flags, Mode::empty()).map_err(io_error)?;
-        let uid = nix::unistd::geteuid().as_raw();
-        let components: Vec<_> = self.path.components().collect();
-        for (i, component) in components.iter().enumerate().skip(1) {
-            check_work(clock, cx)?;
-            fd = openat(&fd, component.as_os_str(), flags, Mode::empty()).map_err(io_error)?;
-            trusted_ancestor(
-                &fstat(&fd).map_err(io_error)?,
-                uid,
-                i + 1 == components.len(),
-            )?;
-        }
-        let stat = fstat(&fd).map_err(io_error)?;
-        if (stat.st_dev, stat.st_ino) != self.identity {
+        let (_, identity) = walk_private(&self.path, false, true, || check_work(clock, cx))?;
+        if identity != self.identity {
             return Err(StoreError::StoreReplaced);
         }
         Ok(())

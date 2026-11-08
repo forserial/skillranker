@@ -92,6 +92,15 @@
 
 ### Fixed
 
+- Unix hook-installer and snooze backups are now owner-only or refused. The
+  backups directory is walked and created without following symlinks. It must
+  be owned by you with mode 0700, under parents nobody else can write to, and
+  is never repaired. Each backup is created exclusively with mode 0600 and
+  verified. Any failure, including a relative `XDG_STATE_HOME` or no state or
+  home directory, is a `storage-failure` before the settings change. Before,
+  permission failures were ignored, symlinks were followed, and backups fell
+  back to the shared `/tmp/sr-backups`. That fallback no longer exists.
+
 - The loopback provider stub (`tests/fixtures/jev-tls/provider_server.py`) now
   writes fixture files byte-for-byte (Windows text mode turned an "unchanged"
   rewrite into a change), tolerates a client that hung up first
