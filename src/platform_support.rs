@@ -29,8 +29,9 @@ pub enum Boundary {
 /// `storage::hook_entries`, `breaker::store`). Windows since sr-winpar.3
 /// (`storage::windows_private`); the stores below port separately.
 pub const PRIVATE_STORAGE: bool = cfg!(any(unix, windows));
-/// Owner-only exports and private case reads (`storage::export`, `replay`).
-pub const OWNER_ONLY_FILES: bool = cfg!(unix);
+/// Owner-only exports and private case reads (`storage::export`, `replay`):
+/// Unix, and Windows since sr-winpar.6.
+pub const OWNER_ONLY_FILES: bool = cfg!(any(unix, windows));
 /// `subprocess::run` spawns children.
 pub const OWNED_SUBPROCESS: bool = cfg!(any(target_os = "linux", target_os = "macos", windows));
 /// `allowance` has its guard and accounting modules: Unix, and Windows since
@@ -44,6 +45,12 @@ pub const LEDGER_STORAGE: bool = cfg!(any(unix, windows));
 /// Provider breaker state (`breaker::store`): Unix, and Windows since
 /// sr-winpar.3.
 pub const BREAKER_STORAGE: bool = cfg!(any(unix, windows));
+/// Owner-only installer backups (`installer::write_backup`): Unix only;
+/// Windows writes them unprotected until sr-winpar.7.
+pub const INSTALLER_BACKUPS: bool = cfg!(unix);
+/// Owner-only policy files (`learning`): Unix only; Windows writes them
+/// unprotected until sr-winpar.23.
+pub const POLICY_FILES: bool = cfg!(unix);
 /// cass sessions (`pipeline::cass_source`) run only on Unix; sr-winpar.11.
 pub const CASS_SESSIONS: bool = cfg!(unix);
 /// Git `dirty_paths` (`context::signals`): Unix, and Windows since sr-winpar.10.
@@ -203,13 +210,13 @@ pub const COMPONENTS: &[Component] = &[
     Component {
         name: "installer-backups",
         requires: Boundary::OwnerOnlyFiles,
-        implemented: true,
+        implemented: INSTALLER_BACKUPS,
         when_unavailable: Fallback::Unprotected,
     },
     Component {
         name: "policy-files",
         requires: Boundary::OwnerOnlyFiles,
-        implemented: true,
+        implemented: POLICY_FILES,
         when_unavailable: Fallback::Unprotected,
     },
     Component {

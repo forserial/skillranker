@@ -11,8 +11,10 @@
 //!   retried within the caller's budget like the Unix `flock`.
 //! - Publication writes and flushes a temporary file, then replaces the guard
 //!   with `MoveFileExW(REPLACE_EXISTING | WRITE_THROUGH)`: one rename that never
-//!   leaves the guard missing, flushed before it returns, which is what Unix
-//!   gets from `renameat` plus a directory `fsync`.
+//!   leaves the guard missing. Unix adds a directory `fsync`; Windows documents
+//!   no directory-entry flush for a rename within one folder, so the renamed
+//!   entry's durability rests on NTFS/ReFS metadata logging
+//!   (docs/windows-private-storage.md, "Exports").
 //! - Volume admission (local fixed NTFS/ReFS) happens in the walk, which is the
 //!   Windows form of `require_persistent`: removable, remote and RAM disks are
 //!   refused.

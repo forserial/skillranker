@@ -4,12 +4,14 @@
 #![cfg_attr(not(unix), allow(unused_imports, dead_code))]
 #[path = "support/links.rs"]
 mod links;
+mod support;
 use links::symlink;
 use serde_json::Value;
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 use std::process::{Command, Output};
 use std::sync::atomic::{AtomicU64, Ordering};
+use support::PlatformEnv;
 
 static NEXT: AtomicU64 = AtomicU64::new(0);
 
@@ -20,7 +22,13 @@ struct Fixture {
 impl Fixture {
     fn new() -> Self {
         // Trees are retained, so a reused PID must never reuse an old tree.
-        let root = std::fs::canonicalize("/tmp").unwrap().join(format!(
+        // Windows: under %LOCALAPPDATA%\sr-tests, since an owner-only export
+        // refuses a destination below a folder others may modify.
+        #[cfg(unix)]
+        let base = std::fs::canonicalize("/tmp").unwrap();
+        #[cfg(windows)]
+        let base = support::tmp_root();
+        let root = base.join(format!(
             "sr-roster-cli-{}-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
@@ -29,16 +37,7 @@ impl Fixture {
                 .as_nanos(),
             NEXT.fetch_add(1, Ordering::Relaxed)
         ));
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::DirBuilderExt;
-            std::fs::DirBuilder::new()
-                .mode(0o700)
-                .create(&root)
-                .unwrap();
-        }
-        #[cfg(not(unix))]
-        std::fs::create_dir(&root).unwrap();
+        support::private_dir(&root);
         std::fs::create_dir_all(root.join("workspace/.claude/skills")).unwrap();
         std::fs::create_dir_all(root.join("home/.claude/skills")).unwrap();
         Self { root }
@@ -61,6 +60,7 @@ impl Fixture {
     fn run(&self, args: &[&str], environment: &[(&str, &str)]) -> Output {
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_sr"));
         cmd.env_clear()
+            .platform_env()
             .env("HOME", self.root.join("home"))
             .env("XDG_CONFIG_HOME", self.root.join("home/.config"))
             .current_dir(self.root.join("workspace"))
@@ -225,7 +225,7 @@ fn bad_limits_and_cursors_are_usage_errors_on_clean_streams() {
         let error: Value = serde_json::from_slice(&output.stdout).unwrap();
         assert_eq!(error["error"]["kind"], "invalid-usage", "{args:?}");
         let text = String::from_utf8_lossy(&output.stdout);
-        assert!(!text.contains(f.root.to_str().unwrap()));
+        assert!(!support::mentions_path(&text, &f.root));
     }
     // A well-formed cursor past the end is refused, not an empty success.
     let page = f.json(&["roster", "--json", "--limit", "1"]);
@@ -269,17 +269,19 @@ fn project_roots(f: &Fixture, text: &str) {
     std::fs::write(f.root.join("workspace/.sr/config.toml"), text).unwrap();
 }
 
-#[cfg(unix)]
 #[test]
 fn configured_project_and_user_roots_reach_roster_doctor_and_snapshot() {
-    use std::os::unix::fs::PermissionsExt;
     let f = Fixture::new();
-    std::fs::set_permissions(&f.root, std::fs::Permissions::from_mode(0o700)).unwrap();
-    std::fs::set_permissions(
-        f.root.join("workspace"),
-        std::fs::Permissions::from_mode(0o700),
-    )
-    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&f.root, std::fs::Permissions::from_mode(0o700)).unwrap();
+        std::fs::set_permissions(
+            f.root.join("workspace"),
+            std::fs::Permissions::from_mode(0o700),
+        )
+        .unwrap();
+    }
     f.project("default", "");
     custom_skill(&f, "workspace/custom", "local-extra");
     custom_skill(&f, "external", "user-extra");
@@ -309,7 +311,7 @@ fn configured_project_and_user_roots_reach_roster_doctor_and_snapshot() {
             .iter()
             .all(|r| r["status"] == "unverified")
     );
-    assert!(!page.to_string().contains(f.root.to_str().unwrap()));
+    assert!(!support::mentions_path(&page.to_string(), &f.root));
     let doctor = f.json(&["doctor", "--json"]);
     assert_eq!(doctor["checks"]["roster"]["skills"], 3);
     // Configured roots are rankable, as rank suggests them, and are

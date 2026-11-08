@@ -402,7 +402,31 @@ fn wide_path(path: &Path) -> io::Result<Vec<u16>> {
             "path contains NUL",
         ));
     }
-    Ok(terminated(&wide))
+    Ok(terminated(&long_path(wide)))
+}
+
+/// Paths of `MAX_PATH` or more reach the file system only with the `\\?\`
+/// prefix, as `std` adds for its own calls. The prefix turns off Win32
+/// normalization, so it is added only to a plain drive path (`X:\...`) with
+/// backslash separators and no `.` or `..` component, whose meaning it keeps.
+/// The 248-unit threshold is `CreateDirectoryW`'s, which reserves room for an
+/// 8.3 name.
+fn long_path(wide: Vec<u16>) -> Vec<u16> {
+    const BACKSLASH: u16 = b'\\' as u16;
+    let plain_drive = wide.len() >= 3
+        && u8::try_from(wide[0]).is_ok_and(|letter| letter.is_ascii_alphabetic())
+        && wide[1] == u16::from(b':')
+        && wide[2] == BACKSLASH;
+    let plain_components = !wide.contains(&u16::from(b'/'))
+        && wide[3.min(wide.len())..]
+            .split(|unit| *unit == BACKSLASH)
+            .all(|component| component != [u16::from(b'.')] && component != [u16::from(b'.'); 2]);
+    if wide.len() < 248 || !plain_drive || !plain_components {
+        return wide;
+    }
+    let mut prefixed: Vec<u16> = r"\\?\".encode_utf16().collect();
+    prefixed.extend(wide);
+    prefixed
 }
 
 /// A security descriptor converted from SDDL, freed on drop.
@@ -486,7 +510,9 @@ pub fn create_new_file_with(path: &Path, sddl: &str) -> io::Result<File> {
 /// Windows counterpart of `renameat` followed by a directory `fsync`:
 /// `MoveFileExW` with `MOVEFILE_REPLACE_EXISTING`, so an existing target is
 /// replaced in one rename and never left missing, and `MOVEFILE_WRITE_THROUGH`,
-/// so the call returns only after the rename is flushed to disk. A target that
+/// which asks for the move to be flushed (documented for a move performed as
+/// copy and delete; no directory-entry flush is documented for a rename within
+/// one directory, unlike a Unix directory `fsync`). A target that
 /// is a link is replaced, not followed. Fails if `from` is open without
 /// `FILE_SHARE_DELETE` or `to` is open by a process that did not share delete.
 pub fn replace_file(from: &Path, to: &Path) -> io::Result<()> {
@@ -506,9 +532,49 @@ pub fn replace_file(from: &Path, to: &Path) -> io::Result<()> {
     Ok(())
 }
 
+/// Renames `from` to `to` (both in the same directory) only if `to` does not
+/// exist, the Windows counterpart of `renameat2(RENAME_NOREPLACE)` followed by
+/// a directory `fsync`: `MoveFileExW` without `MOVEFILE_REPLACE_EXISTING`, so
+/// the file system refuses an existing or raced-in target of any kind (file,
+/// directory or link) in the same operation that renames, with
+/// `ERROR_ALREADY_EXISTS` (`io::ErrorKind::AlreadyExists`); and with
+/// `MOVEFILE_WRITE_THROUGH`, with the same documented limits as
+/// [`replace_file`]. A failed call leaves both names as they were.
+pub fn rename_no_replace(from: &Path, to: &Path) -> io::Result<()> {
+    let from = wide_path(from)?;
+    let to = wide_path(to)?;
+    // SAFETY: both paths are NUL-terminated and outlive the call.
+    if unsafe { MoveFileExW(from.as_ptr(), to.as_ptr(), MOVEFILE_WRITE_THROUGH) } == 0 {
+        return Err(last_error());
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
-    use super::guid_root;
+    use super::{guid_root, long_path};
+
+    #[test]
+    fn only_long_plain_drive_paths_get_the_verbatim_prefix() {
+        let long = format!(r"C:\{}\name", "d".repeat(250));
+        assert_eq!(
+            String::from_utf16(&long_path(wide(&long))).unwrap(),
+            format!(r"\\?\{long}")
+        );
+        for unchanged in [
+            r"C:\short\name".to_owned(),
+            format!(r"C:\{}\..\name", "d".repeat(250)),
+            format!(r"C:\{}\.\name", "d".repeat(250)),
+            format!(r"C:/{}/name", "d".repeat(250)),
+            format!(r"\\?\C:\{}\name", "d".repeat(250)),
+            format!(r"\\server\share\{}", "d".repeat(250)),
+        ] {
+            assert_eq!(
+                String::from_utf16(&long_path(wide(&unchanged))).unwrap(),
+                unchanged
+            );
+        }
+    }
 
     fn wide(text: &str) -> Vec<u16> {
         text.encode_utf16().collect()

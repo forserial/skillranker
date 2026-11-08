@@ -1,12 +1,13 @@
 //! Real binary checks of `sr roster --snapshot` and `--diff`.
 // Part of this suite needs Unix fixtures; those tests and their helpers are gated.
 #![cfg_attr(not(unix), allow(unused_imports, dead_code))]
+mod support;
+
 use serde_json::Value;
-#[cfg(unix)]
-use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::process::{Command, Output};
 use std::sync::atomic::{AtomicU64, Ordering};
+use support::PlatformEnv;
 
 static NEXT: AtomicU64 = AtomicU64::new(0);
 
@@ -17,7 +18,11 @@ struct Fixture {
 impl Fixture {
     fn new() -> Self {
         // Trees are retained, so a reused PID must never reuse an old tree.
-        let root = std::fs::canonicalize("/tmp").unwrap().join(format!(
+        #[cfg(unix)]
+        let base = std::fs::canonicalize("/tmp").unwrap();
+        #[cfg(windows)]
+        let base = support::tmp_root();
+        let root = base.join(format!(
             "sr-roster-snapshot-{}-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
@@ -27,17 +32,9 @@ impl Fixture {
             NEXT.fetch_add(1, Ordering::Relaxed)
         ));
         // The export policy validates ancestors too. Create the fixture root
-        // private atomically rather than inheriting the worker's umask.
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::DirBuilderExt;
-            std::fs::DirBuilder::new()
-                .mode(0o700)
-                .create(&root)
-                .unwrap();
-        }
-        #[cfg(not(unix))]
-        std::fs::create_dir(&root).unwrap();
+        // private atomically rather than inheriting the worker's umask (on
+        // Windows, its folder's entries).
+        support::private_dir(&root);
         std::fs::create_dir_all(root.join("workspace/.claude/skills")).unwrap();
         std::fs::create_dir_all(root.join("home/.claude/skills")).unwrap();
         // Snapshot targets must sit in a private directory, whatever the umask.
@@ -73,6 +70,7 @@ impl Fixture {
     fn run_in(&self, cwd: PathBuf, home: PathBuf, args: &[&str]) -> Output {
         Command::new(env!("CARGO_BIN_EXE_sr"))
             .env_clear()
+            .platform_env()
             .env("HOME", home)
             .current_dir(cwd)
             .args(args)
@@ -98,7 +96,10 @@ impl Fixture {
         assert_eq!(output.status.code(), Some(code), "{args:?}");
         let error: Value = serde_json::from_slice(&output.stdout).unwrap();
         assert_eq!(error["error"]["kind"], kind, "{args:?}");
-        assert!(!String::from_utf8_lossy(&output.stdout).contains(self.root.to_str().unwrap()));
+        assert!(!support::mentions_path(
+            &String::from_utf8_lossy(&output.stdout),
+            &self.root
+        ));
     }
 }
 
@@ -111,7 +112,6 @@ fn strings(value: &Value) -> Vec<String> {
         .collect()
 }
 
-#[cfg(unix)]
 #[test]
 fn a_snapshot_is_owner_only_path_free_and_never_overwrites() {
     let f = Fixture::new();
@@ -121,12 +121,11 @@ fn a_snapshot_is_owner_only_path_free_and_never_overwrites() {
     assert_eq!(receipt["exported"], true);
     assert_eq!(receipt["records"], 2);
     let path = f.workspace().join("snap.json");
-    let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
-    assert_eq!(mode, 0o600);
+    support::assert_owner_only_file(&path);
     let bytes = std::fs::read(&path).unwrap();
     let text = String::from_utf8(bytes.clone()).unwrap();
     assert!(
-        !text.contains(f.root.to_str().unwrap()),
+        !support::mentions_path(&text, &f.root),
         "no local path is stored"
     );
     let saved: Value = serde_json::from_slice(&bytes).unwrap();
@@ -155,7 +154,6 @@ fn a_snapshot_is_owner_only_path_free_and_never_overwrites() {
     );
 }
 
-#[cfg(unix)]
 #[test]
 fn a_diff_reports_renames_replacements_restrictions_additions_and_removals() {
     let f = Fixture::new();
@@ -195,7 +193,6 @@ fn a_diff_reports_renames_replacements_restrictions_additions_and_removals() {
     assert_eq!(diff["complete"], false);
 }
 
-#[cfg(unix)]
 #[test]
 fn an_unreadable_root_makes_removals_unconfirmed() {
     let f = Fixture::new();
@@ -210,7 +207,6 @@ fn an_unreadable_root_makes_removals_unconfirmed() {
     assert!(diff["removed"].as_array().unwrap().is_empty());
 }
 
-#[cfg(unix)]
 #[test]
 fn a_different_workspace_or_home_is_an_incompatible_namespace() {
     let f = Fixture::new();
@@ -233,7 +229,6 @@ fn a_different_workspace_or_home_is_an_incompatible_namespace() {
     assert_eq!(output.status.code(), Some(5));
 }
 
-#[cfg(unix)]
 #[test]
 fn imported_paths_unknown_fields_and_unsafe_files_are_refused() {
     let f = Fixture::new();
@@ -259,14 +254,29 @@ fn imported_paths_unknown_fields_and_unsafe_files_are_refused() {
     // A symlink leaving the manifest's directory and a FIFO are not read.
     let outside = f.root.join("outside.json");
     std::fs::write(&outside, &original).unwrap();
-    std::os::unix::fs::symlink(&outside, f.workspace().join("link.json")).unwrap();
-    f.fails(&["roster", "--diff", "link.json"], 7, "unsupported-input");
-    nix::unistd::mkfifo(
-        &f.workspace().join("fifo.json"),
-        nix::sys::stat::Mode::S_IRWXU,
-    )
-    .unwrap();
-    f.fails(&["roster", "--diff", "fifo.json"], 7, "unsupported-input");
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(&outside, f.workspace().join("link.json")).unwrap();
+        f.fails(&["roster", "--diff", "link.json"], 7, "unsupported-input");
+        nix::unistd::mkfifo(
+            &f.workspace().join("fifo.json"),
+            nix::sys::stat::Mode::S_IRWXU,
+        )
+        .unwrap();
+        f.fails(&["roster", "--diff", "fifo.json"], 7, "unsupported-input");
+    }
+    // Windows: a junction named like the manifest is not read through, and
+    // neither is a device. File symbolic links need a privilege; junctions do
+    // not, and are reparse points the same way.
+    #[cfg(windows)]
+    {
+        let elsewhere = f.root.join("elsewhere");
+        std::fs::create_dir(&elsewhere).unwrap();
+        std::fs::write(elsewhere.join("snap.json"), &original).unwrap();
+        support::junction(f.workspace().join("link.json"), &elsewhere);
+        f.fails(&["roster", "--diff", "link.json"], 7, "unsupported-input");
+        f.fails(&["roster", "--diff", "NUL"], 7, "unsupported-input");
+    }
     assert_eq!(
         std::fs::read_to_string(f.workspace().join("snap.json")).unwrap(),
         original

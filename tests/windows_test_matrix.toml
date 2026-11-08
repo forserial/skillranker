@@ -103,8 +103,8 @@ issue = "permanent: tests Discovery::next_entry, the Unix readdir loop (cfg(unix
 file = "src/storage/export.rs"
 item = "mod tests"
 gate = "cfg(all(test, unix))"
-reason = "private-storage"
-issue = "sr-winpar.6"
+reason = "platform-twin"
+issue = "permanent: Unix descriptors (openat/linkat/renameat2, a pipe that cannot be fsynced); the Windows export (MoveFileExW without replace, write-through) is exercised by tests/export_windows_contract.rs and sr-win-sys rename_no_replace_publishes_once_and_never_replaces_any_existing_name"
 
 [[gate]]
 file = "src/storage/filesystem.rs"
@@ -244,8 +244,8 @@ issue = "sr-winpar.11"
 file = "tests/export_contract.rs"
 item = "*"
 gate = "cfg(any(target_os = \"linux\", target_os = \"macos\"))"
-reason = "private-storage"
-issue = "sr-winpar.6"
+reason = "platform-twin"
+issue = "permanent: Unix modes, umask and symlinks; the Windows twins are tests/export_windows_contract.rs"
 
 [[gate]]
 file = "tests/hook_advice_contract.rs"
@@ -285,14 +285,6 @@ reason = "subprocess"
 issue = "sr-winpar.11"
 
 [[gate]]
-file = "tests/p5_gate.rs"
-item = "*"
-gate = "cfg(any(target_os = \"linux\", target_os = \"macos\"))"
-reason = "private-storage"
-issue = "sr-winpar.6"
-note = "--save-case owner-only export"
-
-[[gate]]
 file = "tests/p6_gate.rs"
 item = "*"
 gate = "cfg(any(target_os = \"linux\", target_os = \"macos\"))"
@@ -312,49 +304,6 @@ item = "*"
 gate = "cfg(unix)"
 reason = "platform-twin"
 issue = "permanent: Unix Git paths, modes and non-UTF-8 names; the Windows twin is tests/project_signals_windows.rs"
-
-[[gate]]
-file = "tests/replay_case_completeness.rs"
-item = "*"
-gate = "cfg(unix)"
-reason = "private-storage"
-issue = "sr-winpar.6"
-
-[[gate]]
-file = "tests/replay_cli_contract.rs"
-item = "*"
-gate = "cfg(unix)"
-reason = "private-storage"
-issue = "sr-winpar.6"
-
-[[gate]]
-file = "tests/replay_contract.rs"
-item = "replay_save_and_load_enforces_owner_only_and_no_clobber"
-gate = "cfg(unix)"
-reason = "private-storage"
-issue = "sr-winpar.6"
-
-[[gate]]
-file = "tests/roster_cli.rs"
-item = "configured_project_and_user_roots_reach_roster_doctor_and_snapshot"
-gate = "cfg(unix)"
-reason = "private-storage"
-issue = "sr-winpar.6"
-note = "ends with roster --snapshot, an owner-only export Windows refuses until sr-winpar.6"
-
-[[gate]]
-file = "tests/roster_contract.rs"
-item = "atomic_private_exports"
-gate = "cfg(unix)"
-reason = "private-storage"
-issue = "sr-winpar.6"
-
-[[gate]]
-file = "tests/roster_contract.rs"
-item = "concurrent_export_race_prevents_clobber"
-gate = "cfg(unix)"
-reason = "private-storage"
-issue = "sr-winpar.6"
 
 [[gate]]
 file = "tests/roster_discovery.rs"
@@ -378,46 +327,6 @@ reason = "unix-fixture"
 issue = "permanent: Windows has no FIFO or device special files; its non-regular names (reserved devices, streams) are refused in tests/windows_platform.rs and tests/authorized_read_windows.rs"
 
 [[gate]]
-file = "tests/roster_snapshot.rs"
-item = "a_diff_reports_renames_replacements_restrictions_additions_and_removals"
-gate = "cfg(unix)"
-reason = "private-storage"
-issue = "sr-winpar.6"
-note = "snapshots are owner-only exports"
-
-[[gate]]
-file = "tests/roster_snapshot.rs"
-item = "a_different_workspace_or_home_is_an_incompatible_namespace"
-gate = "cfg(unix)"
-reason = "private-storage"
-issue = "sr-winpar.6"
-note = "snapshots are owner-only exports"
-
-[[gate]]
-file = "tests/roster_snapshot.rs"
-item = "a_snapshot_is_owner_only_path_free_and_never_overwrites"
-gate = "cfg(unix)"
-reason = "private-storage"
-issue = "sr-winpar.6"
-note = "snapshots are owner-only exports"
-
-[[gate]]
-file = "tests/roster_snapshot.rs"
-item = "an_unreadable_root_makes_removals_unconfirmed"
-gate = "cfg(unix)"
-reason = "private-storage"
-issue = "sr-winpar.6"
-note = "snapshots are owner-only exports"
-
-[[gate]]
-file = "tests/roster_snapshot.rs"
-item = "imported_paths_unknown_fields_and_unsafe_files_are_refused"
-gate = "cfg(unix)"
-reason = "private-storage"
-issue = "sr-winpar.6"
-note = "snapshots are owner-only exports"
-
-[[gate]]
 file = "tests/runtime_contract.rs"
 item = "mod pipe_tests"
 gate = "cfg(unix)"
@@ -431,13 +340,6 @@ item = "user_cancel_is_the_signal_path"
 gate = "cfg(unix)"
 reason = "unix-only"
 issue = "permanent: POSIX signal delivery has no Windows counterpart"
-
-[[gate]]
-file = "tests/save_case_contract.rs"
-item = "*"
-gate = "cfg(unix)"
-reason = "private-storage"
-issue = "sr-winpar.6"
 
 [[gate]]
 file = "tests/storage_contract.rs"

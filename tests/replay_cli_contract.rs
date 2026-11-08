@@ -6,10 +6,13 @@
 //! 3. Replay evaluates cases offline with zero network, child processes, or state writes.
 //! 4. JSON and table formats are supported.
 //! 5. Policy overrides and comparisons execute without ambient configuration.
-//! 6. Owner-only file permissions (0600/0400) are enforced.
+//! 6. Owner-only file permissions (0600/0400 on Unix; on Windows owned by the
+//!    user with entries for the user and SYSTEM only) are enforced.
 //! 7. Incompatible policies (such as uncaptured priors) are rejected.
-// Replay files must prove owner-only modes, which Windows builds refuse (see docs/platform-boundary.md).
-#![cfg(unix)]
+
+mod support;
+
+use support::PlatformEnv;
 
 use serde_json::{Value, json};
 use skillranker::output::SCHEMA_VERSION;
@@ -19,7 +22,6 @@ use skillranker::replay::{
     RecordedWideChoice, ReplayCase, ReplayManifest,
 };
 use std::fs;
-use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -27,17 +29,13 @@ use std::sync::atomic::{AtomicU64, Ordering};
 static NEXT: AtomicU64 = AtomicU64::new(0);
 
 fn temp_workspace(name: &str) -> PathBuf {
-    let root = std::env::temp_dir().join(format!(
+    let root = support::tmp_root().join(format!(
         "sr-replay-cli-{}-{}-{}",
         name,
         std::process::id(),
         NEXT.fetch_add(1, Ordering::Relaxed),
     ));
-    fs::DirBuilder::new()
-        .mode(0o700)
-        .recursive(true)
-        .create(&root)
-        .unwrap();
+    support::create_private_dir(&root);
     fs::create_dir_all(root.join("home")).unwrap();
     fs::create_dir_all(root.join("config")).unwrap();
     fs::create_dir_all(root.join("workspace")).unwrap();
@@ -47,6 +45,7 @@ fn temp_workspace(name: &str) -> PathBuf {
 fn run_sr(root: &Path, args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_sr"))
         .env_clear()
+        .platform_env()
         .env("HOME", root.join("home"))
         .env("XDG_CONFIG_HOME", root.join("config"))
         .current_dir(root.join("workspace"))
@@ -185,12 +184,12 @@ fn sample_ranked_case() -> ReplayCase {
 fn write_case_file(path: &Path, case: &ReplayCase) {
     let json_bytes = serde_json::to_vec_pretty(case).unwrap();
     fs::write(path, json_bytes).unwrap();
-    fs::set_permissions(path, fs::Permissions::from_mode(0o600)).unwrap();
+    support::restrict_to_owner(path);
 }
 
 fn write_policy_file(path: &Path, content: &str) {
     fs::write(path, content).unwrap();
-    fs::set_permissions(path, fs::Permissions::from_mode(0o600)).unwrap();
+    support::restrict_to_owner(path);
 }
 
 #[test]
@@ -232,6 +231,47 @@ fn oversized_replay_inputs_are_rejected_before_large_allocation() {
         );
         let error: Value = serde_json::from_slice(&out.stdout).unwrap();
         assert_eq!(error["error"]["kind"], "oversized-input");
+    }
+}
+
+/// The Windows twin of `replay_inputs_reject_special_files_and_symlinks`:
+/// a directory, a junction and a device are not regular files, so neither the
+/// case nor the policy is read through them.
+#[test]
+#[cfg(windows)]
+fn replay_inputs_reject_directories_junctions_and_devices() {
+    let root = temp_workspace("special-input");
+    let case = root.join("workspace/case.json");
+    write_case_file(&case, &sample_ranked_case());
+    let junction = root.join("workspace/junction");
+    support::junction(&junction, root.join("home"));
+    for input in [
+        junction.as_path(),
+        root.join("workspace").as_path(),
+        Path::new("NUL"),
+    ] {
+        for policy in [false, true] {
+            let mut command = Command::new(env!("CARGO_BIN_EXE_sr"));
+            command
+                .env_clear()
+                .platform_env()
+                .arg("replay")
+                .arg(if policy { case.as_path() } else { input })
+                .arg("--json")
+                .current_dir(root.join("workspace"));
+            if policy {
+                command.arg("--policy").arg(input);
+            }
+            let out = command.output().unwrap();
+            assert_eq!(
+                out.status.code(),
+                Some(7),
+                "{input:?}, policy={policy}: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+            let error: Value = serde_json::from_slice(&out.stdout).unwrap();
+            assert_eq!(error["error"]["kind"], "malformed-input", "{input:?}");
+        }
     }
 }
 
@@ -427,8 +467,9 @@ fn replay_rejects_non_owner_only_permissions() {
     let case_path = root.join("workspace/case.json");
     let json_bytes = serde_json::to_vec_pretty(&case).unwrap();
     fs::write(&case_path, json_bytes).unwrap();
-    // Insecure permissions (0666 world-writable/readable)
-    fs::set_permissions(&case_path, fs::Permissions::from_mode(0o666)).unwrap();
+    // Insecure permissions (0666 world-writable/readable; on Windows an
+    // Everyone Modify entry).
+    support::share_with_everyone(&case_path);
 
     let output = run_sr(&root, &["replay", "case.json", "--json"]);
     assert_ne!(output.status.code(), Some(0));

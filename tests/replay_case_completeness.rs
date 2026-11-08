@@ -1,4 +1,3 @@
-#![cfg(unix)]
 //! A replayed case must reproduce what it recorded, or say it cannot
 //! (sr-roadmap-l1i.6.14).
 //!
@@ -21,6 +20,9 @@
 //! a ranked decision's confidence, and the output contract requires a ranked
 //! decision to carry one. Such a case reports `partial` with no recomputation
 //! rather than inventing the number.
+
+mod support;
+
 use serde_json::{Value, json};
 use skillranker::output::SCHEMA_VERSION;
 use skillranker::replay::{
@@ -29,26 +31,22 @@ use skillranker::replay::{
     RecordedWideChoice, ReplayCase, ReplayManifest,
 };
 use std::fs;
-use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
+use support::PlatformEnv;
 
 static NEXT: AtomicU64 = AtomicU64::new(0);
 
 // Intentionally retained: repository policy forbids automatic tree deletion.
 fn fixture_root(name: &str) -> PathBuf {
-    let root = std::env::temp_dir().join(format!(
+    let root = support::tmp_root().join(format!(
         "sr-replay-completeness-{}-{}-{}",
         name,
         std::process::id(),
         NEXT.fetch_add(1, Ordering::Relaxed),
     ));
-    fs::DirBuilder::new()
-        .mode(0o700)
-        .recursive(true)
-        .create(&root)
-        .unwrap();
+    support::create_private_dir(&root);
     for dir in ["home", "config", "workspace"] {
         fs::create_dir_all(root.join(dir)).unwrap();
     }
@@ -58,6 +56,7 @@ fn fixture_root(name: &str) -> PathBuf {
 fn replay(root: &Path, case: &Path) -> Value {
     let output = Command::new(env!("CARGO_BIN_EXE_sr"))
         .env_clear()
+        .platform_env()
         .env("HOME", root.join("home"))
         .env("XDG_CONFIG_HOME", root.join("config"))
         .current_dir(root.join("workspace"))
@@ -188,7 +187,7 @@ fn case_with_confidence(stated: Option<f64>, visibility: Option<&str>) -> Replay
 fn write_case(root: &Path, case: &ReplayCase) -> PathBuf {
     let path = root.join("case.json");
     fs::write(&path, serde_json::to_vec(case).unwrap()).unwrap();
-    fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+    support::restrict_to_owner(&path);
     path
 }
 

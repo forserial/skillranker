@@ -89,8 +89,9 @@ claimed as passed by this document.
 
 Windows builds compile the same library and binary. Ranking, roster
 discovery, Claude transcript and session reads, `doctor`, `capabilities`,
-`demo`, hook installation, the response cache, the ledger and the enforced
-request allowance work. Their owner-only stores follow
+`demo`, hook installation, the response cache, the ledger, the enforced
+request allowance, owner-only exports (roster snapshots and saved replay cases)
+and replay case reads work. Their owner-only stores and files follow
 [Windows private storage](windows-private-storage.md).
 Every component that depends on a private store not yet ported fails closed
 instead of being emulated:
@@ -103,9 +104,9 @@ instead of being emulated:
 | Enforced request allowance | Works (sr-winpar.5): `sr budget --apply` writes the guard under the configuration root, the accounting store lives beside the cache, every send is charged durably before it leaves, and any unverifiable guard or accounting state withholds provider requests |
 | Hook invocation counter | Recorded beside the ledger, as on Unix (sr-winpar.4) |
 | Shadow-mode hooks | As on Unix: rank and record when an initialized ledger can record; otherwise skip before any provider request with one stderr line saying why. Advisory mode ranks and publishes |
-| Owner-only exports, roster snapshots and replay case files | Refused: Windows ACLs are not inspected, so owner-only access cannot be established |
+| Owner-only exports, roster snapshots and replay case files | Work (sr-winpar.6): `sr roster --snapshot` and `sr rank --save-case` publish an owner-only file without replacing any existing or raced-in target, into an existing directory no one else can write; `sr replay` reads only an owner-only regular file |
 | cass sessions (`--session`) | Unsupported source mode. The owned-subprocess boundary it needs runs on Windows (see below); the cass adapter is not ported yet (sr-winpar.11) |
-| Hook installer backups, calibration policy files | Written without owner-only protection (sr-winpar.7 for backups) |
+| Hook installer backups, calibration policy files | Written without owner-only protection (sr-winpar.7 for backups, sr-winpar.23 for policy files) |
 
 `sr capabilities --json` reports this table in its `platform` field, from the
 same flags the refusing code asserts at compile time; see
@@ -243,11 +244,14 @@ can run out and report `Budget`, as on any loaded host.
   stdin and at most one chunk, publishes nothing, and ends with the process.
   AGENTS.md's no-detached-workers rule is relaxed for this one leaf, because
   cancelling it would need `unsafe` code the crate forbids.
-- `sr roster --snapshot` is refused along with other owner-only exports.
-  `--diff` reads a saved snapshot, but Windows cannot write one.
-- Exports, snapshots, replay cases and installer backups still wait on their
-  ports of [Windows private storage](windows-private-storage.md); the cache,
-  ledger and allowance implementations and their limits are recorded there.
+- Installer backups and calibration policy files still wait on their ports
+  of [Windows private storage](windows-private-storage.md); the cache, ledger,
+  allowance and export implementations and their limits are recorded there.
+- An export's destination must be on a local fixed NTFS or ReFS volume:
+  removable, network and RAM-disk destinations are refused, where Unix exports
+  accept any filesystem. Windows has no directory flush from a read-only handle,
+  so durability rests on `MOVEFILE_WRITE_THROUGH` (see
+  [Exports](windows-private-storage.md#exports-sr-winpar6)).
 
 ### Evidence
 

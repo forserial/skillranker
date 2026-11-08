@@ -4,7 +4,9 @@
 //! Creation, publication and cleanup use one held parent descriptor. File data
 //! and the parent directory are both flushed; a post-publication failure is an
 //! error even though the destination may already exist. Same-user hostile file
-//! mutation is outside the owner-controlled directory boundary.
+//! mutation is outside the owner-controlled directory boundary. Windows keeps
+//! the same contract with held no-follow handles instead of descriptors; see
+//! its `export_private_atomic`.
 
 use crate::output::{CliExit, ErrorKind};
 #[cfg(unix)]
@@ -147,9 +149,9 @@ fn io_error(error: Errno) -> ExportError {
 }
 
 // `platform_support::OWNER_ONLY_FILES` reports which export this build has.
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 const _: () = assert!(crate::platform_support::OWNER_ONLY_FILES);
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 const _: () = assert!(!crate::platform_support::OWNER_ONLY_FILES);
 
 /// Publish owner-only data without replacing any existing destination.
@@ -363,11 +365,181 @@ fn link_no_clobber_publish(
     }
 }
 
-/// Windows: an export must land owner-only in a directory no other user can
-/// write, and Windows permissions are access-control lists this build does not
-/// verify. The size bound is still checked first; publication then fails
-/// closed rather than writing private data to an unverified location.
-#[cfg(not(unix))]
+/// Publish owner-only data without replacing any existing destination
+/// (Windows, sr-winpar.6; docs/windows-private-storage.md, "Exports").
+///
+/// The destination directory must already exist. It is walked from the volume
+/// root without following links or junctions: every ancestor under rule 3, the
+/// directory itself as a configuration directory (a trusted owner, and no one
+/// else holds any write right), on a local fixed NTFS or ReFS volume. The walk
+/// holds the directory without `FILE_SHARE_DELETE`, so it cannot be renamed,
+/// deleted or replaced while the export runs. The temporary file is created
+/// new with the private file descriptor (only the user and SYSTEM), flushed,
+/// and renamed onto the target with `MoveFileExW` without
+/// `MOVEFILE_REPLACE_EXISTING`, which refuses an existing or raced-in target in
+/// the same operation, and with `MOVEFILE_WRITE_THROUGH` in place of the Unix
+/// directory `fsync`. As on Unix, an error after publication can leave the
+/// destination in place: inspect it before retrying.
+#[cfg(windows)]
+pub fn export_private_atomic(
+    target_path: &Path,
+    content: &[u8],
+    config: ExportConfig,
+) -> Result<(), ExportError> {
+    use super::windows_private::{self, Leaf};
+    use std::io::Write;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    if content.len() > config.max_bytes {
+        return Err(ExportError::Oversized {
+            len: content.len(),
+            max: config.max_bytes,
+        });
+    }
+    if target_path.as_os_str().len() > 4096 {
+        return Err(ExportError::InvalidDirectory(
+            "destination path exceeds bounds".into(),
+        ));
+    }
+    let name = target_path
+        .file_name()
+        .filter(|name| crate::authorized_read::valid_component(name))
+        .ok_or_else(|| ExportError::InvalidDirectory("invalid target filename".into()))?;
+    let parent = target_path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let parent_path = if parent.is_absolute() {
+        parent.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .map_err(ExportError::Io)?
+            .join(parent)
+    };
+    let parent_path = win32_lexical(&parent_path);
+    let directory = windows_private::walk_with(&parent_path, false, || Ok(()), Leaf::Config)
+        .map_err(windows_destination_error)?;
+    let target = directory.path.join(name);
+    match std::fs::symlink_metadata(&target) {
+        Ok(_) => return Err(ExportError::TargetAlreadyExists(target_path.to_owned())),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(ExportError::Io(error)),
+    }
+
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let temporary = directory.path.join(format!(
+        ".sr-partial-{}-{nanos}-{}",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    ));
+    let mut file = windows_private::create_store_file(
+        &directory.path,
+        temporary.file_name().unwrap_or_default(),
+    )
+    .map_err(ExportError::Io)?;
+    let mut guard = WindowsPartialFile {
+        path: &temporary,
+        active: true,
+    };
+    file.write_all(content).map_err(ExportError::Io)?;
+    file.sync_all().map_err(ExportError::Io)?;
+    drop(file);
+    windows_private::revalidate(&directory, Leaf::Config).map_err(windows_destination_error)?;
+    match sr_win_sys::windows::rename_no_replace(&temporary, &target) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            return Err(ExportError::TargetAlreadyExists(target_path.to_owned()));
+        }
+        Err(error) => return Err(ExportError::Io(error)),
+    }
+    guard.active = false;
+    windows_private::revalidate(&directory, Leaf::Config).map_err(windows_destination_error)?;
+    Ok(())
+}
+
+/// Resolve `.` and `..` the way Win32 itself does before any file system sees
+/// the path (`GetFullPathNameW`): lexically, never above the root. On Windows
+/// a `..` after a junction therefore names the junction's parent, not its
+/// target's, unlike a Unix `..` after a symlink. Verbatim (`\\?\`) paths keep
+/// their components, and the walk refuses them.
+#[cfg(windows)]
+fn win32_lexical(path: &Path) -> PathBuf {
+    use std::path::{Component, Prefix};
+    let verbatim = matches!(
+        path.components().next(),
+        Some(Component::Prefix(prefix)) if matches!(
+            prefix.kind(),
+            Prefix::Verbatim(_) | Prefix::VerbatimDisk(_) | Prefix::VerbatimUNC(..)
+        )
+    );
+    if verbatim {
+        return path.to_owned();
+    }
+    let mut resolved = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if resolved.file_name().is_some() {
+                    resolved.pop();
+                }
+            }
+            other => resolved.push(other),
+        }
+    }
+    resolved
+}
+
+/// Removes our temporary file by its path in the held directory, which cannot
+/// be renamed while held; never the target.
+#[cfg(windows)]
+struct WindowsPartialFile<'a> {
+    path: &'a Path,
+    active: bool,
+}
+
+#[cfg(windows)]
+impl Drop for WindowsPartialFile<'_> {
+    fn drop(&mut self) {
+        if self.active {
+            let _ = std::fs::remove_file(self.path);
+        }
+    }
+}
+
+#[cfg(windows)]
+fn windows_destination_error(error: super::StoreError) -> ExportError {
+    use super::StoreError;
+    match error {
+        StoreError::Missing | StoreError::UnsafePath => ExportError::InvalidDirectory(
+            "destination directory is missing, a link or junction, or not a plain directory"
+                .into(),
+        ),
+        StoreError::StoreReplaced => {
+            ExportError::InvalidDirectory("destination changed during export".into())
+        }
+        StoreError::UnsupportedFilesystem => ExportError::Permissions(
+            "destination is not on a local fixed NTFS or ReFS volume, so owner-only permissions cannot be verified"
+                .into(),
+        ),
+        StoreError::Permissions => {
+            ExportError::Permissions("destination component is not owner-controlled".into())
+        }
+        _ => ExportError::Io(std::io::Error::other(
+            "destination directory could not be inspected",
+        )),
+    }
+}
+
+/// Other targets: an export must land owner-only in a directory no other user
+/// can write, and this build has no audited way to verify that here. The size
+/// bound is still checked first; publication then fails closed rather than
+/// writing private data to an unverified location.
+#[cfg(not(any(unix, windows)))]
 pub fn export_private_atomic(
     _target_path: &Path,
     content: &[u8],

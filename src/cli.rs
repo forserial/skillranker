@@ -6673,7 +6673,7 @@ fn snapshot_failure(error: crate::roster::snapshot::SnapshotError) -> Failure {
 
 /// Export an owner-only snapshot without replacing any existing file.
 /// Gated like `storage::export` (`platform_support::OWNER_ONLY_FILES`).
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn export_snapshot(
     snapshot: &crate::roster::snapshot::Snapshot,
     target: &Path,
@@ -6707,7 +6707,7 @@ fn export_snapshot(
     Ok(format!("{receipt}\n"))
 }
 
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 fn export_snapshot(
     _snapshot: &crate::roster::snapshot::Snapshot,
     _target: &Path,

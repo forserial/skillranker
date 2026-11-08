@@ -200,3 +200,47 @@ fn replace_file_swaps_the_target_atomically_and_keeps_the_source_handle_valid() 
     assert!(replace_file(&dir.join("absent"), &target).is_err());
     assert_eq!(fs::read(&target).unwrap(), b"new");
 }
+
+#[test]
+fn rename_no_replace_publishes_once_and_never_replaces_any_existing_name() {
+    use sr_win_sys::windows::{create_new_file_with, rename_no_replace};
+    use std::io::Write;
+    let dir = scratch("no-replace");
+    let user = token_user_sid().unwrap();
+    let staged = dir.join(".sr-partial-1");
+    let mut file = create_new_file_with(&staged, &private_sddl(&user)).unwrap();
+    file.write_all(b"winner").unwrap();
+    file.sync_all().unwrap();
+    let target = dir.join("export.json");
+    rename_no_replace(&staged, &target).unwrap();
+    assert_eq!(fs::read(&target).unwrap(), b"winner");
+    assert!(!staged.exists());
+    // The descriptor moved with the file.
+    assert_eq!(security_of(&file).unwrap().owner, user);
+    drop(file);
+    // An existing file, directory or dangling link at the target is kept, and
+    // the source keeps its name.
+    let loser = dir.join(".sr-partial-2");
+    fs::write(&loser, b"loser").unwrap();
+    for _ in 0..2 {
+        let error = rename_no_replace(&loser, &target).unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::AlreadyExists, "{error}");
+    }
+    let directory = dir.join("taken-by-directory");
+    fs::create_dir(&directory).unwrap();
+    let error = rename_no_replace(&loser, &directory).unwrap_err();
+    assert_eq!(error.kind(), std::io::ErrorKind::AlreadyExists, "{error}");
+    let link = dir.join("taken-by-junction");
+    let status = std::process::Command::new("cmd")
+        .args(["/C", "mklink", "/J"])
+        .arg(&link)
+        .arg(dir.join("missing-target"))
+        .output()
+        .unwrap();
+    assert!(status.status.success(), "{status:?}");
+    let error = rename_no_replace(&loser, &link).unwrap_err();
+    assert_eq!(error.kind(), std::io::ErrorKind::AlreadyExists, "{error}");
+    assert_eq!(fs::read(&target).unwrap(), b"winner");
+    assert_eq!(fs::read(&loser).unwrap(), b"loser");
+    assert!(fs::symlink_metadata(&link).is_ok());
+}

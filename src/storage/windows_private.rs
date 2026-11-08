@@ -396,6 +396,13 @@ pub(crate) fn admitted_file(file: &File) -> Result<u64, StoreError> {
     Ok(metadata.len())
 }
 
+/// Rules 1 and 2 for a single owner-only file outside a store, such as a
+/// captured replay case: owned by the user, with allow entries for the user
+/// and SYSTEM only. Links are the caller's check, as `O_NOFOLLOW` is on Unix.
+pub(crate) fn owner_only_file(file: &File) -> Result<(), StoreError> {
+    store_file_admitted(&descriptor(file)?, user()?)
+}
+
 /// Open `name` in `directory` only to classify it: no-follow, shared with
 /// every other opener, and without data access.
 pub(crate) fn inspect_entry(directory: &Path, name: &std::ffi::OsStr) -> io::Result<File> {
@@ -500,9 +507,6 @@ pub(crate) fn inspect_with(
     Ok(bytes)
 }
 
-/// A root for unit-test stores: `%LOCALAPPDATA%\sr-tests`. `%TEMP%` may grant
-/// other local accounts the right to replace its children, which rule 3
-/// refuses.
 /// The total size of the store files in a nested private directory.
 fn nested_directory(
     path: &Path,
@@ -594,6 +598,9 @@ pub(crate) fn create_store_file(directory: &Path, name: &std::ffi::OsStr) -> io:
     create_new_file_with(&directory.join(name), &file_sddl(user))
 }
 
+/// A root for unit-test stores: `%LOCALAPPDATA%\sr-tests`. `%TEMP%` may grant
+/// other local accounts the right to replace its children, which rule 3
+/// refuses.
 #[cfg(test)]
 pub(crate) fn test_root() -> PathBuf {
     let root =

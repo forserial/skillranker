@@ -283,11 +283,11 @@ pub fn resolve_backup_dir() -> Result<PathBuf, InstallerError> {
     Ok(base)
 }
 
-// `platform_support::OWNER_ONLY_FILES` reports whether backups get owner-only modes.
+// `platform_support::INSTALLER_BACKUPS` reports whether backups get owner-only modes.
 #[cfg(unix)]
-const _: () = assert!(crate::platform_support::OWNER_ONLY_FILES);
+const _: () = assert!(crate::platform_support::INSTALLER_BACKUPS);
 #[cfg(not(unix))]
-const _: () = assert!(!crate::platform_support::OWNER_ONLY_FILES);
+const _: () = assert!(!crate::platform_support::INSTALLER_BACKUPS);
 
 /// Writes an owner-only backup of original settings bytes before publication.
 pub fn write_backup(

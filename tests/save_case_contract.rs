@@ -1,4 +1,3 @@
-#![cfg(unix)]
 //! Contract and integration tests for `--save-case FILE` on `sr rank` (sr-roadmap-l1i.6.15).
 //!
 //! Validates:
@@ -8,12 +7,14 @@
 //!    - `--save-case` with `--no-persist` exits code 2 (`invalid-usage`).
 //!    - `--save-case` with `--claude-hook` exits code 2 (`invalid-usage`).
 //! 3. Explicit resolution case save & replay:
-//!    - Atomic owner-only (0600) file creation.
+//!    - Atomic owner-only file creation (0600; on Windows the user and
+//!      SYSTEM only).
 //!    - Captured candidate options, manifest, and local evidence.
 //!    - Validated roundtrip with `sr replay <file> --json`.
 //! 4. Atomic no-clobber protections:
 //!    - Refusal to overwrite existing target file (exit code 7, `storage-failure`).
-//!    - Refusal to write through symlink target (exit code 7).
+//!    - Refusal to write through symlink target (exit code 7; on Windows a
+//!      junction, which needs no privilege).
 //!    - Refusal when parent directory does not exist (exit code 7).
 //! 5. Provider-backed inference save & replay:
 //!    - Multi-stage ("wide", "rerank") captured responses and fits.
@@ -26,6 +27,8 @@
 //!      resulting unavailable document preserves provider request and HTTP attempt
 //!      metrics incurred during inference.
 
+#[path = "support/stub_python.rs"]
+mod stub_python;
 mod support;
 
 use asupersync::tls::Certificate;
@@ -47,11 +50,11 @@ use skillranker::runtime::{EntryClock, ProcessInvocation};
 use std::ffi::OsString;
 use std::fs;
 use std::io::{BufRead, BufReader, Write};
-use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdout, Command, Output, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
+use support::PlatformEnv;
 
 static NEXT: AtomicU64 = AtomicU64::new(0);
 
@@ -63,25 +66,17 @@ fn unix_ms() -> u64 {
 }
 
 fn temp_workspace(name: &str) -> PathBuf {
-    let root = Path::new("/tmp").join(format!(
+    let root = support::tmp_root().join(format!(
         "sr-save-case-{}-{}-{}",
         name,
         std::process::id(),
         NEXT.fetch_add(1, Ordering::Relaxed),
     ));
-    fs::DirBuilder::new()
-        .mode(0o700)
-        .recursive(true)
-        .create(&root)
-        .unwrap();
+    support::create_private_dir(&root);
     // These are successful private-export fixtures. Do not let a worker's
     // umask 002 turn their ancestors into group-writable directories.
     for relative in ["home", "config", "workspace/.claude/skills"] {
-        fs::DirBuilder::new()
-            .mode(0o700)
-            .recursive(true)
-            .create(root.join(relative))
-            .unwrap();
+        support::create_private_dir(root.join(relative));
     }
     root
 }
@@ -135,6 +130,7 @@ fn write_context_file(root: &Path, session: &str, request: &str) -> PathBuf {
 fn run_sr(root: &Path, args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_sr"))
         .env_clear()
+        .platform_env()
         .env("HOME", root.join("home"))
         .env("XDG_CONFIG_HOME", root.join("config"))
         .current_dir(root.join("workspace"))
@@ -173,10 +169,9 @@ impl Provider {
         ] {
             fs::write(directory.join(name), bytes).unwrap();
         }
-        let mut child = Command::new("/usr/bin/python3")
+        let mut child = stub_python::python_command()
             .arg(directory.join("provider_server.py"))
             .arg(scenario)
-            .env_clear()
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit())
@@ -369,8 +364,7 @@ fn save_case_cli_explicit_resolution_roundtrip_to_replay() {
     assert!(case_path.exists());
     let meta = fs::symlink_metadata(&case_path).unwrap();
     assert!(meta.is_file(), "case file must be regular file");
-    let mode = meta.permissions().mode() & 0o777;
-    assert_eq!(mode, 0o600, "case file must be owner-only (0600)");
+    support::assert_owner_only_file(&case_path);
 
     // 2. Inspect case content
     let raw_case = fs::read_to_string(&case_path).unwrap();
@@ -519,8 +513,16 @@ fn save_case_cli_refuses_symlink() {
 
     let target_path = root.join("workspace/target.json");
     let link_path = root.join("workspace/symlink.json");
-    fs::write(&target_path, b"target-content").unwrap();
-    std::os::unix::fs::symlink(&target_path, &link_path).unwrap();
+    #[cfg(unix)]
+    {
+        fs::write(&target_path, b"target-content").unwrap();
+        std::os::unix::fs::symlink(&target_path, &link_path).unwrap();
+    }
+    #[cfg(windows)]
+    {
+        fs::create_dir(&target_path).unwrap();
+        support::junction(&link_path, &target_path);
+    }
 
     let output = run_sr(
         &root,
@@ -655,9 +657,7 @@ fn save_case_pipeline_inference_roundtrip_to_replay() {
 
     // Verify case file written with owner-only permissions
     assert!(case_path.exists());
-    let meta = fs::symlink_metadata(&case_path).unwrap();
-    let mode = meta.permissions().mode() & 0o777;
-    assert_eq!(mode, 0o600, "case file must be 0600 owner-only");
+    support::assert_owner_only_file(&case_path);
 
     // Parse case and verify recorded stages
     let raw = fs::read_to_string(&case_path).unwrap();

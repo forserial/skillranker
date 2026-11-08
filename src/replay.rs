@@ -20,7 +20,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
-#[cfg(unix)]
 use std::io::Read;
 use std::io::Write;
 use std::path::Path;
@@ -601,10 +600,8 @@ impl ReplayCase {
 }
 
 // `platform_support::OWNER_ONLY_FILES` reports which case read this build has.
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 const _: () = assert!(crate::platform_support::OWNER_ONLY_FILES);
-#[cfg(windows)]
-const _: () = assert!(!crate::platform_support::OWNER_ONLY_FILES);
 
 // Open once without following the final symlink or waiting for a FIFO writer.
 // Permission/type checks and the bounded read all concern this same descriptor.
@@ -614,19 +611,70 @@ fn read_private_replay_file(
     max: usize,
     oversized: fn(usize, usize) -> ReplayError,
 ) -> Result<Vec<u8>, ReplayError> {
-    // Owner-only access is a precondition for reading captured case data.
-    // Windows permissions are access-control lists, which this build does not
-    // inspect, so the precondition cannot be established and the read fails
-    // closed instead of trusting an unverified file.
     #[cfg(windows)]
     {
-        let _ = (path, max, oversized);
-        Err(ReplayError::InvalidField(format!(
-            "{label} file permissions cannot be verified as owner-only on this platform"
-        )))
+        read_private_replay_file_windows(path, label, max, oversized)
     }
     #[cfg(unix)]
     read_private_replay_file_unix(path, label, max, oversized)
+}
+
+/// Windows (sr-winpar.6): the file is opened once without following a link or
+/// junction, must be a regular file, and must be owner-only in the sense of
+/// docs/windows-private-storage.md rules 1 and 2: owned by this user, with
+/// allow entries for this user and SYSTEM only. That is what `sr` exports; a
+/// copy that inherited its folder's entries is refused, as a 0644 copy is on
+/// Unix.
+#[cfg(windows)]
+fn read_private_replay_file_windows(
+    path: &Path,
+    label: &str,
+    max: usize,
+    oversized: fn(usize, usize) -> ReplayError,
+) -> Result<Vec<u8>, ReplayError> {
+    use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
+    const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
+        .open(path)?;
+    // A device such as `NUL` opens but has no file information; like a Unix
+    // FIFO, it is not a regular file.
+    let metadata = file
+        .metadata()
+        .map_err(|_| ReplayError::InvalidField(format!("{label} path must be a regular file")))?;
+    if !metadata.is_file() || metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+        return Err(ReplayError::InvalidField(format!(
+            "{label} path must be a regular file"
+        )));
+    }
+    if crate::storage::windows_private::owner_only_file(&file).is_err() {
+        return Err(ReplayError::InvalidField(format!(
+            "{label} file permissions must be owner-only (owned by you, with access for you and SYSTEM only)"
+        )));
+    }
+    read_bounded(file, metadata.len(), max, oversized)
+}
+
+/// The size check and bounded read shared by both platforms' case reads.
+fn read_bounded(
+    file: std::fs::File,
+    len: u64,
+    max: usize,
+    oversized: fn(usize, usize) -> ReplayError,
+) -> Result<Vec<u8>, ReplayError> {
+    if len > max as u64 {
+        return Err(oversized(usize::try_from(len).unwrap_or(usize::MAX), max));
+    }
+    // The extra byte detects growth after metadata inspection without permitting
+    // an unbounded allocation. The limits are fixed small format constants.
+    let mut bytes = Vec::new();
+    file.take(max as u64 + 1).read_to_end(&mut bytes)?;
+    if bytes.len() > max {
+        return Err(oversized(bytes.len(), max));
+    }
+    Ok(bytes)
 }
 
 #[cfg(unix)]
@@ -660,20 +708,7 @@ fn read_private_replay_file_unix(
             "{label} file permissions must be owner-only (0600 or 0400)"
         )));
     }
-    if metadata.len() > max as u64 {
-        return Err(oversized(
-            usize::try_from(metadata.len()).unwrap_or(usize::MAX),
-            max,
-        ));
-    }
-    // The extra byte detects growth after metadata inspection without permitting
-    // an unbounded allocation. The limits are fixed small format constants.
-    let mut bytes = Vec::new();
-    file.take(max as u64 + 1).read_to_end(&mut bytes)?;
-    if bytes.len() > max {
-        return Err(oversized(bytes.len(), max));
-    }
-    Ok(bytes)
+    read_bounded(file, metadata.len(), max, oversized)
 }
 
 impl ReplayPolicy {

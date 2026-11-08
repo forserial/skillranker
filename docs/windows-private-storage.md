@@ -8,9 +8,10 @@ counter), `.5` (enforced allowance), `.6` (exports, snapshots, replay cases) and
 security descriptors under `#![forbid(unsafe_code)]`
 ([Mechanism](#mechanism-sr-winpar2)). The response cache
 ([Cache](#cache-sr-winpar3)) and the ledger with its hook counter
-([Ledger](#ledger-sr-winpar4)) and the enforced allowance
-([Allowance](#allowance-sr-winpar5)) implement it; exports and backups still
-refuse until their issues land
+([Ledger](#ledger-sr-winpar4)), the enforced allowance
+([Allowance](#allowance-sr-winpar5)) and owner-only exports
+([Exports](#exports-sr-winpar6)) implement it; backups are still written
+unprotected until their issue lands
 ([platform boundary](platform-boundary.md#windows)).
 
 The user approved the defaults on 2026-11-07 and, after the observation below,
@@ -400,11 +401,15 @@ every writer, and a debit committed before each send.
   `MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH`.
   - The replacement is a single rename within the held folder, so the guard is
     never missing.
-  - It returns only after the rename reaches the disk.
+  - `MOVEFILE_WRITE_THROUGH` asks Windows to flush the move. Its documented
+    guarantee covers a move performed as copy and delete; for a rename within
+    one folder no flush of the directory entry is documented, so durability
+    after a crash rests on NTFS (or ReFS) metadata logging (see
+    [Exports](#exports-sr-winpar6)).
   - A link at the target is replaced, not followed.
   - Both names are resolved in the held folder, which cannot be renamed while
     held.
-  - `std::fs::rename` was not enough: it does not request write-through, and
+  - `std::fs::rename` was not chosen: it does not request write-through, and
     NTFS directories cannot be flushed from a read-only handle.
 - **Accounting.** The accounting store (`allowance.sqlite3` beside the cache) is
   admitted like the cache by `src/allowance/accounting_windows.rs`. Its sidecars
@@ -424,3 +429,80 @@ Native evidence:
 In the concurrency case the allowance was never exceeded and every send was
 charged. A process that could not take the lock within its budget was refused
 (`budget-state`), never admitted.
+
+## Exports (sr-winpar.6)
+
+`sr roster --snapshot FILE` and `sr rank --save-case FILE` publish through
+`storage::export::export_private_atomic`, which on Windows keeps the Unix
+contract: a bounded owner-only file, published atomically, never replacing an
+existing or raced-in target, and never reported complete when it is not.
+
+- **Destination.** The destination directory must already exist; it is never
+  created. `.` and `..` are resolved lexically first, as Win32
+  (`GetFullPathNameW`) resolves them before any file system sees the path, so
+  `child\..` names the current directory even when `child` is a junction.
+  The path is then walked from the volume root without following links or
+  junctions: every ancestor under rule 3, on a local fixed NTFS or ReFS volume
+  (rule 5), and the directory itself as a configuration directory, like the
+  allowance guard's: a trusted owner, and no one else holds any write right.
+  The walk holds it without `FILE_SHARE_DELETE`, so it cannot be renamed,
+  deleted or replaced during the export, and it is revalidated before and after
+  publication.
+- **Target name.** A reserved device name (`CON`, `nul.json`, `COM1`) or a name
+  ending in a dot or space is refused. Anything already at the target, of any
+  kind (a file, a directory, a dangling junction), is `TargetAlreadyExists`.
+- **File.** The temporary file is created new with the private file descriptor
+  (owned by the user, a protected DACL for the user and SYSTEM), written,
+  flushed with `FlushFileBuffers`, and closed. A failure before publication
+  removes it by its path in the held directory, never the target.
+- **Publication.** `sr_win_sys::windows::rename_no_replace` calls `MoveFileExW`
+  without `MOVEFILE_REPLACE_EXISTING`. The file system refuses an existing
+  target in the same operation that renames (`ERROR_ALREADY_EXISTS`), so a
+  target created between the existence check and the rename is preserved and
+  reported as `TargetAlreadyExists`, the role `renameat2(RENAME_NOREPLACE)`
+  plays on Linux. The descriptor moves with the file.
+- **Durability.** Unix flushes the file and then `fsync`s the parent
+  directory, so a successful export survives a crash. On Windows the file's
+  data is flushed the same way, but there is no directory flush from a
+  read-only handle. The rename is requested with `MOVEFILE_WRITE_THROUGH`,
+  whose documented guarantee covers a move performed as copy and delete; for a
+  rename within one directory Windows documents no flush of the directory
+  entry. After a crash the published name therefore depends on NTFS (or ReFS)
+  metadata logging, a weaker documented guarantee than the Unix one: the file
+  may be found under its temporary `.sr-partial-*` name or not at all, but
+  never as a partial file under the target name. A failure after the rename is
+  an error, and as on Unix the target may already exist: inspect it before
+  retrying.
+- **Paths of `MAX_PATH` or more.** `sr-win-sys` adds the `\\?\` prefix to a
+  plain drive path of 248 units or more, as `std` does, so a long target name
+  is not refused for its length.
+
+Mechanisms considered for publication:
+
+| Mechanism | No clobber | Single step | Write-through request | Chosen |
+|---|---|---|---|---|
+| `std::fs::rename` | No: replaces an existing file | Yes | No | No |
+| `CreateHardLinkW` (`std::fs::hard_link`) then delete the temporary | Yes: fails if the name exists | No: both names exist until the delete, and a crash leaves two links | No | No |
+| `MoveFileExW` without `MOVEFILE_REPLACE_EXISTING`, with `MOVEFILE_WRITE_THROUGH` | Yes, checked by the file system during the rename | Yes | Yes | Yes |
+
+Reading a saved replay case or policy (`sr replay`) opens the file once without
+following a link or junction, requires a regular file (a directory, a junction
+or a device such as `NUL` is refused as malformed input), and requires rules 1
+and 2: owned by the user, with allow entries for the user and SYSTEM only.
+What `sr` exports qualifies. A copy that inherited its folder's entries does
+not, as a `0644` copy does not on Unix. Snapshots for `sr roster --diff` are
+read through the authorized-read boundary, which already refused links.
+
+Native evidence:
+- `tests/export_windows_contract.rs` (12 cases): success with the owner-only
+  descriptor; existing file, directory and dangling junction targets kept;
+  eight concurrent exporters with exactly one winner and no leftovers; an
+  ancestor granting Everyone Modify; a destination granting Everyone write
+  (and one granting only read, which is admitted); junctions in and as the
+  destination; a missing destination; oversized content; a target past
+  `MAX_PATH`; reserved names; relative destinations and `..` after a junction.
+- `crates/sr-win-sys` `rename_no_replace_publishes_once_and_never_replaces_any_existing_name`.
+- The ported snapshot, save-case, replay and P5 gate suites
+  (`roster_snapshot`, `roster_cli`, `roster_contract`, `save_case_contract`,
+  `replay_cli_contract`, `replay_case_completeness`, `replay_contract`,
+  `p5_gate`).

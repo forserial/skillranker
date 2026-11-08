@@ -281,8 +281,8 @@ fn a_skill_snooze_withholds_only_that_skill_in_its_own_session() {
     );
     assert_eq!(applied["applied"], true, "{applied}");
     assert_eq!(applied["entries_after"], 1);
-    // Unix mode; Windows has no owner-only configuration files yet
-    // (policy-files, sr-winpar.6).
+    // Unix mode; on Windows the snooze file is still written with the
+    // permissions it inherits from its folder (not yet tracked by an issue).
     #[cfg(unix)]
     {
         let mode = std::fs::metadata(home.snooze_file())

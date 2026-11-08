@@ -114,6 +114,99 @@ pub fn private_dir(path: impl AsRef<std::path::Path>) {
     }
 }
 
+/// Make an existing file owner-only the way a fixture expects: mode 0600 on
+/// Unix. On Windows a file in a private directory already inherits entries for
+/// the user and SYSTEM only, which is owner-only, so there is nothing to do.
+pub fn restrict_to_owner(path: impl AsRef<std::path::Path>) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path.as_ref(), std::fs::Permissions::from_mode(0o600))
+            .expect("restrict fixture to owner");
+    }
+    #[cfg(windows)]
+    let _ = path;
+}
+
+/// Make a file or directory writable by every local user: mode 0666 (files)
+/// or 0777 (directories) on Unix; on Windows an Everyone Modify entry, added
+/// with the system's `icacls`.
+pub fn share_with_everyone(path: impl AsRef<std::path::Path>) {
+    let path = path.as_ref();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = if path.is_dir() { 0o777 } else { 0o666 };
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode))
+            .expect("share fixture with everyone");
+    }
+    #[cfg(windows)]
+    {
+        let output = std::process::Command::new("icacls")
+            .arg(path)
+            .args(["/grant", "*S-1-1-0:(M)"])
+            .output()
+            .expect("run icacls");
+        assert!(output.status.success(), "icacls: {output:?}");
+    }
+}
+
+/// Assert that `path` is an owner-only file as `sr` exports one: mode 0600 on
+/// Unix; on Windows owned by this user, with a protected DACL that allows only
+/// this user and SYSTEM (docs/windows-private-storage.md rules 1 and 2).
+pub fn assert_owner_only_file(path: impl AsRef<std::path::Path>) {
+    let path = path.as_ref();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "{}", path.display());
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        let file = std::fs::OpenOptions::new()
+            .access_mode(0x0002_0000 | 0x0080)
+            .custom_flags(sr_win_sys::windows::FILE_FLAG_BACKUP_SEMANTICS)
+            .open(path)
+            .unwrap();
+        let descriptor = sr_win_sys::windows::security_of(&file).unwrap();
+        let user = sr_win_sys::windows::token_user_sid().unwrap();
+        assert_eq!(descriptor.owner, user, "{}", path.display());
+        assert!(descriptor.dacl_protected(), "{descriptor:?}");
+        let aces = descriptor.dacl.as_ref().unwrap();
+        assert!(!aces.is_empty(), "{descriptor:?}");
+        for ace in aces {
+            assert_eq!(ace.kind, sr_win_sys::AceKind::Allowed, "{descriptor:?}");
+            let sid = ace.sid.as_ref().unwrap();
+            assert!(sid == &user || sid.is_local_system(), "{descriptor:?}");
+        }
+    }
+}
+
+/// Whether `text` names `path`, as written or JSON-escaped (Windows paths
+/// carry backslashes, which JSON doubles).
+pub fn mentions_path(text: &str, path: &std::path::Path) -> bool {
+    let raw = path.to_str().unwrap();
+    let escaped = serde_json::to_string(raw).unwrap();
+    text.contains(raw) || text.contains(escaped.trim_matches('"'))
+}
+
+/// Make `link` a directory junction to `target` with the system's `mklink /J`.
+/// Junctions need no privilege, unlike Windows symbolic links. `mklink` reads
+/// `/` as an option prefix, so both paths are passed with `\` separators.
+#[cfg(windows)]
+pub fn junction(link: impl AsRef<std::path::Path>, target: impl AsRef<std::path::Path>) {
+    let native = |path: &std::path::Path| path.to_str().unwrap().replace('/', "\\");
+    let output = std::process::Command::new("cmd")
+        .args(["/C", "mklink", "/J"])
+        .arg(native(link.as_ref()))
+        .arg(native(target.as_ref()))
+        .output()
+        .expect("run mklink");
+    assert!(output.status.success(), "mklink /J: {output:?}");
+}
+
 /// `OpenOptions::owner_only`: mode 0600 for a new file on Unix. On Windows a
 /// file created in a private directory inherits its user and SYSTEM entries,
 /// so there is nothing to set.

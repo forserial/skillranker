@@ -1,6 +1,3 @@
-// Saves a replay case with `--save-case`, an owner-only export that Windows
-// does not have yet (sr-winpar.6).
-#![cfg(any(target_os = "linux", target_os = "macos"))]
 //! Phase P5 Acceptance Gate: local evidence, faithful replay and bounded
 //! evaluation, integrated at one revision.
 //!
@@ -33,8 +30,9 @@ struct Gate {
 
 impl Gate {
     fn new() -> Self {
-        // Owner-only under sticky /tmp: the ledger and cache refuse stores
-        // with group-writable ancestors, as an RCH TMPDIR can have.
+        // Owner-only under sticky /tmp (Windows: %LOCALAPPDATA%\sr-tests): the
+        // ledger and cache refuse stores with group-writable ancestors, as an
+        // RCH TMPDIR can have.
         let root = support::private_store_dir("p5-gate");
         for dir in ["home", "config", "cache", "data", "workspace"] {
             support::private_dir(root.join(dir));

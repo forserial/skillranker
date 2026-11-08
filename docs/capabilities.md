@@ -53,10 +53,9 @@ outside the admitted set.
 Each flag is the `cfg` predicate that selects the refusing implementation, and
 every refusing and enabling implementation asserts it at compile time
 (`const _: () = assert!(...)`). Enabling a component on a new platform without
-updating the flag fails the build. On Windows the owned-subprocess,
-private-storage and enforced-allowance boundaries are available, and so is
-every component that depends on them except cass sessions; only the owner-only
-files boundary is not; see
+updating the flag fails the build. On Windows every boundary is available.
+Every component that depends on them is too, except cass sessions, installer
+backups and calibration policy files, which are not yet ported; see
 [the platform boundary](platform-boundary.md#windows).
 
 The registry states what this binary runs. It claims no phase acceptance,

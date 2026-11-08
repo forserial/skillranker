@@ -3,6 +3,8 @@
 //! Satisfies contract boundary `p2_frontmatter_parsing` (sr-roadmap-l1i.3.3)
 //! mapped in `tests/contract_matrix.toml`.
 
+mod support;
+
 use skillranker::roster::frontmatter::*;
 use skillranker::roster::{ParseWarning, UsageKind};
 
@@ -418,22 +420,31 @@ fn wide_and_body_excerpt_scalar_truncation() {
 // Unit Property Test: tests/roster_contract.rs::atomic_private_exports
 // -----------------------------------------------------------------------------
 
-#[cfg(unix)]
-#[test]
-fn atomic_private_exports() {
-    use skillranker::storage::export::{ExportConfig, ExportError, export_private_atomic};
-    use std::fs::{self, DirBuilder};
-    use std::os::unix::fs::{DirBuilderExt, MetadataExt};
-
-    let test_dir = std::fs::canonicalize("/tmp").unwrap().join(format!(
-        "sr-export-test-{}-{}",
+/// A fresh private export directory: under canonical `/tmp` on Unix, under
+/// `%LOCALAPPDATA%\sr-tests` on Windows.
+fn export_dir(label: &str) -> std::path::PathBuf {
+    #[cfg(unix)]
+    let base = std::fs::canonicalize("/tmp").unwrap();
+    #[cfg(windows)]
+    let base = support::tmp_root();
+    let dir = base.join(format!(
+        "sr-{label}-{}-{}",
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos()
     ));
-    DirBuilder::new().mode(0o700).create(&test_dir).unwrap();
+    support::private_dir(&dir);
+    dir
+}
+
+#[test]
+fn atomic_private_exports() {
+    use skillranker::storage::export::{ExportConfig, ExportError, export_private_atomic};
+    use std::fs;
+
+    let test_dir = export_dir("export-test");
 
     let target_file = test_dir.join("roster_snapshot.json");
     let content = b"{\"skills\": [\"test-skill\"]}";
@@ -447,13 +458,8 @@ fn atomic_private_exports() {
     let read_back = fs::read(&target_file).expect("read exported file");
     assert_eq!(read_back, content);
 
-    // Verify owner-only permissions (0600)
-    let meta = fs::metadata(&target_file).expect("metadata");
-    assert_eq!(
-        meta.mode() & 0o777,
-        0o600,
-        "exported file must have strict owner-only 0600 permissions"
-    );
+    // Verify owner-only permissions (0600; on Windows the user and SYSTEM only)
+    support::assert_owner_only_file(&target_file);
 
     // 2. No-clobber: target already exists -> must fail with TargetAlreadyExists
     let second_content = b"{\"skills\": [\"second-snapshot\"]}";
@@ -468,20 +474,44 @@ fn atomic_private_exports() {
     assert_eq!(read_after, content);
 
     // 3. Symlink rejection: destination is a symlink -> must be rejected
-    let symlink_target = test_dir.join("symlink_target.json");
-    fs::write(&symlink_target, b"original-target").unwrap();
+    // (Windows: a junction, which needs no privilege, to a directory).
+    #[cfg(unix)]
+    let symlink_target = {
+        let symlink_target = test_dir.join("symlink_target.json");
+        fs::write(&symlink_target, b"original-target").unwrap();
+        symlink_target
+    };
+    #[cfg(windows)]
+    let symlink_target = {
+        let symlink_target = test_dir.join("symlink_target");
+        fs::create_dir(&symlink_target).unwrap();
+        fs::write(symlink_target.join("kept.json"), b"original-target").unwrap();
+        symlink_target
+    };
     let symlink_dest = test_dir.join("export_symlink.json");
+    #[cfg(unix)]
     std::os::unix::fs::symlink(&symlink_target, &symlink_dest).unwrap();
+    #[cfg(windows)]
+    support::junction(&symlink_dest, &symlink_target);
 
     let err_symlink =
         export_private_atomic(&symlink_dest, b"malicious-overwrite", config).unwrap_err();
     assert!(matches!(err_symlink, ExportError::TargetAlreadyExists(_)));
     // Target pointed to by symlink was untouched
+    #[cfg(unix)]
     assert_eq!(fs::read(&symlink_target).unwrap(), b"original-target");
+    #[cfg(windows)]
+    assert_eq!(
+        fs::read(symlink_target.join("kept.json")).unwrap(),
+        b"original-target"
+    );
 
     // Broken symlink rejection
     let broken_dest = test_dir.join("broken_symlink.json");
+    #[cfg(unix)]
     std::os::unix::fs::symlink(test_dir.join("nonexistent.json"), &broken_dest).unwrap();
+    #[cfg(windows)]
+    support::junction(&broken_dest, test_dir.join("nonexistent"));
     let err_broken = export_private_atomic(&broken_dest, b"test-data", config).unwrap_err();
     assert!(matches!(err_broken, ExportError::TargetAlreadyExists(_)));
 
@@ -511,24 +541,13 @@ fn atomic_private_exports() {
     assert!(matches!(err_bad_dir, ExportError::InvalidDirectory(_)));
 }
 
-#[cfg(unix)]
 #[test]
 fn concurrent_export_race_prevents_clobber() {
     use skillranker::storage::export::{ExportConfig, ExportError, export_private_atomic};
-    use std::fs::DirBuilder;
-    use std::os::unix::fs::DirBuilderExt;
     use std::sync::Arc;
     use std::thread;
 
-    let test_dir = std::fs::canonicalize("/tmp").unwrap().join(format!(
-        "sr-race-test-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
-    DirBuilder::new().mode(0o700).create(&test_dir).unwrap();
+    let test_dir = export_dir("race-test");
 
     let target_file = Arc::new(test_dir.join("contended_export.json"));
     let mut handles = Vec::new();

@@ -4,6 +4,13 @@
 
 ### Added
 
+- Windows writes owner-only exports: `sr roster --snapshot` and
+  `sr rank --save-case` publish a file only the user and SYSTEM can open, with
+  `MoveFileExW` (no replace, write-through), so an existing or raced-in target
+  is never overwritten. `sr replay` reads cases and policies only from such
+  owner-only regular files. Installer backups and calibration policy files are
+  still unprotected on Windows and are now reported separately in
+  `sr capabilities --json`.
 - Windows enforces the request allowance: `sr budget --apply` writes the guard
   under the configuration root (owner-only, `LockFileEx` lock, write-through
   atomic replacement) and the accounting store sits beside the cache with WAL
