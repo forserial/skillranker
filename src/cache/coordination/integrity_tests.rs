@@ -330,20 +330,19 @@ fn active_fence_validation_remains_strict_after_shared_row_admission() {
     );
 }
 
-#[cfg(unix)]
 #[test]
 fn fresh_reopen_cannot_replay_a_completed_lease() {
-    use std::os::unix::fs::DirBuilderExt;
     let nonce = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_nanos();
     let root =
         std::env::temp_dir().join(format!("sr-lease-integrity-{}-{nonce}", std::process::id()));
-    std::fs::DirBuilder::new()
-        .mode(0o700)
-        .create(&root)
-        .unwrap();
+    #[cfg_attr(not(unix), allow(unused_mut))]
+    let mut builder = std::fs::DirBuilder::new();
+    #[cfg(unix)]
+    std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
+    builder.create(&root).unwrap();
     let path = root.join("lease.sqlite3");
     let mut connection = Connection::open(&path).unwrap();
     initialize(&connection);

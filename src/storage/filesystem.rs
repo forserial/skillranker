@@ -1,15 +1,17 @@
 //! Private, local cache directory admission. All opens walk trusted descriptors.
 
 #[cfg(unix)]
-use super::platform::{DirectoryIdentity, local_filesystem, storage_path};
-#[cfg(unix)]
+use super::platform::local_filesystem;
+#[cfg(any(unix, windows))]
+use super::platform::{DirectoryIdentity, storage_path};
+#[cfg(any(unix, windows))]
 use super::{
     CACHE_FILE, CACHE_QUOTA_BYTES, CacheCapacityReport, MAINTENANCE_RESERVE_BYTES,
     MUTATION_RESERVE_BYTES, StoreError, check_work,
 };
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 use crate::runtime::EntryClock;
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 use asupersync::Cx;
 #[cfg(unix)]
 use nix::dir::Dir;
@@ -23,7 +25,7 @@ use nix::sys::stat::{FileStat, Mode, SFlag, fstat, fstatat, mkdirat};
 use nix::sys::statfs::fstatfs;
 #[cfg(unix)]
 use nix::sys::statvfs::fstatvfs;
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 use std::fs::File;
 #[cfg(unix)]
 use std::path::Component;
@@ -32,7 +34,7 @@ use std::path::{Path, PathBuf};
 // Bound metadata work even when many empty files consume no byte quota. The
 // normal cache has only its database and SQLite sidecars. No file is removed
 // when this limit is exceeded; optional caching is refused instead.
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 const MAX_CACHE_DIRECTORY_ENTRIES: usize = 4096;
 
 /// Inspect the held directory, not a second pathname that may name a different
@@ -280,7 +282,7 @@ pub fn diagnose_owner_only(path: &Path) -> Option<PermissionRefusal> {
     None
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn recording_capacity(bytes: u64, available: u128) -> Result<(), StoreError> {
     if bytes > CACHE_QUOTA_BYTES - MAINTENANCE_RESERVE_BYTES - MUTATION_RESERVE_BYTES {
         return Err(StoreError::Quota);
@@ -292,9 +294,9 @@ fn recording_capacity(bytes: u64, available: u128) -> Result<(), StoreError> {
 }
 
 // `platform_support::PRIVATE_STORAGE` reports which open below this build has.
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 const _: () = assert!(crate::platform_support::PRIVATE_STORAGE);
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 const _: () = assert!(!crate::platform_support::PRIVATE_STORAGE);
 
 #[cfg(unix)]
@@ -506,21 +508,152 @@ impl PrivateDirectory {
     }
 }
 
-/// Windows: the cache's owner-only directory admission (descriptor-relative
-/// opens, exact `0700`/`0600` modes, single-link files and an admitted local
-/// filesystem) has no audited equivalent here, so no private directory can be
-/// admitted. Opening reports `UnsupportedFilesystem`, which callers already
-/// treat as an unqualified store: optional caching degrades visibly and
-/// required storage fails. The value is uninhabited, so no other method can
-/// run against an unverified directory.
-#[cfg(not(unix))]
+/// Windows: the same admission under docs/windows-private-storage.md, through
+/// `windows_private` (owner, protected DACL, trusted ancestors, single-link
+/// files, local fixed NTFS/ReFS). The store directory is held without
+/// `FILE_SHARE_DELETE`, so it cannot be renamed or replaced while open.
+#[cfg(windows)]
+pub(super) struct PrivateDirectory {
+    pub path: PathBuf,
+    held: super::windows_private::HeldDirectory,
+    identity: DirectoryIdentity,
+}
+
+#[cfg(windows)]
+impl PrivateDirectory {
+    pub fn open(
+        path: PathBuf,
+        create: bool,
+        clock: EntryClock,
+        cx: &Cx,
+    ) -> Result<Self, StoreError> {
+        let path = storage_path(path);
+        let held = super::windows_private::walk(&path, create, || check_work(clock, cx))?;
+        let directory = Self {
+            path,
+            identity: held.identity,
+            held,
+        };
+        if create {
+            directory.admit_space_with(|| check_work(clock, cx))?;
+        } else {
+            directory.inspect_files_with(|| check_work(clock, cx))?;
+        }
+        Ok(directory)
+    }
+
+    pub fn database_path(&self) -> PathBuf {
+        self.path.join(CACHE_FILE)
+    }
+
+    /// SQLite opens a pathname, as on Unix: walk and admit the chain again and
+    /// require the same store directory before each effect.
+    pub fn revalidate(&self, clock: EntryClock, cx: &Cx) -> Result<(), StoreError> {
+        let current = super::windows_private::walk(&self.path, false, || check_work(clock, cx))?;
+        if current.identity != self.identity {
+            return Err(StoreError::StoreReplaced);
+        }
+        Ok(())
+    }
+
+    pub fn inspect_files(&self) -> Result<u64, StoreError> {
+        self.inspect_files_with(|| Ok(()))
+    }
+
+    fn inspect_files_with(
+        &self,
+        checkpoint: impl FnMut() -> Result<(), StoreError>,
+    ) -> Result<u64, StoreError> {
+        super::windows_private::inspect(
+            &self.held,
+            MAX_CACHE_DIRECTORY_ENTRIES,
+            CACHE_QUOTA_BYTES,
+            checkpoint,
+        )
+    }
+
+    pub fn capacity_report(&self) -> Result<CacheCapacityReport, StoreError> {
+        let occupied_bytes = self.inspect_files()?;
+        let available_disk_bytes = super::windows_private::available_bytes(&self.held.file)?;
+        let recording_ceiling_bytes = CACHE_QUOTA_BYTES
+            .saturating_sub(MAINTENANCE_RESERVE_BYTES)
+            .saturating_sub(MUTATION_RESERVE_BYTES);
+        let usable_recording_bytes = recording_ceiling_bytes.saturating_sub(occupied_bytes);
+        let is_recording_admitted = occupied_bytes <= recording_ceiling_bytes
+            && u128::from(available_disk_bytes)
+                >= u128::from(MAINTENANCE_RESERVE_BYTES + MUTATION_RESERVE_BYTES);
+        Ok(CacheCapacityReport {
+            total_quota_bytes: CACHE_QUOTA_BYTES,
+            maintenance_reserve_bytes: MAINTENANCE_RESERVE_BYTES,
+            mutation_reserve_bytes: MUTATION_RESERVE_BYTES,
+            recording_ceiling_bytes,
+            occupied_bytes,
+            usable_recording_bytes,
+            available_disk_bytes,
+            is_recording_admitted,
+        })
+    }
+
+    pub fn admit_space(&self) -> Result<(), StoreError> {
+        self.admit_space_with(|| Ok(()))
+    }
+
+    fn admit_space_with(
+        &self,
+        mut checkpoint: impl FnMut() -> Result<(), StoreError>,
+    ) -> Result<(), StoreError> {
+        checkpoint()?;
+        super::windows_private::volume_admitted(&self.held.file, self.held.drive)?;
+        let bytes = self.inspect_files_with(&mut checkpoint)?;
+        checkpoint()?;
+        let available = super::windows_private::available_bytes(&self.held.file)?;
+        recording_capacity(bytes, u128::from(available))
+    }
+
+    pub fn open_database_file(
+        &self,
+        create: bool,
+        clock: EntryClock,
+        cx: &Cx,
+    ) -> Result<File, StoreError> {
+        self.revalidate(clock, cx)?;
+        if create {
+            self.admit_space_with(|| check_work(clock, cx))?;
+        } else {
+            self.inspect_files_with(|| check_work(clock, cx))?;
+        }
+        super::windows_private::open_file(&self.held, CACHE_FILE, create)
+    }
+
+    pub fn verify_database_file(
+        &self,
+        file: &File,
+        clock: EntryClock,
+        cx: &Cx,
+    ) -> Result<(), StoreError> {
+        self.revalidate(clock, cx)?;
+        self.inspect_files_with(|| check_work(clock, cx))?;
+        let held = super::windows_private::identity(file)?;
+        let current = super::windows_private::inspect_entry(&self.path, CACHE_FILE.as_ref())
+            .map_err(|error| super::windows_private::io_error(&error))?;
+        if held != super::windows_private::identity(&current)? {
+            return Err(StoreError::StoreReplaced);
+        }
+        Ok(())
+    }
+}
+
+/// Other targets: no owner-only directory admission exists, so no private
+/// directory can be admitted. Opening reports `UnsupportedFilesystem`; the
+/// value is uninhabited, so no other method can run.
+#[cfg(not(any(unix, windows)))]
 #[allow(dead_code)] // Mirrors the Unix surface; uninhabited here.
 pub(super) struct PrivateDirectory {
     pub path: PathBuf,
     never: std::convert::Infallible,
 }
 
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 #[allow(dead_code)] // Mirrors the Unix surface; uninhabited here.
 impl PrivateDirectory {
     pub fn open(
@@ -582,9 +715,12 @@ pub fn diagnose_owner_only(_: &Path) -> Option<PermissionRefusal> {
     None
 }
 
-#[cfg(all(test, unix))]
+#[cfg(all(test, any(unix, windows)))]
 mod tests {
     use super::*;
+    // Unix mode and owner metadata; the Windows owner and DACL predicates are
+    // tested in storage::windows_private.
+    #[cfg(unix)]
     #[test]
     fn foreign_owner_is_rejected_by_the_same_metadata_admission() {
         let file = File::open(std::env::current_exe().unwrap()).unwrap();

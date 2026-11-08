@@ -5,12 +5,17 @@
 //! - Every call takes a handle borrowed from a live `&File`, the process's own
 //!   pseudo-handle, or a token handle owned by an `OwnedHandle` here, so no
 //!   handle outlives its owner and none is closed twice.
-//! - Nothing re-resolves a caller's path: object identity comes from the
-//!   handle. The one path used ([`free_bytes_for_caller`]) is the volume GUID
-//!   root that Windows reports for that handle.
+//! - Reads never re-resolve a caller's path: object identity comes from the
+//!   handle. The one path a read uses ([`free_bytes_for_caller`]) is the volume
+//!   GUID root that Windows reports for that handle. The two creation calls
+//!   ([`create_directory_with`], [`create_new_file_with`]) take the path the
+//!   caller names, because Win32 creates by name; the caller holds the checked
+//!   parent open so that name still denotes a child of it.
 //! - Buffers are Rust-owned with lengths passed in units Windows expects;
-//!   memory Windows allocates (`GetSecurityInfo`) is freed by a guard before
-//!   returning, after its bytes have been copied into owned values.
+//!   memory Windows allocates (`GetSecurityInfo`,
+//!   `ConvertStringSecurityDescriptorToSecurityDescriptorW`) is freed by a guard
+//!   before returning, after its bytes have been copied into owned values or
+//!   the call that used it has returned.
 //! - Raw memory is only read as byte slices whose lengths Windows reported
 //!   (`GetLengthSid`, `ACE_HEADER.AceSize`); all interpretation happens in the
 //!   safe parsers in `sid` and `acl`.
@@ -19,23 +24,30 @@
 use std::ffi::{OsString, c_void};
 use std::fs::File;
 use std::io;
-use std::os::windows::ffi::OsStringExt;
+use std::os::windows::ffi::{OsStrExt, OsStringExt};
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
+use std::path::Path;
 use std::ptr::null_mut;
 
 use windows_sys::Win32::Foundation::{
-    ERROR_INSUFFICIENT_BUFFER, GetLastError, HANDLE, HLOCAL, LocalFree,
+    ERROR_INSUFFICIENT_BUFFER, GENERIC_READ, GENERIC_WRITE, GetLastError, HANDLE, HLOCAL,
+    INVALID_HANDLE_VALUE, LocalFree,
 };
-use windows_sys::Win32::Security::Authorization::{GetSecurityInfo, SE_FILE_OBJECT};
+use windows_sys::Win32::Security::Authorization::{
+    ConvertStringSecurityDescriptorToSecurityDescriptorW, GetSecurityInfo, SDDL_REVISION_1,
+    SE_FILE_OBJECT,
+};
 use windows_sys::Win32::Security::{
     ACL, ACL_SIZE_INFORMATION, AclSizeInformation, DACL_SECURITY_INFORMATION, GetAce,
     GetAclInformation, GetLengthSid, GetSecurityDescriptorControl, GetTokenInformation,
-    OWNER_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, PSID, TOKEN_QUERY, TOKEN_USER, TokenUser,
+    OWNER_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, PSID, SECURITY_ATTRIBUTES, TOKEN_QUERY,
+    TOKEN_USER, TokenUser,
 };
 use windows_sys::Win32::Storage::FileSystem::{
-    FILE_REMOTE_PROTOCOL_INFO, FileRemoteProtocolInfo, GetDiskFreeSpaceExW, GetDriveTypeW,
-    GetFileInformationByHandleEx, GetFinalPathNameByHandleW, GetVolumeInformationByHandleW,
-    VOLUME_NAME_DOS, VOLUME_NAME_GUID,
+    CREATE_NEW, CreateDirectoryW, CreateFileW, FILE_ATTRIBUTE_NORMAL, FILE_FLAG_OPEN_REPARSE_POINT,
+    FILE_REMOTE_PROTOCOL_INFO, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
+    FileRemoteProtocolInfo, GetDiskFreeSpaceExW, GetDriveTypeW, GetFileInformationByHandleEx,
+    GetFinalPathNameByHandleW, GetVolumeInformationByHandleW, VOLUME_NAME_DOS, VOLUME_NAME_GUID,
 };
 use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
 
@@ -377,6 +389,95 @@ pub fn free_bytes_for_caller(file: &File) -> io::Result<u64> {
         return Err(last_error());
     }
     Ok(available)
+}
+
+/// A NUL-terminated UTF-16 copy of `path`; an interior NUL is refused.
+fn wide_path(path: &Path) -> io::Result<Vec<u16>> {
+    let wide: Vec<u16> = path.as_os_str().encode_wide().collect();
+    if wide.contains(&0) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "path contains NUL",
+        ));
+    }
+    Ok(terminated(&wide))
+}
+
+/// A security descriptor converted from SDDL, freed on drop.
+fn descriptor_from_sddl(sddl: &str) -> io::Result<LocalAllocation> {
+    if sddl.contains('\0') {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "SDDL contains NUL",
+        ));
+    }
+    let text: Vec<u16> = sddl.encode_utf16().chain(std::iter::once(0)).collect();
+    let mut descriptor: PSECURITY_DESCRIPTOR = null_mut();
+    // SAFETY: `text` is NUL-terminated and outlives the call; `descriptor` is a
+    // valid out-pointer and the optional size out-pointer is null.
+    if unsafe {
+        ConvertStringSecurityDescriptorToSecurityDescriptorW(
+            text.as_ptr(),
+            SDDL_REVISION_1,
+            &mut descriptor,
+            null_mut(),
+        )
+    } == 0
+    {
+        return Err(last_error());
+    }
+    Ok(LocalAllocation(descriptor))
+}
+
+fn attributes(descriptor: &LocalAllocation) -> SECURITY_ATTRIBUTES {
+    SECURITY_ATTRIBUTES {
+        nLength: size_of::<SECURITY_ATTRIBUTES>() as u32,
+        lpSecurityDescriptor: descriptor.0,
+        bInheritHandle: 0,
+    }
+}
+
+/// Creates the directory `path` with the security descriptor `sddl` applied
+/// at creation (owner and DACL), instead of one inherited from its parent.
+/// Fails with `AlreadyExists` when anything already has that name.
+pub fn create_directory_with(path: &Path, sddl: &str) -> io::Result<()> {
+    let path = wide_path(path)?;
+    let descriptor = descriptor_from_sddl(sddl)?;
+    let attributes = attributes(&descriptor);
+    // SAFETY: `path` is NUL-terminated; `attributes` and the descriptor it
+    // points to outlive the call.
+    if unsafe { CreateDirectoryW(path.as_ptr(), &attributes) } == 0 {
+        return Err(last_error());
+    }
+    Ok(())
+}
+
+/// Creates the new file `path` (never opening an existing one, link or not)
+/// with the security descriptor `sddl` applied at creation, opened for read
+/// and write and shared for read, write and delete as an ordinary file is.
+pub fn create_new_file_with(path: &Path, sddl: &str) -> io::Result<File> {
+    let path = wide_path(path)?;
+    let descriptor = descriptor_from_sddl(sddl)?;
+    let attributes = attributes(&descriptor);
+    // SAFETY: `path` is NUL-terminated; `attributes` and its descriptor
+    // outlive the call; no template handle is passed.
+    let handle = unsafe {
+        CreateFileW(
+            path.as_ptr(),
+            GENERIC_READ | GENERIC_WRITE,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            &attributes,
+            CREATE_NEW,
+            FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT,
+            null_mut(),
+        )
+    };
+    if handle == INVALID_HANDLE_VALUE {
+        return Err(last_error());
+    }
+    // SAFETY: CreateFileW returned a valid handle that this function owns;
+    // the File closes it exactly once.
+    Ok(File::from(unsafe { OwnedHandle::from_raw_handle(handle) }))
 }
 
 #[cfg(test)]

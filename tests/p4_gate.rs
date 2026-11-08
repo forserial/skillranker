@@ -1,4 +1,3 @@
-#![cfg(any(target_os = "linux", target_os = "macos"))]
 //! Phase P4 Acceptance Gate: Useful Core CLI, Pure Ranking, and Exact Cache.
 //!
 //! Satisfies contract boundary `p4_core_cli_acceptance` (sr-roadmap-l1i.5.21)
@@ -33,6 +32,7 @@ use skillranker::runtime::{EntryClock, ProcessInvocation};
 use skillranker::scoring::{Input, Weights, rank};
 use skillranker::storage::{CacheAccess, CacheLocation, CacheOpen, open_cache};
 use std::fs;
+#[cfg(unix)]
 use std::os::unix::fs::DirBuilderExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -584,18 +584,24 @@ fn all_p4_invariants_verified() {
     // =========================================================================
     // Invariant 6: Fenced Lease Coordination and Response Cache Isolation
     // =========================================================================
-    let cache_dir = Path::new("/tmp").join(format!(
-        "sr-p4-cache-gate-{}-{}",
-        std::process::id(),
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
-    fs::DirBuilder::new()
-        .mode(0o700)
-        .create(&cache_dir)
-        .unwrap();
+    #[cfg(unix)]
+    let cache_dir = {
+        let cache_dir = Path::new("/tmp").join(format!(
+            "sr-p4-cache-gate-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::DirBuilder::new()
+            .mode(0o700)
+            .create(&cache_dir)
+            .unwrap();
+        cache_dir
+    };
+    #[cfg(windows)]
+    let cache_dir = support::private_store_dir("p4-cache-gate");
 
     let clock_cache = test_clock();
     let inv_cache = ProcessInvocation::from_clock(clock_cache).unwrap();

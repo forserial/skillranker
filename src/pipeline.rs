@@ -4250,11 +4250,11 @@ struct CacheSlot {
     lost: bool,
 }
 
-/// The persistent exact response cache. Linux and macOS use the qualified store;
-/// elsewhere every run keys fingerprints with fresh randomness and caches
+/// The persistent exact response cache. Linux, macOS and Windows use the
+/// qualified store; elsewhere every run keys fingerprints with fresh randomness and caches
 /// nothing. Store failures never fail ranking: the store is dropped and the
 /// run continues uncached.
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
 mod persistent {
     use super::{EffectGate, ProcessInvocation, wall_clock_ms};
     use crate::cache::{
@@ -4607,7 +4607,7 @@ mod persistent {
     }
 }
 
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
 mod persistent {
     use super::{EffectGate, ProcessInvocation};
     use crate::cache::{

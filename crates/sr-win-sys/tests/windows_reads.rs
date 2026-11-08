@@ -128,3 +128,53 @@ fn temp_volume_is_a_local_fixed_ntfs_or_refs_volume() {
     assert!(final_path.ends_with(&dir.file_name().unwrap().to_string_lossy().to_lowercase()));
     assert!(free_bytes_for_caller(&file).unwrap() > 0);
 }
+
+fn private_sddl(user: &Sid) -> String {
+    format!("O:{user}D:P(A;OICI;FA;;;{user})(A;OICI;FA;;;SY)")
+}
+
+#[test]
+fn directories_and_files_are_created_with_the_given_descriptor() {
+    use sr_win_sys::windows::{create_directory_with, create_new_file_with};
+    let parent = scratch("create");
+    let user = token_user_sid().unwrap();
+    let sddl = private_sddl(&user);
+
+    let dir = parent.join("store");
+    create_directory_with(&dir, &sddl).unwrap();
+    let descriptor = security_of(&open_dir(&dir)).unwrap();
+    assert_eq!(descriptor.owner, user);
+    assert!(descriptor.dacl_protected());
+    let aces = descriptor.dacl.unwrap();
+    assert_eq!(aces.len(), 2, "{aces:?}");
+    assert!(aces.iter().all(|ace| ace.kind == AceKind::Allowed
+        && !ace.is_inherited()
+        && ace.flags == OBJECT_INHERIT | CONTAINER_INHERIT));
+    assert!(aces.iter().any(|ace| ace.sid.as_ref() == Some(&user)));
+    assert!(
+        aces.iter()
+            .any(|ace| ace.sid.as_ref().is_some_and(Sid::is_local_system))
+    );
+    assert_eq!(
+        create_directory_with(&dir, &sddl).unwrap_err().kind(),
+        std::io::ErrorKind::AlreadyExists
+    );
+
+    let path = dir.join("cache.sqlite3");
+    let file = create_new_file_with(&path, &sddl).unwrap();
+    let descriptor = security_of(&file).unwrap();
+    assert_eq!(descriptor.owner, user);
+    assert!(descriptor.dacl_protected());
+    assert_eq!(descriptor.dacl.unwrap().len(), 2);
+    use std::io::Write;
+    (&file).write_all(b"x").unwrap();
+    assert_eq!(fs::read(&path).unwrap(), b"x");
+    assert_eq!(
+        create_new_file_with(&path, &sddl).unwrap_err().kind(),
+        std::io::ErrorKind::AlreadyExists
+    );
+    // Malformed SDDL is refused before anything is created.
+    let error = create_new_file_with(&dir.join("bad"), "not sddl").unwrap_err();
+    assert_eq!(error.raw_os_error(), Some(87), "ERROR_INVALID_PARAMETER");
+    assert!(!dir.join("bad").exists());
+}

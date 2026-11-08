@@ -1,5 +1,6 @@
-#![cfg(any(target_os = "linux", target_os = "macos"))]
 //! Real lease and production cache stores; no model or storage doubles.
+
+mod support;
 use skillranker::cache::{
     CachedResponseEntry, CoordinationKey, LeaderContext, LeaseAcquisition, RequestFingerprint,
     RequestStage,
@@ -9,6 +10,7 @@ use skillranker::runtime::ProcessInvocation;
 use skillranker::storage::{
     CacheAccess, CacheLocation, CacheOpen, CacheStore, StoreError, open_cache,
 };
+#[cfg(unix)]
 use std::os::unix::fs::DirBuilderExt;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -22,6 +24,13 @@ fn now() -> u64 {
     )
     .unwrap()
 }
+/// Windows: a private store directory under `%LOCALAPPDATA%\sr-tests`.
+#[cfg(windows)]
+fn directory() -> PathBuf {
+    support::private_store_dir("fence")
+}
+
+#[cfg(unix)]
 fn directory() -> PathBuf {
     let dir = PathBuf::from(format!(
         "/tmp/sr-cache-fence-{}-{}",

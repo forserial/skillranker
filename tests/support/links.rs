@@ -63,13 +63,18 @@ pub fn available() -> bool {
         static AVAILABLE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
         *AVAILABLE.get_or_init(|| {
             const ERROR_PRIVILEGE_NOT_HELD: i32 = 1314;
+            // Probes are retained (repository policy forbids automatic
+            // deletion), and process IDs are reused, so the name also carries
+            // the time.
             let probe = std::env::temp_dir().join(format!(
-                "sr-link-probe-{}-{:?}",
+                "sr-link-probe-{}-{:?}-{}",
                 std::process::id(),
-                std::thread::current().id()
+                std::thread::current().id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
             ));
-            // Intentionally retained, like other fixtures: repository policy
-            // forbids automatic deletion.
             match std::os::windows::fs::symlink_file("target", &probe) {
                 Ok(()) => true,
                 Err(error) if error.raw_os_error() == Some(ERROR_PRIVILEGE_NOT_HELD) => {

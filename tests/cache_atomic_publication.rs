@@ -1,5 +1,6 @@
-#![cfg(any(target_os = "linux", target_os = "macos"))]
 //! Production CacheStore/WAL publication. No provider calls or storage doubles.
+
+mod support;
 
 use skillranker::cache::{
     CachedResponseEntry, CoordinationKey, LeaderContext, LeaseAcquisition, RequestFingerprint,
@@ -10,6 +11,7 @@ use skillranker::runtime::ProcessInvocation;
 use skillranker::storage::{
     CACHE_FILE, CacheAccess, CacheLocation, CacheOpen, CacheStore, StoreError, open_cache,
 };
+#[cfg(unix)]
 use std::os::unix::fs::DirBuilderExt;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -28,6 +30,13 @@ fn now() -> u64 {
     .unwrap()
 }
 
+/// Windows: a private store directory under `%LOCALAPPDATA%\sr-tests`.
+#[cfg(windows)]
+fn directory() -> PathBuf {
+    support::private_store_dir("atomic-cache")
+}
+
+#[cfg(unix)]
 fn directory() -> PathBuf {
     let nonce = SystemTime::now()
         .duration_since(UNIX_EPOCH)

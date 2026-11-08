@@ -1,4 +1,3 @@
-#![cfg(unix)]
 //! What the real `sr` binary says about its own persistent store (sr-un4j).
 //!
 //! The existing cache tests construct a `CacheStore` directly, so none of them
@@ -8,8 +7,16 @@
 //! persistence even when the cache was serving hits. These cases pin the three
 //! reported states to reality. Every case runs offline: no provider is
 //! contacted, and the store is opened before any provider admission.
+//!
+//! On Windows the fixture lives under `%LOCALAPPDATA%\sr-tests`, the store
+//! under the fixture's own `LOCALAPPDATA`, and "shared writable" is a `Users`
+//! entry allowed to delete the root's children (sr-winpar.3).
+
+mod support;
+
 use serde_json::{Value, json};
 use std::fs;
+#[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -26,7 +33,11 @@ impl Fixture {
     /// A workspace, one personal skill and one transcript this workspace can
     /// claim, so discovery yields the session identity a store needs.
     fn new(root_mode: u32) -> Self {
-        let root = std::env::temp_dir().join(format!(
+        #[cfg(unix)]
+        let base = std::env::temp_dir();
+        #[cfg(windows)]
+        let base = support::base_store_root().to_path_buf();
+        let root = base.join(format!(
             "sr-cache-reuse-{}-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
@@ -67,10 +78,26 @@ impl Fixture {
         .unwrap();
         // Owner-only everywhere the store walks, then the caller's chosen mode
         // on the fixture root itself.
-        for dir in [f.home(), f.workspace()] {
-            fs::set_permissions(&dir, fs::Permissions::from_mode(0o700)).unwrap();
+        #[cfg(unix)]
+        {
+            for dir in [f.home(), f.workspace()] {
+                fs::set_permissions(&dir, fs::Permissions::from_mode(0o700)).unwrap();
+            }
+            fs::set_permissions(&f.root, fs::Permissions::from_mode(root_mode)).unwrap();
         }
-        fs::set_permissions(&f.root, fs::Permissions::from_mode(root_mode)).unwrap();
+        // Windows: group/other write becomes a `Users` entry that may delete
+        // the root's children, which rule 3 refuses.
+        #[cfg(windows)]
+        if root_mode & 0o022 != 0 {
+            let system = std::env::var_os("SystemRoot").expect("SystemRoot");
+            let status = Command::new(Path::new(&system).join(r"System32\icacls.exe"))
+                .arg(&f.root)
+                .args(["/grant", "*S-1-5-32-545:(DC)"])
+                .stdout(std::process::Stdio::null())
+                .status()
+                .unwrap();
+            assert!(status.success());
+        }
         f
     }
 
@@ -84,8 +111,15 @@ impl Fixture {
     /// Ranks offline, so the run reaches the store and stops at provider
     /// admission without contacting anything.
     fn rank(&self, extra: &[&str]) -> Value {
-        let output = Command::new(env!("CARGO_BIN_EXE_sr"))
-            .env_clear()
+        let mut command = Command::new(env!("CARGO_BIN_EXE_sr"));
+        command.env_clear();
+        // Windows: the store root is LOCALAPPDATA, and the system needs
+        // SystemRoot to start a process.
+        #[cfg(windows)]
+        command
+            .env("LOCALAPPDATA", self.home().join("AppData").join("Local"))
+            .env("SystemRoot", std::env::var_os("SystemRoot").unwrap());
+        let output = command
             .env("HOME", self.home())
             .env("XDG_CONFIG_HOME", self.home().join(".config"))
             // These cases test persistence, not the deadline. A debug binary on
@@ -116,7 +150,9 @@ fn warning_kinds(value: &Value) -> Vec<String> {
 fn cache_dir(home: &Path) -> PathBuf {
     #[cfg(target_os = "macos")]
     return home.join("Library/Caches/sr");
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(windows)]
+    return home.join(r"AppData\Local\skillranker\cache");
+    #[cfg(not(any(target_os = "macos", windows)))]
     home.join(".cache/sr")
 }
 
@@ -126,6 +162,14 @@ fn cache_dir(home: &Path) -> PathBuf {
 /// build worker's temp tree is often group writable — so the expected reported
 /// state is derived rather than assumed. Without this the positive case passes
 /// on a workstation and fails on a build worker for an environmental reason.
+#[cfg(windows)]
+fn store_may_live_under(_: &Path) -> bool {
+    // The fixture root is under %LOCALAPPDATA%\sr-tests, whose ancestors
+    // the store admits on a default profile; a refusal would be a failure.
+    true
+}
+
+#[cfg(unix)]
 fn store_may_live_under(path: &Path) -> bool {
     use std::os::unix::fs::MetadataExt;
     let me = nix::unistd::getuid().as_raw();

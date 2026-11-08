@@ -3,8 +3,8 @@
 //! SingleFlightCoordinator and its alternate response store are not reproduced.
 //! Actual CLI sharing, offline output, provider attempts and live policy changes
 //! are covered by real_rank_coordination and rank_acceptance.
-// Exercises the Unix-only private store; Windows builds refuse it (see docs/platform-boundary.md).
-#![cfg(unix)]
+
+mod support;
 
 use skillranker::cache::{
     CacheKey, CacheLookupQuery, CacheLookupResult, CacheNamespace, CachedResponseEntry,
@@ -25,13 +25,24 @@ use skillranker::roster::{
 use skillranker::runtime::ProcessInvocation;
 use skillranker::storage::{CACHE_FILE, CacheAccess, CacheLocation, CacheOpen, CacheStore};
 use std::collections::BTreeSet;
+#[cfg(unix)]
 use std::fs::DirBuilder;
+#[cfg(unix)]
 use std::os::unix::fs::DirBuilderExt;
 use std::path::{Path, PathBuf};
+#[cfg(unix)]
 use std::sync::atomic::{AtomicU64, Ordering};
 
+#[cfg(unix)]
 static NEXT_DIR: AtomicU64 = AtomicU64::new(0);
 
+/// Windows: a private store directory under `%LOCALAPPDATA%\sr-tests`.
+#[cfg(windows)]
+fn private_tree(case: &str) -> PathBuf {
+    support::private_store_dir(case)
+}
+
+#[cfg(unix)]
 fn private_tree(case: &str) -> PathBuf {
     let path = Path::new("/tmp").join(format!(
         "sr-cache-policy-{case}-{}-{}-{}",

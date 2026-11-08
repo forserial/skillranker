@@ -23,7 +23,7 @@
 //!      `UnsupportedSourceMode` (`SourceError::CassUnavailableInMode`).
 //! 6. Explicit local requests work offline without network access.
 
-#![cfg(unix)]
+mod support;
 
 use skillranker::cli::ConfigFiles;
 use skillranker::config::{ConfigSources, PolicyBoundary, Revalidation};
@@ -37,12 +37,15 @@ use skillranker::privacy::{
 use skillranker::roster::LocalPath;
 use skillranker::runtime::{EntryClock, ProcessInvocation};
 use skillranker::storage::{CacheAccess, CacheLocation, CacheOpen, open_cache};
-use std::fs::DirBuilder;
-use std::os::unix::fs::DirBuilderExt;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 static COUNTER: AtomicU64 = AtomicU64::new(0);
+
+/// An owner-only directory, as the private stores require.
+fn private_dir(path: &std::path::Path) {
+    support::create_private_dir(path);
+}
 
 struct TempWorkspace {
     root: PathBuf,
@@ -50,7 +53,12 @@ struct TempWorkspace {
 
 impl TempWorkspace {
     fn new(case: &str) -> Self {
-        let root = Path::new("/tmp").join(format!(
+        // Root-owned sticky /tmp on Unix; %LOCALAPPDATA%\sr-tests on Windows.
+        #[cfg(unix)]
+        let base = std::path::Path::new("/tmp");
+        #[cfg(windows)]
+        let base = support::base_store_root();
+        let root = base.join(format!(
             "sr-effect-test-{case}-{}-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
@@ -59,19 +67,10 @@ impl TempWorkspace {
                 .as_nanos(),
             COUNTER.fetch_add(1, Ordering::Relaxed)
         ));
-        DirBuilder::new().mode(0o700).create(&root).unwrap();
-        DirBuilder::new()
-            .mode(0o700)
-            .create(root.join(".sr"))
-            .unwrap();
-        DirBuilder::new()
-            .mode(0o700)
-            .create(root.join("user"))
-            .unwrap();
-        DirBuilder::new()
-            .mode(0o700)
-            .create(root.join("user/sr"))
-            .unwrap();
+        private_dir(&root);
+        private_dir(&root.join(".sr"));
+        private_dir(&root.join("user"));
+        private_dir(&root.join("user").join("sr"));
         Self { root }
     }
 
@@ -211,7 +210,7 @@ fn effect_policy_matrix_128_combinations() {
 fn persistence_controls_prevent_disk_store_creation() {
     let ws = TempWorkspace::new("no-persist-probe");
     let state_dir = ws.root.join("state");
-    DirBuilder::new().mode(0o700).create(&state_dir).unwrap();
+    private_dir(&state_dir);
 
     let invocation = ProcessInvocation::enter().expect("invocation enter");
     let cx = invocation.request_cx().expect("request cx");

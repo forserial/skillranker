@@ -1,4 +1,3 @@
-#![cfg(any(target_os = "linux", target_os = "macos"))]
 //! The provider circuit breaker (sr-roadmap-l1i.7.7) through the real binary
 //! against the loopback TLS Jev fixture: shared cooldown across processes,
 //! process-local protection when persistence is off or the store is unusable,
@@ -6,11 +5,12 @@
 //! that closes it. Timing-dependent transitions (doubling, lease expiry,
 //! obsolete generations) are unit-tested in `src/breaker.rs`. Synthetic data only.
 
+#[path = "support/stub_python.rs"]
+mod stub_python;
 mod support;
 
 use serde_json::{Value, json};
 use std::io::{BufRead, BufReader};
-use std::os::unix::fs::DirBuilderExt;
 use std::path::PathBuf;
 use std::process::{Child, ChildStdout, Command, Output, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -25,10 +25,7 @@ impl Home {
     fn new() -> Self {
         let root = support::private_store_dir("breaker");
         for dir in ["home", "config", "cache", "data", "workspace"] {
-            std::fs::DirBuilder::new()
-                .mode(0o700)
-                .create(root.join(dir))
-                .unwrap();
+            support::create_private_dir(&root.join(dir));
         }
         for (name, description) in [
             ("alpha", "Runs and repairs failing rust tests."),
@@ -60,12 +57,16 @@ impl Home {
             .env("HOME", self.root.join("home"))
             .env("XDG_CONFIG_HOME", self.root.join("config"))
             .env("XDG_CACHE_HOME", self.root.join("cache"))
+            .env("LOCALAPPDATA", self.root.join("cache"))
             .env("XDG_DATA_HOME", self.root.join("data"))
             .env("TYPESAFE_API_KEY", "synthetic-breaker-canary")
             .env("TYPESAFE_ENDPOINT", format!("https://localhost:{port}"))
             .env("SSL_CERT_FILE", self.root.join("fixture-ca.pem"))
             .current_dir(self.root.join("workspace"))
             .args(args);
+        // Windows needs SystemRoot to start Winsock.
+        #[cfg(windows)]
+        command.env("SystemRoot", std::env::var_os("SystemRoot").unwrap());
         command
     }
 
@@ -74,6 +75,7 @@ impl Home {
     }
 
     /// `sr budget` as seen from the endpoint on `port`.
+    #[cfg(unix)]
     fn budget(&self, port: u16, args: &[&str]) -> Value {
         let mut full = vec!["budget", "--json"];
         full.extend_from_slice(args);
@@ -167,11 +169,10 @@ impl Provider {
         ] {
             std::fs::write(dir.join(name), bytes).unwrap();
         }
-        let mut child = Command::new("/usr/bin/python3")
+        let mut child = stub_python::python_command()
             .arg(dir.join("provider_server.py"))
             .arg(scenario)
             .args(args)
-            .env_clear()
             .stdin(if scenario == "hold-wide" {
                 Stdio::piped()
             } else {
@@ -230,8 +231,18 @@ impl Drop for Provider {
     }
 }
 
+/// Where the binary keeps breaker state: `$XDG_CACHE_HOME/sr` on Unix,
+/// `%LOCALAPPDATA%\skillranker\cache` on Windows.
 fn breaker_db(home: &Home) -> PathBuf {
-    home.root.join("cache/sr/breaker.sqlite3")
+    #[cfg(unix)]
+    return home.root.join("cache/sr/breaker.sqlite3");
+    #[cfg(windows)]
+    return home
+        .root
+        .join("cache")
+        .join("skillranker")
+        .join("cache")
+        .join("breaker.sqlite3");
 }
 
 fn warning_kinds(out: &Output) -> Vec<String> {
@@ -246,6 +257,9 @@ fn warning_kinds(out: &Output) -> Vec<String> {
         .unwrap_or_default()
 }
 
+// Sets an enforced request allowance with `sr budget --apply`, which Windows
+// does not have yet (sr-winpar.5).
+#[cfg(unix)]
 #[test]
 fn three_transient_failures_open_the_circuit_for_the_next_process() {
     let home = Home::new();

@@ -1,4 +1,3 @@
-#![cfg(unix)]
 //! Rank pipeline acceptance through a real loopback TLS provider.
 //!
 //! `execute_pipeline` runs with trusted user configuration on disk and a real
@@ -11,6 +10,8 @@
 //! it binds a real one. No-claim: the `sr` binary itself cannot trust a
 //! fixture CA, so this proves pipeline branches over real TLS with an injected
 //! client, not the binary's own client or live Jev behavior.
+#[path = "support/stub_python.rs"]
+mod stub_python;
 mod support;
 
 use asupersync::tls::Certificate;
@@ -28,6 +29,7 @@ use skillranker::roster::LocalPath;
 use skillranker::runtime::{EntryClock, ProcessInvocation};
 use std::ffi::OsString;
 use std::io::{BufRead, BufReader, Write};
+#[cfg(unix)]
 use std::os::unix::fs::{DirBuilderExt, MetadataExt};
 use std::path::PathBuf;
 use std::process::{Child, ChildStdout, Command, Stdio};
@@ -105,20 +107,34 @@ struct Fixture {
     root: PathBuf,
 }
 
+/// The workspace spelling the pipeline sees: canonical on Unix; on Windows the
+/// fixture path itself, since canonical Windows paths are verbatim.
+fn canonical(path: &std::path::Path) -> PathBuf {
+    #[cfg(unix)]
+    return std::fs::canonicalize(path).unwrap();
+    #[cfg(windows)]
+    return path.to_path_buf();
+}
+
 impl Fixture {
     // Intentionally retained: repository policy forbids automatic tree deletion.
     fn new(user_config: &str) -> Self {
-        let root = std::fs::canonicalize("/tmp")
-            .expect("resolve trusted system temporary directory")
-            .join(format!(
-                "sr-rank-acceptance-{}-{}-{}",
-                std::process::id(),
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap()
-                    .as_nanos(),
-                NEXT.fetch_add(1, Ordering::Relaxed)
-            ));
+        // Windows canonical paths are verbatim (`\\?\C:\…`); the plain
+        // temporary path is already absolute and link-free.
+        #[cfg(unix)]
+        let base =
+            std::fs::canonicalize("/tmp").expect("resolve trusted system temporary directory");
+        #[cfg(windows)]
+        let base = std::env::temp_dir();
+        let root = base.join(format!(
+            "sr-rank-acceptance-{}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
         std::fs::create_dir(&root).unwrap();
         std::fs::create_dir_all(root.join("workspace/.claude/skills")).unwrap();
         std::fs::create_dir_all(root.join("config/sr")).unwrap();
@@ -231,7 +247,7 @@ impl Fixture {
         cwd: Option<&str>,
         recorded: &str,
     ) -> PathBuf {
-        let workspace = std::fs::canonicalize(self.workspace()).unwrap();
+        let workspace = canonical(&self.workspace());
         let workspace = workspace.to_str().unwrap();
         let name: String = if newer_encoding {
             workspace
@@ -239,7 +255,7 @@ impl Fixture {
                 .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
                 .collect()
         } else {
-            workspace.replace('/', "-")
+            workspace.replace(['/', '\\', ':'], "-")
         };
         let directory = self.root.join("home/.claude/projects").join(name);
         std::fs::create_dir_all(&directory).unwrap();
@@ -263,15 +279,32 @@ impl Fixture {
     }
     /// A private cache directory under root-owned sticky /tmp: RCH's TMPDIR
     /// can have group-writable ancestors, which the store rightly refuses.
+    /// Windows: under %LOCALAPPDATA%\sr-tests, since %TEMP% may grant other
+    /// local accounts the right to replace its children.
     fn cache_dir(&self) -> PathBuf {
-        let dir = std::path::Path::new("/tmp").join(format!(
+        #[cfg(unix)]
+        let base = std::path::Path::new("/tmp");
+        #[cfg(windows)]
+        let base = support::base_store_root();
+        let dir = base.join(format!(
             "sr-rank-cache-{}",
             self.root.file_name().unwrap().to_string_lossy()
         ));
         if !dir.exists() {
+            #[cfg(unix)]
             std::fs::DirBuilder::new().mode(0o700).create(&dir).unwrap();
+            #[cfg(windows)]
+            support::create_private_dir(&dir);
         }
         dir
+    }
+    /// The store directory the `sr` binary builds under `cache_dir`, which it
+    /// receives as `XDG_CACHE_HOME` on Unix and `LOCALAPPDATA` on Windows.
+    fn store(&self) -> PathBuf {
+        #[cfg(unix)]
+        return self.cache_dir().join("sr");
+        #[cfg(windows)]
+        return self.cache_dir().join("skillranker").join("cache");
     }
     fn args_with(
         &self,
@@ -355,11 +388,10 @@ impl Provider {
         ] {
             std::fs::write(directory.join(name), bytes).unwrap();
         }
-        let mut child = Command::new("/usr/bin/python3")
+        let mut child = stub_python::python_command()
             .arg(directory.join("provider_server.py"))
             .arg(scenario)
             .args(extra)
-            .env_clear()
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit())
@@ -940,7 +972,7 @@ fn a_native_session_repeat_is_cached_and_never_shared() {
     let f = Fixture::new(CONSENT);
     let cache = f.cache_dir();
     let provider = Provider::start(&f, "useful", &[]);
-    let workspace = std::fs::canonicalize(f.workspace()).unwrap();
+    let workspace = canonical(&f.workspace());
     let run = |path: PathBuf| {
         let mut args = f.args_with(TASK, "session-1", CACHED, Some(cache.clone()));
         args.workspace = workspace.clone();
@@ -1191,7 +1223,11 @@ fn an_exact_repeat_is_served_from_the_persistent_cache() {
     assert!(second["cache"]["age_ms"].is_u64());
     assert_eq!(usage(&second), (0, 0, 0, 0), "a cache hit incurs no usage");
     let file = std::fs::metadata(cache.join("cache.sqlite3")).unwrap();
+    #[cfg(unix)]
     assert_eq!(file.mode() & 0o7777, 0o600, "the store is owner-only");
+    // Windows owner-only descriptors are proven in cache_windows_contract.
+    #[cfg(windows)]
+    assert!(file.is_file());
 }
 
 #[test]
@@ -1366,6 +1402,7 @@ fn sr_rank(f: &Fixture, provider: &Provider, trust_fixture: bool) -> Command {
         .env("HOME", f.root.join("home"))
         .env("XDG_CONFIG_HOME", f.root.join("config"))
         .env("XDG_CACHE_HOME", f.cache_dir())
+        .env("LOCALAPPDATA", f.cache_dir())
         .env("TYPESAFE_API_KEY", "synthetic-acceptance-canary")
         .env(
             "TYPESAFE_ENDPOINT",
@@ -1373,6 +1410,9 @@ fn sr_rank(f: &Fixture, provider: &Provider, trust_fixture: bool) -> Command {
         )
         .current_dir(f.workspace())
         .args(["rank", "--json"]);
+    // Windows needs SystemRoot to start Winsock.
+    #[cfg(windows)]
+    command.env("SystemRoot", std::env::var_os("SystemRoot").unwrap());
     if trust_fixture {
         command.env("SSL_CERT_FILE", &ca);
     }
@@ -1490,12 +1530,16 @@ fn the_sr_binary_ranks_over_real_tls_and_serves_its_repeat_from_cache() {
     assert_eq!(repeat["skills"], first["skills"]);
     assert_eq!(repeat["cache"]["hit"], true);
     assert_eq!(usage(&repeat), (0, 0, 0, 0));
-    let store = f.cache_dir().join("sr").join("cache.sqlite3");
+    let store = f.store().join("cache.sqlite3");
+    #[cfg(unix)]
     assert_eq!(
         std::fs::metadata(store).unwrap().mode() & 0o7777,
         0o600,
         "the platform cache store is owner-only"
     );
+    // Windows owner-only descriptors are proven in cache_windows_contract.
+    #[cfg(windows)]
+    assert!(store.is_file(), "the platform cache store exists");
 }
 
 #[test]
@@ -1588,7 +1632,7 @@ fn the_dry_run_request_is_the_exact_bytes_a_stateless_rank_sends() {
         served[0]["body"].as_str().unwrap().len()
     );
     assert!(
-        !f.cache_dir().join("sr").exists(),
+        !f.store().exists(),
         "neither the preview nor --no-persist creates a store"
     );
 }
@@ -1770,6 +1814,8 @@ fn a_windowed_history_still_ranks_and_says_so() {
     assert_eq!(value["quality"]["task_anchor_known"], true);
 }
 
+// Initializes a ledger, which Windows does not have yet (sr-winpar.4).
+#[cfg(unix)]
 #[test]
 fn persistence_reports_disabled_only_when_the_user_disabled_it() {
     let f = Fixture::new(CONSENT);

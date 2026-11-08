@@ -230,8 +230,18 @@ impl AllowancePaths {
 
     /// The standard locations: the guard under `user_config_root`, the
     /// accounting in the private `sr` cache directory (`$XDG_CACHE_HOME/sr`
-    /// or the platform cache directory), else beside the guard.
+    /// or the platform cache directory), else beside the guard. On Windows
+    /// the cache directory is `%LOCALAPPDATA%\skillranker\cache`, as for the
+    /// response cache, and XDG variables are not honored
+    /// (docs/windows-private-storage.md, rule 6). Provider breaker state lives
+    /// beside the accounting.
     pub fn for_user(user_config_root: &Path) -> Self {
+        #[cfg(windows)]
+        let cache = crate::platform_path::windows_store_dir("cache")
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| user_config_root.join("sr"));
+        #[cfg(not(windows))]
         let cache = std::env::var_os("XDG_CACHE_HOME")
             .filter(|path| !path.is_empty())
             .map(PathBuf::from)

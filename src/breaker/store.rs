@@ -5,8 +5,9 @@
 //! bookkeeping can touch shared-memory sidecars even during a read-only probe.
 //! Descriptor checks exclude other-user path replacement, not a hostile process
 //! already running as this user. This is not filesystem/release qualification.
-// Off Unix every open is refused, so the admission helpers are unreachable.
-#![cfg_attr(not(unix), allow(dead_code, unused_imports))]
+// Off Unix and Windows every open is refused, so the admission helpers are
+// unreachable there.
+#![cfg_attr(not(any(unix, windows)), allow(dead_code, unused_imports))]
 
 use super::MAX_BREAKER_BYTES;
 use rusqlite::{Connection, OpenFlags, OptionalExtension, TransactionBehavior, config::DbConfig};
@@ -99,16 +100,23 @@ fn configure(connection: &Connection, busy: Duration) -> rusqlite::Result<()> {
     Ok(())
 }
 
-// `platform_support::PRIVATE_STORAGE` reports which `open` this build has.
-#[cfg(unix)]
-const _: () = assert!(crate::platform_support::PRIVATE_STORAGE);
-#[cfg(not(unix))]
-const _: () = assert!(!crate::platform_support::PRIVATE_STORAGE);
+// `platform_support::BREAKER_STORAGE` reports which `open` this build has.
+#[cfg(any(unix, windows))]
+const _: () = assert!(crate::platform_support::BREAKER_STORAGE);
+#[cfg(not(any(unix, windows)))]
+const _: () = assert!(!crate::platform_support::BREAKER_STORAGE);
+
+/// The held parent directory: a descriptor on Unix; on Windows a handle held
+/// without `FILE_SHARE_DELETE`, with its path and identity.
+#[cfg(not(windows))]
+type HeldParent = File;
+#[cfg(windows)]
+type HeldParent = crate::storage::windows_private::HeldDirectory;
 
 // Drop SQLite before the descriptors binding the admitted pathname.
 pub(super) struct Store {
     pub(super) connection: Connection,
-    directory: File,
+    directory: HeldParent,
     file: File,
     path: PathBuf,
 }
@@ -126,7 +134,15 @@ impl Store {
             }
             private::verify_files(&self.directory, &self.file, &self.path)
         }
-        #[cfg(not(unix))]
+        #[cfg(windows)]
+        {
+            let current = private::parent(&self.path, false)?;
+            if current.identity != self.directory.identity {
+                return Err(refused());
+            }
+            private::verify_files(&self.directory, &self.file, &self.path)
+        }
+        #[cfg(not(any(unix, windows)))]
         {
             Err(refused())
         }
@@ -136,12 +152,12 @@ impl Store {
 /// `None` means a private, empty initialization left by a failed creator.
 /// Reading it does not initialize or disable the later failure-only retry.
 pub(super) fn open(path: &Path, busy: Duration, create: bool) -> rusqlite::Result<Option<Store>> {
-    #[cfg(not(unix))]
+    #[cfg(not(any(unix, windows)))]
     {
         let _ = (path, busy, create);
         Err(refused())
     }
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     {
         // Engine inspection is disk-free. A wrong bundle may not create paths.
         crate::sqlite_engine::linked_engine().map_err(|_| refused())?;
@@ -342,6 +358,68 @@ mod private {
             match fstatat(directory, sidecar.as_os_str(), AtFlags::AT_SYMLINK_NOFOLLOW) {
                 Ok(stat) => regular(&stat)?,
                 Err(Errno::ENOENT) => {}
+                Err(_) => return Err(refused()),
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Windows: the same admission through `storage::windows_private`
+/// (docs/windows-private-storage.md): the parent is a private store directory
+/// under trusted ancestors, and the database and its sidecars are single-link
+/// regular files owned by the user with only the user and SYSTEM allowed.
+#[cfg(windows)]
+mod private {
+    use super::*;
+    use crate::storage::StoreError;
+    use crate::storage::windows_private as win;
+
+    pub(super) fn parent(path: &Path, create: bool) -> rusqlite::Result<win::HeldDirectory> {
+        let parent = path.parent().ok_or_else(refused)?;
+        win::walk(parent, create, || Ok(())).map_err(|_| refused())
+    }
+
+    pub(super) fn database(
+        directory: &win::HeldDirectory,
+        path: &Path,
+        create: bool,
+    ) -> rusqlite::Result<File> {
+        let name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .ok_or_else(refused)?;
+        // Never repaired: an existing file that fails admission is refused.
+        let file = win::open_file(directory, name, create).map_err(|_| refused())?;
+        let size = file.metadata().map_err(|_| refused())?.len();
+        if i64::try_from(size).map_or(true, |size| size > MAX_BREAKER_BYTES) {
+            return Err(refused());
+        }
+        Ok(file)
+    }
+
+    pub(super) fn verify_files(
+        directory: &win::HeldDirectory,
+        file: &File,
+        path: &Path,
+    ) -> rusqlite::Result<()> {
+        let name = path.file_name().ok_or_else(refused)?;
+        win::admitted_file(file).map_err(|_| refused())?;
+        let current = win::inspect_entry(&directory.path, name).map_err(|_| refused())?;
+        win::admitted_file(&current).map_err(|_| refused())?;
+        if win::identity(file).map_err(|_| refused())?
+            != win::identity(&current).map_err(|_| refused())?
+        {
+            return Err(refused());
+        }
+        for suffix in ["-wal", "-shm", "-journal"] {
+            let mut sidecar = name.to_os_string();
+            sidecar.push(suffix);
+            match win::inspect_entry(&directory.path, &sidecar) {
+                Ok(found) => {
+                    win::admitted_file(&found).map_err(|_| refused())?;
+                }
+                Err(error) if win::io_error(&error) == StoreError::Missing => {}
                 Err(_) => return Err(refused()),
             }
         }

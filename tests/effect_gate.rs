@@ -1,13 +1,18 @@
-#![cfg(any(target_os = "linux", target_os = "macos"))]
 //! The central effect gate against real boundaries, for every flag combination:
 //! cache files on disk, a cass child process, provider sockets, configuration
 //! reads and explicit resolution. Each prohibited effect has an observed
 //! positive twin.
 
+// The cass case and its fixtures are Unix-only (sr-winpar.11).
+#![cfg_attr(not(unix), allow(unused_imports, dead_code))]
+
+mod support;
+
 use asupersync::Cx;
 use serde_json::json;
 use skillranker::cli::ConfigFiles;
 use skillranker::config::{ConfigSources, RawValue, ResolvedConfig};
+#[cfg(unix)]
 use skillranker::context::cass::{CassAdapter, CassConfig, CassError};
 use skillranker::context::source::{SelectionOutcome, SourceError, SourceOptions, SourceTarget};
 use skillranker::effects::{EffectGate, History, NetworkEffect, Scope, StoreEffect};
@@ -30,9 +35,12 @@ use skillranker::runtime::{EntryClock, ProcessInvocation};
 use skillranker::storage::{CACHE_FILE, CacheAccess, CacheLocation, CacheOpen};
 use skillranker::subprocess::TrustedExecutable;
 use std::ffi::OsString;
-use std::fs::{self, DirBuilder, OpenOptions};
+use std::fs;
+#[cfg(unix)]
+use std::fs::{DirBuilder, OpenOptions};
 use std::io::Write;
 use std::net::TcpListener;
+#[cfg(unix)]
 use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -79,6 +87,13 @@ fn gates() -> Vec<(EffectFlags, EffectGate)> {
 // Intentionally retained: repository policy forbids automatic tree deletion.
 // Root-owned sticky /tmp satisfies the cache's private-ancestor policy even
 // where a worker's TMPDIR has group-writable ancestors.
+/// Windows: a private store directory under `%LOCALAPPDATA%\sr-tests`.
+#[cfg(windows)]
+fn private_tree(case: &str) -> PathBuf {
+    support::private_store_dir(case)
+}
+
+#[cfg(unix)]
 fn private_tree(case: &str) -> PathBuf {
     let path = Path::new("/tmp").join(format!(
         "sr-effects-{case}-{}-{}-{}",
@@ -268,7 +283,9 @@ fn caps() -> serde_json::Value {
     json!({"crate_version":"0.8.0","api_version":1,"contract_version":"1","build_commit":"unknown","global_flags":[{"name":"db"}],"features":["json_output","export_command","self_describing_capabilities"],"commands":[{"name":"export","arguments":[{"name":"path"},{"name":"source"},{"name":"format","enum_values":["json"]},{"name":"include-tools"}]},{"name":"sessions","arguments":[{"name":"workspace"},{"name":"limit"},{"name":"json"}]}]})
 }
 
-/// A qualified-looking cass that records every start in `marker`.
+/// A qualified-looking cass that records every start in `marker`. A `/bin/sh`
+/// script, and cass runs only on Unix (sr-winpar.11).
+#[cfg(unix)]
 fn fake_cass(root: &Path, marker: &Path) -> CassConfig {
     let path = root.join("cass-fixture");
     let mut file = OpenOptions::new()
@@ -294,6 +311,8 @@ fn fake_cass(root: &Path, marker: &Path) -> CassConfig {
     }
 }
 
+// The fake cass is a /bin/sh script and cass runs only on Unix (sr-winpar.11).
+#[cfg(unix)]
 #[test]
 fn unverified_children_start_only_when_the_gate_permits() {
     let mut started = 0;
@@ -401,19 +420,30 @@ struct Acceptor {
 impl Acceptor {
     fn new() -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        listener.set_nonblocking(true).unwrap();
         let port = listener.local_addr().unwrap().port();
+        // `localhost` resolves to ::1 first on Windows, where a refused
+        // connection takes about two seconds before IPv4 is tried; listen on
+        // both when the host has IPv6 loopback.
+        let mut listeners = vec![listener];
+        listeners.extend(TcpListener::bind(("::1", port)).ok());
+        for listener in &listeners {
+            listener.set_nonblocking(true).unwrap();
+        }
         let accepted = Arc::new(AtomicUsize::new(0));
         let stop = Arc::new(AtomicBool::new(false));
         let (count, done) = (accepted.clone(), stop.clone());
         let thread = std::thread::spawn(move || {
             while !done.load(Ordering::SeqCst) {
-                match listener.accept() {
-                    Ok((stream, _)) => {
+                let mut idle = true;
+                for listener in &listeners {
+                    if let Ok((stream, _)) = listener.accept() {
                         count.fetch_add(1, Ordering::SeqCst);
                         drop(stream);
+                        idle = false;
                     }
-                    Err(_) => std::thread::sleep(std::time::Duration::from_millis(2)),
+                }
+                if idle {
+                    std::thread::sleep(std::time::Duration::from_millis(2));
                 }
             }
         });
@@ -544,7 +574,7 @@ fn configuration_and_explicit_requests_are_read_in_every_mode() {
     )
     .unwrap();
     let state = root.join("state");
-    DirBuilder::new().mode(0o700).create(&state).unwrap();
+    support::create_private_dir(&state);
     let visibility = Visibility::Verified {
         contract_version: "test-adapter-v1".into(),
     };

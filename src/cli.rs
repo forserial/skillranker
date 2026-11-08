@@ -5161,7 +5161,8 @@ fn rank_command(
     let user_root = user_config_root()?;
     let home = crate::platform_path::home_dir();
     // The persistent response cache lives in the platform cache directory
-    // ($XDG_CACHE_HOME/sr or ~/.cache/sr); effect flags may still disable it.
+    // ($XDG_CACHE_HOME/sr or ~/.cache/sr; %LOCALAPPDATA%\skillranker\cache on
+    // Windows); effect flags may still disable it.
     let cache_dir = user_cache_root()?;
 
     let stdin_supplied = is_stdin_supplied();
@@ -5410,6 +5411,11 @@ fn user_config_root() -> Result<Option<PathBuf>, Failure> {
 }
 
 fn user_cache_root() -> Result<Option<PathBuf>, Failure> {
+    #[cfg(windows)]
+    {
+        crate::platform_path::windows_store_dir("cache").map_err(invalid)
+    }
+    #[cfg(not(windows))]
     if let Some(path) = std::env::var_os("XDG_CACHE_HOME").filter(|p| !p.is_empty()) {
         let path = PathBuf::from(path);
         if !path.is_absolute() {
@@ -5417,6 +5423,7 @@ fn user_cache_root() -> Result<Option<PathBuf>, Failure> {
         }
         return Ok(Some(path.join("sr")));
     }
+    #[cfg(not(windows))]
     match directories::BaseDirs::new() {
         Some(dirs) => Ok(Some(dirs.cache_dir().join("sr"))),
         None => Ok(None),
@@ -5769,7 +5776,7 @@ fn hook_prerequisites(
             .ok()
         });
     let ledger = match ledger {
-        _ if !crate::platform_support::PRIVATE_STORAGE => {
+        _ if !crate::platform_support::LEDGER_STORAGE => {
             "unavailable: Windows builds have no ledger, so a recorded trial is not possible; \
              shadow hooks skip ranking and send no provider requests"
                 .to_owned()
@@ -6712,7 +6719,7 @@ fn export_snapshot(
     ))
 }
 
-#[cfg(all(test, unix))]
+#[cfg(test)]
 mod invocation_cleanup_tests {
     use super::*;
     use crate::runtime::ProcessInvocation;
@@ -7183,6 +7190,7 @@ mod invocation_cleanup_tests {
         assert_eq!(result.as_value(), &original);
     }
 
+    #[cfg(unix)]
     fn prepared_explicit_pipeline() -> (
         ProcessInvocation,
         crate::pipeline::PipelineOutcome,
@@ -7298,6 +7306,8 @@ mod invocation_cleanup_tests {
         (invocation, outcome, connection)
     }
 
+    // Initializes a ledger, which Windows does not have yet (sr-winpar.4).
+    #[cfg(unix)]
     #[test]
     fn timely_pipeline_advice_survives_a_delayed_cli_continuation() {
         let (invocation, outcome, _) = prepared_explicit_pipeline();
@@ -7335,6 +7345,8 @@ mod invocation_cleanup_tests {
         );
     }
 
+    // Initializes a ledger, which Windows does not have yet (sr-winpar.4).
+    #[cfg(unix)]
     #[test]
     fn expired_cli_completion_exposes_the_unreconciled_prepared_ledger_outcome() {
         let (invocation, outcome, connection) = prepared_explicit_pipeline();

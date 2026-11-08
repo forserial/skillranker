@@ -7,11 +7,13 @@
 pub mod export;
 mod filesystem;
 pub mod hook_entries;
+#[cfg(windows)]
+pub(crate) mod windows_private;
 // The permission diagnosis is deliberately public while the directory admission itself stays
 // private: the CLI needs to explain a refusal, not to make one (sr-488b).
 pub use filesystem::{PermissionRefusal, RequiredMode, diagnose_owner_only};
 pub mod ledger;
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 mod platform;
 mod publication;
 mod read_view;
@@ -501,6 +503,12 @@ fn open_blocking(
     let engine = linked_engine()?;
     check_work(clock, cx)?;
     let path = match location {
+        #[cfg(windows)]
+        CacheLocation::Platform => crate::platform_path::windows_store_dir("cache")
+            .ok()
+            .flatten()
+            .ok_or(StoreError::UnsafePath)?,
+        #[cfg(not(windows))]
         CacheLocation::Platform => directories::BaseDirs::new()
             .ok_or(StoreError::UnsafePath)?
             .cache_dir()

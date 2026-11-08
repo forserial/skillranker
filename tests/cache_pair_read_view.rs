@@ -1,5 +1,6 @@
-#![cfg(any(target_os = "linux", target_os = "macos"))]
 //! Production cache reads over real WAL stores; no timing sleeps or test doubles.
+
+mod support;
 
 use skillranker::cache::{CachedResponseEntry, RequestFingerprint, RequestStage};
 use skillranker::jev::codec::Usage;
@@ -7,12 +8,20 @@ use skillranker::runtime::ProcessInvocation;
 use skillranker::storage::{
     CacheAccess, CacheLocation, CacheOpen, CacheStore, StoreError, open_cache,
 };
+#[cfg(unix)]
 use std::os::unix::fs::DirBuilderExt;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const NAMESPACE: [u8; 32] = [3; 32];
 
+/// Windows: a private store directory under `%LOCALAPPDATA%\sr-tests`.
+#[cfg(windows)]
+fn directory() -> PathBuf {
+    support::private_store_dir("read-view")
+}
+
+#[cfg(unix)]
 fn directory() -> PathBuf {
     let path = PathBuf::from(format!(
         "/tmp/sr-cache-read-view-{}-{}",

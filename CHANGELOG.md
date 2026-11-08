@@ -4,6 +4,18 @@
 
 ### Added
 
+- Windows keeps the response cache, its coordinator leases and the provider
+  breaker state in `%LOCALAPPDATA%\skillranker\cache`, under the owner-only
+  policy of `docs/windows-private-storage.md`: owned by the user, a protected DACL
+  for the user and SYSTEM applied at creation, ancestors that no one else can
+  rename or re-permission, single-link files, and local fixed NTFS or ReFS
+  volumes. A store that fails the policy is refused, never repaired. The Win32
+  calls live in the new `crates/sr-win-sys` package, the only one allowed unsafe
+  code; `sr` still forbids it. The ledger, hook counter, allowance, exports and
+  installer backups remain refused on Windows until their own ports.
+- The cache, coordination and breaker suites run natively on Windows, plus a
+  Windows policy suite (`tests/cache_windows_contract.rs`).
+
 - Most of the test suites that were gated to Unix now run on Windows too: link
   fixtures use Windows symbolic links (`tests/support/links.rs`), non-UTF-8
   fixtures use lone UTF-16 surrogates (`tests/support/non_unicode.rs`), and
@@ -54,6 +66,11 @@
 
 ### Fixed
 
+- The loopback provider stub (`tests/fixtures/jev-tls/provider_server.py`) now
+  writes fixture files byte-for-byte (Windows text mode turned an "unchanged"
+  rewrite into a change), tolerates a client that hung up first
+  (`ConnectionAbortedError` on Windows), and waits for a release line without
+  `select()` on stdin, which Windows supports only for sockets.
 - Windows: a Claude transcript path with a `..` component is refused before
   anything is opened. Win32 resolves `..` lexically, even through a folder that
   does not exist, so `missing\..\session.jsonl` used to open the grandparent as

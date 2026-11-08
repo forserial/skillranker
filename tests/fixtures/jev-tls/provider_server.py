@@ -46,6 +46,20 @@ text = sys.argv[3] if len(sys.argv) > 3 else ""
 USAGE = {"wide": (100, 25), "rerank": (120, 30)}
 
 
+def released_within(seconds):
+    """Whether the test writes `release` to stdin in time. Windows select()
+    accepts only sockets, so a reader thread waits there instead."""
+    if sys.platform != "win32":
+        return bool(select.select([sys.stdin], [], [], seconds)[0]) and \
+            sys.stdin.readline() == "release\n"
+    line = queue.SimpleQueue()
+    threading.Thread(target=lambda: line.put(sys.stdin.readline()), daemon=True).start()
+    try:
+        return line.get(timeout=seconds) == "release\n"
+    except queue.Empty:
+        return False
+
+
 if sys.platform == "win32":
     # A Windows pipe holds about 4 KiB and the test reads its reports at the end,
     # so a blocking write here would stall the server mid-answer.
@@ -179,9 +193,11 @@ while True:
     stage = "wide" if "which" in questions else "rerank" if "rerank" in questions else "other"
     stages.append(stage)
     if (scenario == "write-on-wide" and stage == "wide") or mutation == f"write-on-{stage}":
-        target.write_text(text)
+        # newline="": Windows text mode would turn "\n" into "\r\n", so an
+        # unchanged rewrite would change the file's bytes.
+        target.write_text(text, newline="")
     if scenario == "touch-on-rerank" and stage == "rerank":
-        with target.open("a") as handle:
+        with target.open("a", newline="") as handle:
             handle.write("\nChanged while the provider answered.\n")
     if scenario == "late-rerank" and stage == "rerank":
         time.sleep(float(text))
@@ -189,7 +205,7 @@ while True:
         time.sleep(float(text))
     if scenario == "hold-wide" and stage == "wide":
         target.write_text("wide held\n")
-        if not select.select([sys.stdin], [], [], 10)[0] or sys.stdin.readline() != "release\n":
+        if not released_within(10):
             raise RuntimeError("wide response was not released within the fixture deadline")
     status = "200 OK"
     if scenario == "always-503" or (
@@ -224,8 +240,11 @@ while True:
                        + body)
         stream.settimeout(0.05)
         stream.recv(1)
-    except (ssl.SSLError, ConnectionResetError, BrokenPipeError, socket.timeout):
-        pass  # A client past its deadline may already have closed the socket.
+    except (ssl.SSLError, ConnectionError, socket.timeout):
+        # A client past its deadline may already have closed the socket. Windows
+        # reports that as ConnectionAbortedError (WSAECONNABORTED), Unix as a
+        # reset or broken pipe; all are ConnectionError.
+        pass
     stream.close()
 
 emit({"done": True, "requests": len(stages), "stages": stages})

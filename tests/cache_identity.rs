@@ -2,8 +2,6 @@
 //! produced it, which agent it belongs to and which native branch is active.
 //! Identical redacted requests from different producers, agents, forks or
 //! source kinds must never share a cached answer or a single-flight lease.
-// Exercises the Unix-only private store; Windows builds refuse it (see docs/platform-boundary.md).
-#![cfg(unix)]
 mod support;
 
 use asupersync::Cx;
@@ -26,8 +24,9 @@ use skillranker::pipeline::{JevTransport, RankArgs, execute_pipeline};
 use skillranker::privacy::{EffectFlags, NetworkConsent};
 use skillranker::roster::LocalPath;
 use skillranker::runtime::{EntryClock, ProcessInvocation};
+#[cfg(unix)]
 use std::os::unix::fs::DirBuilderExt;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
 /// A shared baseline: same harness, workspace and session in every variant.
@@ -192,17 +191,20 @@ struct Workspace {
 
 impl Workspace {
     fn new() -> Self {
-        let root = std::fs::canonicalize("/tmp")
-            .expect("resolve trusted system temporary directory")
-            .join(format!(
-                "sr-cache-identity-{}-{}-{}",
-                std::process::id(),
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap()
-                    .as_nanos(),
-                NEXT.fetch_add(1, Ordering::Relaxed)
-            ));
+        #[cfg(unix)]
+        let base =
+            std::fs::canonicalize("/tmp").expect("resolve trusted system temporary directory");
+        #[cfg(windows)]
+        let base = std::env::temp_dir();
+        let root = base.join(format!(
+            "sr-cache-identity-{}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
         for name in ["alpha", "beta"] {
             let dir = root.join("workspace/.claude/skills").join(name);
             std::fs::create_dir_all(&dir).unwrap();
@@ -218,22 +220,32 @@ impl Workspace {
             "[network]\nenabled = true\n",
         )
         .unwrap();
-        // A private cache directory under root-owned sticky /tmp.
-        let cache = Path::new("/tmp").join(format!(
-            "sr-cache-identity-cache-{}",
-            root.file_name().unwrap().to_string_lossy()
-        ));
+        let workspace = Self { root };
+        // A private cache directory under root-owned sticky /tmp (Windows:
+        // %LOCALAPPDATA%\sr-tests).
+        #[cfg(unix)]
         std::fs::DirBuilder::new()
             .mode(0o700)
-            .create(&cache)
+            .create(workspace.cache())
             .unwrap();
-        Self { root }
+        #[cfg(windows)]
+        support::create_private_dir(&workspace.cache());
+        workspace
     }
     fn workspace(&self) -> PathBuf {
-        std::fs::canonicalize(self.root.join("workspace")).unwrap()
+        #[cfg(unix)]
+        return std::fs::canonicalize(self.root.join("workspace")).unwrap();
+        // Windows canonical paths are verbatim (`\\?\C:\…`); the plain
+        // temporary path is already absolute and link-free.
+        #[cfg(windows)]
+        return self.root.join("workspace");
     }
     fn cache(&self) -> PathBuf {
-        Path::new("/tmp").join(format!(
+        #[cfg(unix)]
+        let base = std::path::Path::new("/tmp");
+        #[cfg(windows)]
+        let base = support::base_store_root();
+        base.join(format!(
             "sr-cache-identity-cache-{}",
             self.root.file_name().unwrap().to_string_lossy()
         ))

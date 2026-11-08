@@ -5,8 +5,10 @@ what "owner-only private storage" means on Windows, rule by rule, with the Unix
 rule each one mirrors and what it refuses. `.3` (cache), `.4` (ledger and hook
 counter), `.5` (enforced allowance), `.6` (exports, snapshots, replay cases) and
 `.7` (installer backups) implement it; `.2` chose how `sr` reads and sets
-security descriptors under `#![forbid(unsafe_code)]` ([Mechanism](#mechanism-sr-winpar2)). Until those land, every
-Windows store open still reports `UnsupportedFilesystem`
+security descriptors under `#![forbid(unsafe_code)]`
+([Mechanism](#mechanism-sr-winpar2)). The response cache implements it
+([Cache](#cache-sr-winpar3)); every other Windows store open still reports
+`UnsupportedFilesystem` until its issue lands
 ([platform boundary](platform-boundary.md#windows-stateless-ranking)).
 
 The user approved the defaults on 2026-11-07 and, after the observation below,
@@ -132,11 +134,12 @@ Windows. An explicit directory (`--dir`, `LedgerLocation::Directory`,
 Machine-wide or roaming locations are not used: the stores are per user and per
 machine.
 
-Today's code does not resolve these yet, which the implementing issues change:
-`user_cache_root` and `AllowancePaths::for_user` fall back to
-`directories::BaseDirs::cache_dir()`, which is `%LOCALAPPDATA%` on Windows, giving
-`%LOCALAPPDATA%\sr`; `default_ledger_directory` gives
-`%USERPROFILE%\.local\share\sr`; and `resolve_backup_dir` gives
+The cache, the provider breaker state and the allowance accounting resolve
+`%LOCALAPPDATA%\skillranker\cache` since sr-winpar.3
+(`platform_path::windows_store_dir`, used by `user_cache_root`,
+`CacheLocation::Platform` and `AllowancePaths::for_user`). The others still
+resolve elsewhere until their issues change them: `default_ledger_directory`
+gives `%USERPROFILE%\.local\share\sr`, and `resolve_backup_dir` gives
 `%USERPROFILE%\.local\state\sr\backups`.
 
 ### 7. Creation
@@ -148,9 +151,10 @@ security descriptor at creation instead of inheriting: owner the user's SID; a
 protected DACL with access-allowed ACEs for the user and SYSTEM (container and
 object inherit on directories, so SQLite's sidecars inherit only those). It never
 widens or repairs an existing descriptor: an existing object that fails rule 1, 2
-or 4 is refused, as Unix refuses wrong modes instead of `chmod`-ing them. Only the
-store directory itself and its files are created; missing ancestors other than
-`%LOCALAPPDATA%\skillranker` itself are not created.
+or 4 is refused, as Unix refuses wrong modes instead of `chmod`-ing them. Each
+missing directory on the requested path is created with the same private
+descriptor, as Unix creates each missing component `0700`; as a created
+ancestor it is owned by the user, so rule 3 admits it.
 
 ### 8. Capacity
 
@@ -279,3 +283,55 @@ error as "local" and refuse any other outcome. The native tests read back a
 protected DACL set with `icacls` (one explicit `OI|CI` full-control entry for the
 user plus a deny entry), its inheritance by a new file, and the volume facts of
 the temp directory.
+
+## Cache (sr-winpar.3)
+
+The response cache and its coordinator leases (`cache.sqlite3`) and the
+provider breaker state (`breaker.sqlite3`, beside them) implement the rules on
+Windows. `src/storage/windows_private.rs` holds the shared pieces the
+later ports reuse: the policy predicates (rules 1–3), the volume admission
+(rule 5), the walk that creates and admits each directory (rules 3 and 7), the
+single-link file check (rule 4), store-file creation with the explicit
+descriptor, the directory scan with its entry and byte quotas, and free space
+(rule 8). `PrivateDirectory` in `src/storage/filesystem.rs` uses them with the
+same methods as on Unix.
+
+How it differs from Unix, and why that stays inside the boundary:
+
+- **Path-based opens.** Windows has no `openat`, so each component is opened by
+  path with no-follow semantics and without `FILE_SHARE_DELETE`, and only the
+  current directory is held between components, as on Unix. The store directory
+  stays held while the store is open, so it cannot be renamed or replaced.
+  Windows also refused renaming an ancestor of the held store (access denied) in
+  the native test; the identity check before each effect remains for any other
+  replacement.
+- **Directory scan by path.** The scan enumerates the store's path after
+  confirming that the path still names the held directory. An ancestor can be
+  renamed only by a principal rule 3 trusts, which is the same-user territory of
+  rule 9.
+- **Sidecars.** SQLite creates `-wal` and `-shm` itself; they inherit the store
+  directory's two entries and are admitted as store files. Their owner is the
+  token's default owner. For an elevated token that is Administrators, so an
+  elevated `sr` refuses its own sidecars (rule 1). This fails closed.
+- **`%TEMP%` is not an admissible ancestor here.** On the evidence machine,
+  `%LOCALAPPDATA%\Temp` grants `CodexSandboxUsers` and another local account
+  Modify, which includes `DELETE`. Rule 3 refuses it, as it should. Test
+  fixtures therefore live under `%LOCALAPPDATA%\sr-tests`.
+
+Native evidence (`tests/cache_windows_contract.rs`, NTFS `C:`, non-elevated):
+fresh creation with the explicit descriptor on every created directory and on
+the database, reopen, and admitted WAL sidecars; an existing inheriting directory
+refused and left unchanged; a foreign entry, enabled inheritance and a
+capability SID on the store refused, while a capability SID on an ancestor is
+admitted; a foreign entry on the database refused; an ancestor granting `Users`
+delete-child refused, while create rights and inherit-only rights are admitted;
+a junction on the path refused for opening and for creation; a second hard link
+and a directory inside the store refused; a UNC path to the same local folder
+refused before any open; relative and device paths refused; an oversized store
+refused before SQLite runs; a held store and its ancestor not renameable.
+
+Covered by unit tests only, because staging them natively needs an elevated
+token or a machine-wide change: FAT32, exFAT and other filesystem names; removable,
+remote, optical and RAM-disk drive types; a file that answers the remote-protocol
+query; a `SUBST` drive (the final drive differs from the named one); a store
+owned by Administrators; a NULL DACL; unknown entry types.

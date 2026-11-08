@@ -26,8 +26,9 @@ pub enum Boundary {
 }
 
 /// Owner-only private store directories (`storage::filesystem`, `storage::ledger`,
-/// `storage::hook_entries`, `breaker::store`).
-pub const PRIVATE_STORAGE: bool = cfg!(unix);
+/// `storage::hook_entries`, `breaker::store`). Windows since sr-winpar.3
+/// (`storage::windows_private`); the stores below port separately.
+pub const PRIVATE_STORAGE: bool = cfg!(any(unix, windows));
 /// Owner-only exports and private case reads (`storage::export`, `replay`).
 pub const OWNER_ONLY_FILES: bool = cfg!(unix);
 /// `subprocess::run` spawns children.
@@ -36,6 +37,12 @@ pub const OWNED_SUBPROCESS: bool = cfg!(any(target_os = "linux", target_os = "ma
 pub const ENFORCED_ALLOWANCE: bool = cfg!(unix);
 
 /// Components can also wait on their own port after their boundary exists.
+/// The ledger and the hook invocation counter beside it (`storage::ledger`,
+/// `storage::hook_entries`) run only on Unix; sr-winpar.4.
+pub const LEDGER_STORAGE: bool = cfg!(unix);
+/// Provider breaker state (`breaker::store`): Unix, and Windows since
+/// sr-winpar.3.
+pub const BREAKER_STORAGE: bool = cfg!(any(unix, windows));
 /// cass sessions (`pipeline::cass_source`) run only on Unix; sr-winpar.11.
 pub const CASS_SESSIONS: bool = cfg!(unix);
 /// Git `dirty_paths` (`context::signals`): Unix, and Windows since sr-winpar.10.
@@ -159,19 +166,19 @@ pub const COMPONENTS: &[Component] = &[
     Component {
         name: "provider-breaker-state",
         requires: Boundary::PrivateStorage,
-        implemented: true,
+        implemented: BREAKER_STORAGE,
         when_unavailable: Fallback::Skipped,
     },
     Component {
         name: "ledger",
         requires: Boundary::PrivateStorage,
-        implemented: true,
+        implemented: LEDGER_STORAGE,
         when_unavailable: Fallback::Refused,
     },
     Component {
         name: "hook-invocation-counter",
         requires: Boundary::PrivateStorage,
-        implemented: true,
+        implemented: LEDGER_STORAGE,
         when_unavailable: Fallback::Skipped,
     },
     Component {

@@ -53,8 +53,11 @@ outside the admitted set.
 Each flag is the `cfg` predicate that selects the refusing implementation, and
 every refusing and enabling implementation asserts it at compile time
 (`const _: () = assert!(...)`). Enabling a component on a new platform without
-updating the flag fails the build. On Windows every boundary is unavailable;
-see [the platform boundary](platform-boundary.md#windows-stateless-ranking).
+updating the flag fails the build. On Windows the owned-subprocess and
+private-storage boundaries are available, and of the storage components the
+response cache, coordinator leases and provider breaker state are ported so
+far; see
+[the platform boundary](platform-boundary.md#windows-stateless-ranking).
 
 The registry states what this binary runs. It claims no phase acceptance,
 provider availability, native harness support or installed-version
@@ -165,5 +168,6 @@ Behavior that must match the registry:
 - bare `sr` reaches ranking;
 - limits, error kinds and adapter support match their sources;
 - the `platform` entries are complete and consistent, every boundary is
-  unavailable on Windows and available on Linux and macOS, and each refused
-  component's probe command refuses exactly when its entry says unavailable.
+  available on Linux and macOS, exactly the ported boundaries and components
+  are available on Windows, and each refused component's probe command refuses
+  exactly when its entry says unavailable.

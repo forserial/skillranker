@@ -1,8 +1,9 @@
-#![cfg(any(target_os = "linux", target_os = "macos"))]
 //! Production CacheStore lease contracts. These tests use the same qualified
 //! connection and transaction primitives as rank, not another coordinator.
 //! The arbitrary storage bodies below establish storage delivery only;
 //! real CLI/provider-pair, deadline and usage proof lives in real_rank_coordination.
+
+mod support;
 
 use rusqlite::Connection;
 use skillranker::cache::{
@@ -15,13 +16,17 @@ use skillranker::runtime::ProcessInvocation;
 use skillranker::storage::{
     CACHE_FILE, CacheAccess, CacheLocation, CacheOpen, CacheStore, open_cache,
 };
+#[cfg(unix)]
 use std::fs::DirBuilder;
 use std::io::{Read, Write};
+#[cfg(unix)]
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
+#[cfg(unix)]
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+#[cfg(unix)]
 static NEXT_DIR: AtomicU64 = AtomicU64::new(0);
 const NS: [u8; 32] = [3; 32];
 const KEY: CoordinationKey = CoordinationKey::from_bytes([4; 32]);
@@ -89,6 +94,13 @@ impl Drop for CapturedChild {
     }
 }
 
+/// Windows: a private store directory under `%LOCALAPPDATA%\sr-tests`.
+#[cfg(windows)]
+fn private_tree(case: &str) -> PathBuf {
+    support::private_store_dir(case)
+}
+
+#[cfg(unix)]
 fn private_tree(case: &str) -> PathBuf {
     let path = Path::new("/tmp").join(format!(
         "sr-coord-{case}-{}-{}-{}",
@@ -278,10 +290,11 @@ fn qualified_store_child_reader() {
     let ready = PathBuf::from(std::env::var_os("SR_TEST_COORD_READY").expect("ready path"));
     let (store, outcome) = acquire(open(&path), KEY, false);
     assert!(matches!(outcome, LeaseAcquisition::Following(_)));
-    std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    options.mode(0o600);
+    options
         .open(ready)
         .unwrap()
         .write_all(b"following")

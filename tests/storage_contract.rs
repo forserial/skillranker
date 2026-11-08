@@ -1,4 +1,10 @@
-#![cfg(any(target_os = "linux", target_os = "macos"))]
+//! The response cache store contract. Unix modes, FIFOs and owner checks are
+//! Unix-only here; their Windows twins (ACLs, junctions, hard links) are in
+//! tests/cache_windows_contract.rs.
+
+#[path = "support/links.rs"]
+mod links;
+mod support;
 
 use rusqlite::Connection;
 use skillranker::cache::{CachedResponseEntry, RequestFingerprint, RequestStage};
@@ -10,15 +16,27 @@ use skillranker::storage::{
     CacheStore, QUALIFIED_SQLITE_SOURCE_ID, QUALIFIED_SQLITE_VERSION, StoreError, linked_engine,
     open_cache,
 };
-use std::fs::{self, DirBuilder, File, OpenOptions};
+#[cfg(unix)]
+use std::fs::DirBuilder;
+use std::fs::{self, File, OpenOptions};
+#[cfg(unix)]
 use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt, symlink};
 use std::path::{Path, PathBuf};
+#[cfg(unix)]
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
+#[cfg(unix)]
 static NEXT: AtomicU64 = AtomicU64::new(0);
 
+/// Windows: a private store directory under `%LOCALAPPDATA%\sr-tests`.
+#[cfg(windows)]
+fn private_tree(case: &str) -> PathBuf {
+    support::private_store_dir(case)
+}
+
 // Intentionally retained: repository policy forbids automatic tree deletion.
+#[cfg(unix)]
 fn private_tree(case: &str) -> PathBuf {
     // RCH's TMPDIR can have group-writable ancestors. Use Linux's root-owned
     // sticky /tmp so the success fixture satisfies the production policy;
@@ -75,14 +93,14 @@ fn advance(
     result
 }
 
+/// A new owner-only file: mode 0600 on Unix; on Windows it inherits the
+/// private store directory's two entries.
 fn create_file(path: &Path) -> File {
-    OpenOptions::new()
-        .create_new(true)
-        .write(true)
-        .read(true)
-        .mode(0o600)
-        .open(path)
-        .unwrap()
+    let mut options = OpenOptions::new();
+    options.create_new(true).write(true).read(true);
+    #[cfg(unix)]
+    options.mode(0o600);
+    options.open(path).unwrap()
 }
 
 fn raw_database(path: &Path) -> Connection {
@@ -136,12 +154,22 @@ fn repeated_initialization_preserves_identity_generation_and_private_wal_files()
     let second = ready(&path);
     assert_eq!(second.stamp(), advanced.stamp());
     assert_eq!(second.engine(), &linked_engine().unwrap());
-    assert_eq!(fs::metadata(&path).unwrap().mode() & 0o7777, 0o700);
+    #[cfg(unix)]
+    {
+        assert_eq!(fs::metadata(&path).unwrap().mode() & 0o7777, 0o700);
+        for suffix in ["", "-wal", "-shm"] {
+            let metadata = fs::metadata(path.join(format!("{CACHE_FILE}{suffix}"))).unwrap();
+            assert_eq!(metadata.mode() & 0o7777, 0o600);
+            assert_eq!(metadata.uid(), nix::unistd::geteuid().as_raw());
+            assert_eq!(metadata.nlink(), 1);
+        }
+    }
+    #[cfg(windows)]
     for suffix in ["", "-wal", "-shm"] {
-        let metadata = fs::metadata(path.join(format!("{CACHE_FILE}{suffix}"))).unwrap();
-        assert_eq!(metadata.mode() & 0o7777, 0o600);
-        assert_eq!(metadata.uid(), nix::unistd::geteuid().as_raw());
-        assert_eq!(metadata.nlink(), 1);
+        assert!(
+            path.join(format!("{CACHE_FILE}{suffix}")).is_file(),
+            "{suffix}"
+        );
     }
     let observer = Connection::open(path.join(CACHE_FILE)).unwrap();
     assert_eq!(
@@ -171,6 +199,7 @@ fn repeated_initialization_preserves_identity_generation_and_private_wal_files()
     assert!(!format!("{second:?}").contains(path.to_str().unwrap()));
 }
 
+#[cfg(unix)]
 #[test]
 fn unsafe_ancestors_leaf_modes_and_relative_paths_are_refused() {
     let root = private_tree("paths");
@@ -209,12 +238,15 @@ fn symlink_and_hardlink_main_or_sidecars_never_touch_the_target() {
             create_file(&victim);
             fs::write(&victim, b"untouched synthetic marker").unwrap();
             let cache = root.join("cache");
-            DirBuilder::new().mode(0o700).create(&cache).unwrap();
+            support::create_private_dir(&cache);
             let unsafe_file = cache.join(format!("{CACHE_FILE}{suffix}"));
             if hard {
                 fs::hard_link(&victim, &unsafe_file).unwrap();
+            } else if links::available() {
+                links::symlink(&victim, &unsafe_file).unwrap();
             } else {
-                symlink(&victim, &unsafe_file).unwrap();
+                // Creating a symbolic link needs Developer Mode or elevation.
+                continue;
             }
             assert_eq!(
                 open(&cache, CacheAccess::Initialize).unwrap_err(),
@@ -228,22 +260,34 @@ fn symlink_and_hardlink_main_or_sidecars_never_touch_the_target() {
 
 #[test]
 fn nonregular_and_readable_by_others_files_are_refused() {
-    let fifo = private_tree("fifo");
-    nix::unistd::mkfifo(
-        &fifo.join(CACHE_FILE),
-        nix::sys::stat::Mode::from_bits_truncate(0o600),
-    )
-    .unwrap();
-    assert_eq!(
-        open(&fifo, CacheAccess::Initialize).unwrap_err(),
-        StoreError::UnsafePath
-    );
+    // Windows has no FIFOs; a directory in the database's place is checked on both.
+    #[cfg(unix)]
+    {
+        let fifo = private_tree("fifo");
+        nix::unistd::mkfifo(
+            &fifo.join(CACHE_FILE),
+            nix::sys::stat::Mode::from_bits_truncate(0o600),
+        )
+        .unwrap();
+        assert_eq!(
+            open(&fifo, CacheAccess::Initialize).unwrap_err(),
+            StoreError::UnsafePath
+        );
+    }
     let directory = private_tree("directory");
     fs::create_dir(directory.join(CACHE_FILE)).unwrap();
     assert_eq!(
         open(&directory, CacheAccess::Initialize).unwrap_err(),
         StoreError::UnsafePath
     );
+    // Modes are Unix; the Windows twin is cache_windows_contract's foreign
+    // entry on the database.
+    #[cfg(unix)]
+    readable_by_others_is_refused();
+}
+
+#[cfg(unix)]
+fn readable_by_others_is_refused() {
     let permissions = private_tree("mode");
     create_file(&permissions.join(CACHE_FILE));
     fs::set_permissions(
@@ -483,6 +527,9 @@ fn oversized_cache_is_refused_before_sqlite_can_mutate_it() {
     drop(ready(&private_tree("quota-success")));
 }
 
+// Windows refuses renaming the held store; tests/cache_windows_contract.rs
+// rule_9_* proves that and the reopen of a store moved after release.
+#[cfg(unix)]
 #[test]
 fn replacing_the_directory_is_detected_before_generation_update() {
     let root = private_tree("replacement");
@@ -499,6 +546,7 @@ fn replacing_the_directory_is_detected_before_generation_update() {
     assert_eq!(ready(&path).stamp(), replacement_stamp);
 }
 
+#[cfg(unix)]
 #[test]
 fn sidecar_permissions_are_checked_before_opening_an_existing_store() {
     let path = private_tree("sidecar-mode");
@@ -647,6 +695,7 @@ fn the_fingerprint_key_is_random_stable_and_never_printed() {
         format!("{:?}", reopened.fingerprint_key()),
         "CacheKey(<secret-key>)"
     );
+    #[cfg(unix)]
     assert_eq!(
         fs::metadata(a.join(CACHE_FILE)).unwrap().mode() & 0o7777,
         0o600

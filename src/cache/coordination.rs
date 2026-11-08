@@ -498,6 +498,6 @@ impl SqliteLeaseCoordinator {
     }
 }
 
-#[cfg(all(test, unix))]
+#[cfg(test)]
 #[path = "coordination/integrity_tests.rs"]
 mod integrity_tests;

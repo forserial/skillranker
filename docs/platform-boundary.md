@@ -89,12 +89,16 @@ claimed as passed by this document.
 
 Windows builds compile the same library and binary. Ranking, roster
 discovery, Claude transcript and session reads, `doctor`, `capabilities`,
-`demo` and hook installation work. Every component that depends on an
-owner-only private store fails closed instead of being emulated:
+`demo`, hook installation and the response cache work. The cache's owner-only
+store follows [Windows private storage](windows-private-storage.md). Every
+component that depends on a private store not yet ported fails closed instead
+of being emulated:
 
 | Component | Windows behavior |
 |---|---|
-| Response cache, ledger, coordinator leases | Store open reports `UnsupportedFilesystem`; optional caching is skipped visibly and commands that require the ledger (`observe`, `feedback`, `stats`, `ledger`, …) fail with their storage error |
+| Response cache, coordinator leases | Work, in `%LOCALAPPDATA%\skillranker\cache` (sr-winpar.3); a store that fails the policy is refused with its typed error, and optional caching is skipped visibly |
+| Ledger | Store open reports `UnsupportedFilesystem`; commands that require the ledger (`observe`, `feedback`, `stats`, `ledger`, …) fail with their storage error (sr-winpar.4) |
+| Provider breaker state | Recorded beside the cache, so cooldowns and half-open probes are shared across processes (sr-winpar.3); an unusable store degrades to process-local protection with a warning |
 | Enforced request allowance | An absent guard means no allowance is configured, as on Unix; an existing guard, accounting store or `sr budget --apply` is refused, which withholds provider requests |
 | Hook invocation counter | Never written (it lives beside a ledger) |
 | Shadow-mode hooks | Skip ranking before any provider request, since nothing could be recorded; one stderr line says why. Advisory mode ranks and publishes |
@@ -241,10 +245,9 @@ can run out and report `Budget`, as on any loaded host.
   cancelling it would need `unsafe` code the crate forbids.
 - `sr roster --snapshot` is refused along with other owner-only exports.
   `--diff` reads a saved snapshot, but Windows cannot write one.
-- A full storage port needs an audited owner-only ACL check and an admitted
-  filesystem list (NTFS, ReFS) before cache or ledger can be enabled. The
-  policy it must implement, with the Unix rule each part mirrors and its test
-  matrix, is [Windows private storage](windows-private-storage.md).
+- The ledger, hook counter, allowance, breaker, exports and backups still wait
+  on their ports of [Windows private storage](windows-private-storage.md); the
+  cache's implementation and its limits are recorded there.
 
 ### Evidence
 

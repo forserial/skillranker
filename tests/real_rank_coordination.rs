@@ -1,4 +1,3 @@
-#![cfg(unix)]
 //! Real process coordination and fenced cache publication acceptance tests (sr-roadmap-l1i.5.29).
 //!
 //! Validates the production CLI single-flight coordination and fenced cache publication boundary:
@@ -18,8 +17,13 @@
 //! leader exiting 6. Run them on a host whose clock is not stepped; docs/platform-boundary.md
 //! records the measurement and what a step means in production (sr-winpar.18).
 
+#[path = "support/stub_python.rs"]
+mod stub_python;
+mod support;
+
 use serde_json::{Value, json};
 use std::io::{BufRead, BufReader, Read};
+#[cfg(unix)]
 use std::os::unix::fs::DirBuilderExt;
 use std::path::PathBuf;
 use std::process::{Child, ChildStdout, Command, Stdio};
@@ -47,17 +51,22 @@ struct Fixture {
 impl Fixture {
     fn new(user_config: &str) -> Self {
         let _serial = one_process_test();
-        let root = std::fs::canonicalize("/tmp")
-            .expect("resolve trusted system temporary directory")
-            .join(format!(
-                "sr-real-coord-{}-{}-{}",
-                std::process::id(),
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap()
-                    .as_nanos(),
-                NEXT.fetch_add(1, Ordering::Relaxed)
-            ));
+        // Windows canonical paths are verbatim (`\\?\C:\…`); the plain
+        // temporary path is already absolute and link-free.
+        #[cfg(unix)]
+        let base =
+            std::fs::canonicalize("/tmp").expect("resolve trusted system temporary directory");
+        #[cfg(windows)]
+        let base = std::env::temp_dir();
+        let root = base.join(format!(
+            "sr-real-coord-{}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
         std::fs::create_dir(&root).unwrap();
         std::fs::create_dir_all(root.join("workspace/.claude/skills")).unwrap();
         std::fs::create_dir_all(root.join("config/sr")).unwrap();
@@ -91,9 +100,20 @@ impl Fixture {
     }
 
     fn claude_session(&self, session: &str, request: &str) -> PathBuf {
+        #[cfg(unix)]
         let workspace = std::fs::canonicalize(self.workspace()).unwrap();
+        #[cfg(windows)]
+        let workspace = self.workspace();
         let workspace_str = workspace.to_str().unwrap();
+        // Claude's project directory name: every separator (and, on Windows,
+        // the drive colon) becomes `-`.
+        #[cfg(unix)]
         let name: String = workspace_str.replace('/', "-");
+        #[cfg(windows)]
+        let name: String = workspace_str
+            .chars()
+            .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+            .collect();
         let directory = self.root.join("home/.claude/projects").join(name);
         std::fs::create_dir_all(&directory).unwrap();
         let record = |n: u8, parent: Option<String>, text: &str| {
@@ -117,15 +137,32 @@ impl Fixture {
         path
     }
 
+    /// The private root sr's cache lives under: `XDG_CACHE_HOME` on Unix,
+    /// `LOCALAPPDATA` on Windows.
     fn cache_dir(&self) -> PathBuf {
-        let dir = std::path::Path::new("/tmp").join(format!(
+        #[cfg(unix)]
+        let base = std::path::Path::new("/tmp");
+        #[cfg(windows)]
+        let base = support::base_store_root();
+        let dir = base.join(format!(
             "sr-coord-cache-{}",
             self.root.file_name().unwrap().to_string_lossy()
         ));
         if !dir.exists() {
+            #[cfg(unix)]
             std::fs::DirBuilder::new().mode(0o700).create(&dir).unwrap();
+            #[cfg(windows)]
+            support::create_private_dir(&dir);
         }
         dir
+    }
+
+    /// The store directory sr builds under `cache_dir`.
+    fn store(&self) -> PathBuf {
+        #[cfg(unix)]
+        return self.cache_dir().join("sr");
+        #[cfg(windows)]
+        return self.cache_dir().join("skillranker").join("cache");
     }
 
     fn sr_command(&self, provider: &Provider, extra: &[&str]) -> Command {
@@ -144,11 +181,15 @@ impl Fixture {
             .env("HOME", self.root.join("home"))
             .env("XDG_CONFIG_HOME", self.root.join("config"))
             .env("XDG_CACHE_HOME", self.cache_dir())
+            .env("LOCALAPPDATA", self.cache_dir())
             .env("TYPESAFE_API_KEY", "synthetic-acceptance-canary")
             .env("TYPESAFE_ENDPOINT", format!("https://localhost:{port}"))
             .env("SSL_CERT_FILE", &ca)
             .current_dir(self.workspace())
             .args(["rank", "--json"]);
+        // Windows needs SystemRoot to start Winsock.
+        #[cfg(windows)]
+        command.env("SystemRoot", std::env::var_os("SystemRoot").unwrap());
         if !extra.contains(&"--offline") {
             command.arg("--allow-network");
         }
@@ -215,11 +256,10 @@ impl Provider {
         ] {
             std::fs::write(directory.join(name), bytes).unwrap();
         }
-        let mut child = Command::new("/usr/bin/python3")
+        let mut child = stub_python::python_command()
             .arg(directory.join("provider_server.py"))
             .arg(scenario)
             .args(extra)
-            .env_clear()
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit())
@@ -329,9 +369,9 @@ fn ordinary_two_consumer_success_incurs_one_pair_and_subsequent_exact_offline_re
     eprintln!("out_b stdout: {}", String::from_utf8_lossy(&out_b.stdout));
     eprintln!("out_b stderr: {}", String::from_utf8_lossy(&out_b.stderr));
 
-    let cache_file = f.cache_dir().join("sr").join("cache.sqlite3");
+    let cache_file = f.store().join("cache.sqlite3");
     eprintln!("cache_file exists: {}", cache_file.exists());
-    let leases_file = f.cache_dir().join("sr").join("leases.sqlite3");
+    let leases_file = f.store().join("leases.sqlite3");
     assert!(
         !leases_file.exists(),
         "production created a separate lease database"
@@ -516,6 +556,8 @@ impl Drop for OwnedRank {
     }
 }
 
+// Suspends the leader with SIGSTOP; POSIX signals have no Windows counterpart.
+#[cfg(unix)]
 #[test]
 fn stale_leader_superseded_cannot_overwrite_newer_cache_or_complete_lease() {
     let f = Fixture::new(CONSENT);
@@ -540,7 +582,7 @@ fn stale_leader_superseded_cannot_overwrite_newer_cache_or_complete_lease() {
     wait_for_marker(&marker);
     let pid = nix::unistd::Pid::from_raw(i32::try_from(a.0.as_ref().unwrap().id()).unwrap());
     nix::sys::signal::kill(pid, nix::sys::signal::Signal::SIGSTOP).unwrap();
-    let leases_path = f.cache_dir().join("sr/cache.sqlite3");
+    let leases_path = f.store().join("cache.sqlite3");
     let conn = rusqlite::Connection::open(&leases_path).unwrap();
     conn.busy_timeout(Duration::from_millis(25)).unwrap();
     // A is stopped after sending its wide request and before receiving it.
@@ -564,7 +606,7 @@ fn stale_leader_superseded_cannot_overwrite_newer_cache_or_complete_lease() {
         serde_json::from_slice::<Value>(&b.stdout).unwrap()["decision"],
         "ranked"
     );
-    let cache = rusqlite::Connection::open(f.cache_dir().join("sr/cache.sqlite3")).unwrap();
+    let cache = rusqlite::Connection::open(f.store().join("cache.sqlite3")).unwrap();
     let snapshot = || {
         cache.prepare("SELECT stage, fingerprint, response, received_at_unix_ms FROM sr_cache_response ORDER BY stage,fingerprint")
             .unwrap().query_map([], |r| Ok((r.get::<_,String>(0)?, r.get::<_,Vec<u8>>(1)?, r.get::<_,Vec<u8>>(2)?, r.get::<_,i64>(3)?)))
@@ -631,7 +673,7 @@ fn completed_lease_with_absent_pair_reacquires_leadership_before_fresh_evaluatio
         "{}",
         String::from_utf8_lossy(&first.stderr)
     );
-    let cache = rusqlite::Connection::open(f.cache_dir().join("sr/cache.sqlite3")).unwrap();
+    let cache = rusqlite::Connection::open(f.store().join("cache.sqlite3")).unwrap();
     // Expire only rerank, preserving the exact key, namespace and wide answer.
     assert_eq!(
         cache
@@ -653,7 +695,7 @@ fn completed_lease_with_absent_pair_reacquires_leadership_before_fresh_evaluatio
         serde_json::from_slice::<Value>(&second.stdout).unwrap()["decision"],
         "ranked"
     );
-    let leases = rusqlite::Connection::open(f.cache_dir().join("sr/cache.sqlite3")).unwrap();
+    let leases = rusqlite::Connection::open(f.store().join("cache.sqlite3")).unwrap();
     let state: (i64, i64, i64) = leases
         .query_row(
             "SELECT count(*),max(fencing_generation),min(is_completed) FROM sr_coordination_leases",
@@ -689,7 +731,7 @@ fn an_unacquirable_lease_sends_uncoordinated_instead_of_a_false_timeout() {
     // The same session with a new request: a different exact request, so no
     // cached answer serves it.
     f.claude_session("lease-busy", "Please draft release notes from git history");
-    let lock = rusqlite::Connection::open(f.cache_dir().join("sr/cache.sqlite3")).unwrap();
+    let lock = rusqlite::Connection::open(f.store().join("cache.sqlite3")).unwrap();
     lock.execute_batch("BEGIN IMMEDIATE").unwrap();
     let out = f
         .sr_command(&provider, &["--timeout-ms", "12000"])
@@ -749,7 +791,7 @@ fn cache_generation_change_during_provider_work_keeps_valid_answer() {
             .unwrap(),
     ));
     wait_for_marker(&marker);
-    let cache = rusqlite::Connection::open(f.cache_dir().join("sr/cache.sqlite3")).unwrap();
+    let cache = rusqlite::Connection::open(f.store().join("cache.sqlite3")).unwrap();
     assert_eq!(
         cache
             .execute("UPDATE sr_cache_meta SET generation=generation+1", [])
@@ -804,7 +846,7 @@ fn busy_optional_lease_completion_keeps_answer_without_claiming_completion() {
             .unwrap(),
     ));
     wait_for_marker(&marker);
-    let lease = rusqlite::Connection::open(f.cache_dir().join("sr/cache.sqlite3")).unwrap();
+    let lease = rusqlite::Connection::open(f.store().join("cache.sqlite3")).unwrap();
     lease.execute_batch("BEGIN IMMEDIATE").unwrap();
     let output = child.wait();
     assert_eq!(
@@ -836,7 +878,7 @@ fn busy_optional_lease_completion_keeps_answer_without_claiming_completion() {
         0
     );
     lease.execute_batch("ROLLBACK").unwrap();
-    let cache = rusqlite::Connection::open(f.cache_dir().join("sr/cache.sqlite3")).unwrap();
+    let cache = rusqlite::Connection::open(f.store().join("cache.sqlite3")).unwrap();
     assert_eq!(
         cache
             .query_row(

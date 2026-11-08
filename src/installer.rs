@@ -686,7 +686,7 @@ pub fn install_hook(options: &InstallOptions) -> Result<InstallOutcome, Installe
     let classification = classify_existing_entry(arr, &command_str, options.timeout_secs);
 
     let mode_str = match options.effective_mode {
-        HookMode::Shadow if !crate::platform_support::PRIVATE_STORAGE => {
+        HookMode::Shadow if !crate::platform_support::LEDGER_STORAGE => {
             "shadow (default, no context injected; Windows builds have no ledger, so nothing is recorded and shadow hooks send no provider requests)"
         }
         HookMode::Shadow => "shadow (default, evaluations recorded without injecting context)",

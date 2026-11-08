@@ -259,15 +259,25 @@ fn platform_availability_is_complete_and_internally_consistent() {
 #[test]
 fn windows_reports_every_unqualified_boundary_as_unavailable() {
     let platform = &registry()["platform"];
-    // Owned subprocesses run on Windows (sr-winpar.9); storage does not yet.
+    // Owned subprocesses (sr-winpar.9) and private storage (sr-winpar.3) run
+    // on Windows; the other boundaries do not yet.
     for boundary in platform["boundaries"].as_array().unwrap() {
-        let ported = boundary["name"] == "owned-subprocess";
+        let ported =
+            boundary["name"] == "owned-subprocess" || boundary["name"] == "private-storage";
         assert_eq!(boundary["available"], ported, "{boundary}");
         assert_eq!(boundary["reason"].is_string(), !ported, "{boundary}");
     }
-    // Of their components only Git dirty_paths is ported (sr-winpar.10);
-    // cass sessions still wait on sr-winpar.11.
-    let ported = ["git-dirty-paths"];
+    // Ported components: Git dirty_paths (sr-winpar.10), and the response
+    // cache, its coordinator leases and provider breaker state (sr-winpar.3).
+    // cass sessions wait on sr-winpar.11, the ledger and hook counter on
+    // sr-winpar.4. A component whose boundary exists but which is not ported
+    // says so.
+    let ported = [
+        "git-dirty-paths",
+        "response-cache",
+        "coordinator-leases",
+        "provider-breaker-state",
+    ];
     for component in platform["components"].as_array().unwrap() {
         let expected = ported.contains(&component["name"].as_str().unwrap());
         assert_eq!(component["available"], expected, "{component}");

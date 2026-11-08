@@ -198,12 +198,14 @@ fn public_process_local_breaker_preserves_recovery_after_expired_outcomes() {
     }
 }
 
-#[cfg(unix)]
 #[test]
 fn shared_wal_reopen_preserves_successors_lease_after_stale_retry_after() {
     // Keep this shared-WAL success case outside RCH's writable TMPDIR ancestry.
-    let path = std::fs::canonicalize("/tmp")
-        .expect("resolve trusted system temporary directory")
+    #[cfg(unix)]
+    let base = std::fs::canonicalize("/tmp").expect("resolve trusted system temporary directory");
+    #[cfg(windows)]
+    let base = crate::storage::windows_private::test_root();
+    let path = base
         .join(format!(
             "sr-breaker-probe-fence-{}-{}",
             std::process::id(),

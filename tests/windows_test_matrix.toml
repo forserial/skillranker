@@ -85,59 +85,11 @@ reason = "private-storage"
 issue = "sr-winpar.5"
 
 [[gate]]
-file = "src/breaker.rs"
-item = "an_origin_that_never_failed_creates_no_store"
-gate = "cfg(unix)"
-reason = "private-storage"
-issue = "sr-winpar.3"
-note = "breaker store"
-
-[[gate]]
-file = "src/breaker.rs"
-item = "one_probe_owner_and_a_doubling_capped_cooldown"
-gate = "cfg(unix)"
-reason = "private-storage"
-issue = "sr-winpar.3"
-note = "breaker store"
-
-[[gate]]
-file = "src/breaker/probe_tests.rs"
-item = "shared_wal_reopen_preserves_successors_lease_after_stale_retry_after"
-gate = "cfg(unix)"
-reason = "private-storage"
-issue = "sr-winpar.3"
-note = "breaker store"
-
-[[gate]]
 file = "src/breaker/store.rs"
 item = "mod tests"
 gate = "cfg(all(test, unix))"
-reason = "private-storage"
-issue = "sr-winpar.3"
-note = "breaker store"
-
-[[gate]]
-file = "src/cache/coordination.rs"
-item = "mod integrity_tests"
-gate = "cfg(all(test, unix))"
-reason = "private-storage"
-issue = "sr-winpar.3"
-
-[[gate]]
-file = "src/cache/coordination/integrity_tests.rs"
-item = "fresh_reopen_cannot_replay_a_completed_lease"
-gate = "cfg(unix)"
-reason = "private-storage"
-issue = "sr-winpar.3"
-note = "nested inside a gated module"
-
-[[gate]]
-file = "src/cli.rs"
-item = "mod invocation_cleanup_tests"
-gate = "cfg(all(test, unix))"
-reason = "private-storage"
-issue = "sr-winpar.3"
-also = ["sr-winpar.4"]
+reason = "platform-twin"
+issue = "permanent: Unix modes, symlinks and FIFOs; Windows breaker admission is storage::windows_private, exercised by tests/cache_windows_contract.rs and tests/breaker_contract.rs"
 
 [[gate]]
 file = "src/filesystem_policy.rs"
@@ -158,9 +110,8 @@ issue = "permanent: Linux-only mechanism (tmpfs, /proc, pidfd or statfs magic) w
 file = "src/lib.rs"
 item = "mod filesystem_policy"
 gate = "cfg(unix)"
-reason = "private-storage"
-issue = "sr-winpar.3"
-note = "Unix statfs admission; Windows needs its own (sr-winpar.1/.3)"
+reason = "platform-twin"
+issue = "permanent: Linux/macOS statfs classification; Windows volumes are classified by storage::windows_private (only_local_fixed_ntfs_or_refs_through_the_named_drive_is_admitted)"
 
 [[gate]]
 file = "src/roster/discovery/tests.rs"
@@ -194,15 +145,8 @@ issue = "sr-winpar.6"
 file = "src/storage/filesystem.rs"
 item = "mod scan_tests"
 gate = "cfg(all(test, unix))"
-reason = "private-storage"
-issue = "sr-winpar.3"
-
-[[gate]]
-file = "src/storage/filesystem.rs"
-item = "mod tests"
-gate = "cfg(all(test, unix))"
-reason = "private-storage"
-issue = "sr-winpar.3"
+reason = "platform-twin"
+issue = "permanent: the Unix descriptor scan; the Windows scan (storage::windows_private::inspect) is exercised by tests/cache_windows_contract.rs rule_4_* and rule_8_*"
 
 [[gate]]
 file = "src/storage/filesystem/scan_tests.rs"
@@ -319,56 +263,6 @@ reason = "platform-twin"
 issue = "permanent: the Windows twin is tests/authorized_read_windows.rs a_junction_cannot_supply_a_workspace_root_outside_its_parent"
 
 [[gate]]
-file = "tests/breaker_contract.rs"
-item = "*"
-gate = "cfg(any(target_os = \"linux\", target_os = \"macos\"))"
-reason = "private-storage"
-issue = "sr-winpar.3"
-note = "shared provider breaker store"
-
-[[gate]]
-file = "tests/cache_atomic_publication.rs"
-item = "*"
-gate = "cfg(any(target_os = \"linux\", target_os = \"macos\"))"
-reason = "private-storage"
-issue = "sr-winpar.3"
-
-[[gate]]
-file = "tests/cache_identity.rs"
-item = "*"
-gate = "cfg(unix)"
-reason = "private-storage"
-issue = "sr-winpar.3"
-
-[[gate]]
-file = "tests/cache_live_reuse.rs"
-item = "*"
-gate = "cfg(unix)"
-reason = "private-storage"
-issue = "sr-winpar.3"
-
-[[gate]]
-file = "tests/cache_pair_read_view.rs"
-item = "*"
-gate = "cfg(any(target_os = \"linux\", target_os = \"macos\"))"
-reason = "private-storage"
-issue = "sr-winpar.3"
-
-[[gate]]
-file = "tests/cache_policy_revocation.rs"
-item = "*"
-gate = "cfg(unix)"
-reason = "private-storage"
-issue = "sr-winpar.3"
-
-[[gate]]
-file = "tests/cache_publication_fence.rs"
-item = "*"
-gate = "cfg(any(target_os = \"linux\", target_os = \"macos\"))"
-reason = "private-storage"
-issue = "sr-winpar.3"
-
-[[gate]]
 file = "tests/capabilities_contract.rs"
 item = "linux_and_macos_report_every_boundary_as_available"
 gate = "cfg(any(target_os = \"linux\", target_os = \"macos\"))"
@@ -395,30 +289,6 @@ item = "cass_adapter"
 gate = "cfg(unix)"
 reason = "subprocess"
 issue = "sr-winpar.11"
-
-[[gate]]
-file = "tests/coordination_contract.rs"
-item = "*"
-gate = "cfg(any(target_os = \"linux\", target_os = \"macos\"))"
-reason = "private-storage"
-issue = "sr-winpar.3"
-note = "coordinator leases"
-
-[[gate]]
-file = "tests/effect_gate.rs"
-item = "*"
-gate = "cfg(any(target_os = \"linux\", target_os = \"macos\"))"
-reason = "private-storage"
-issue = "sr-winpar.3"
-also = ["sr-winpar.4", "sr-winpar.11"]
-
-[[gate]]
-file = "tests/effect_policies.rs"
-item = "*"
-gate = "cfg(unix)"
-reason = "private-storage"
-issue = "sr-winpar.3"
-also = ["sr-winpar.4", "sr-winpar.11"]
 
 [[gate]]
 file = "tests/explicit_judgment_contract.rs"
@@ -580,13 +450,6 @@ reason = "subprocess"
 issue = "sr-winpar.11"
 
 [[gate]]
-file = "tests/p4_gate.rs"
-item = "*"
-gate = "cfg(any(target_os = \"linux\", target_os = \"macos\"))"
-reason = "private-storage"
-issue = "sr-winpar.3"
-
-[[gate]]
 file = "tests/p5_gate.rs"
 item = "*"
 gate = "cfg(any(target_os = \"linux\", target_os = \"macos\"))"
@@ -624,13 +487,6 @@ reason = "platform-twin"
 issue = "permanent: Unix Git paths, modes and non-UTF-8 names; the Windows twin is tests/project_signals_windows.rs"
 
 [[gate]]
-file = "tests/rank_acceptance.rs"
-item = "*"
-gate = "cfg(unix)"
-reason = "private-storage"
-issue = "sr-winpar.3"
-
-[[gate]]
 file = "tests/rank_pipeline.rs"
 item = "a_run_past_the_failure_recording_window_preserves_unknown_ledger_outcome"
 gate = "cfg(unix)"
@@ -657,14 +513,6 @@ item = "successful_rankings_report_unconfirmed_ledger_finalization"
 gate = "cfg(unix)"
 reason = "private-storage"
 issue = "sr-winpar.4"
-
-[[gate]]
-file = "tests/real_rank_coordination.rs"
-item = "*"
-gate = "cfg(unix)"
-reason = "private-storage"
-issue = "sr-winpar.3"
-note = "coordinator leases"
 
 [[gate]]
 file = "tests/replay_case_completeness.rs"
@@ -829,13 +677,6 @@ issue = "sr-winpar.4"
 
 [[gate]]
 file = "tests/storage_contract.rs"
-item = "*"
-gate = "cfg(any(target_os = \"linux\", target_os = \"macos\"))"
-reason = "private-storage"
-issue = "sr-winpar.3"
-
-[[gate]]
-file = "tests/storage_contract.rs"
 item = "a_response_expires_by_its_boot_clock_age_whatever_the_wall_clock_says"
 gate = "cfg(target_os = \"linux\")"
 reason = "linux-only"
@@ -893,4 +734,79 @@ item = "explicit_roster_files_are_bounded_regular_files"
 gate = "cfg(unix)"
 reason = "unix-fixture"
 issue = "permanent: Windows has no FIFO or device special files; its non-regular names (reserved devices, streams) are refused in tests/windows_platform.rs and tests/authorized_read_windows.rs"
+
+[[gate]]
+file = "src/cli.rs"
+item = "expired_cli_completion_exposes_the_unreconciled_prepared_ledger_outcome"
+gate = "cfg(unix)"
+reason = "private-storage"
+issue = "sr-winpar.4"
+note = "initializes a ledger"
+
+[[gate]]
+file = "src/cli.rs"
+item = "timely_pipeline_advice_survives_a_delayed_cli_continuation"
+gate = "cfg(unix)"
+reason = "private-storage"
+issue = "sr-winpar.4"
+note = "initializes a ledger"
+
+[[gate]]
+file = "src/storage/filesystem.rs"
+item = "foreign_owner_is_rejected_by_the_same_metadata_admission"
+gate = "cfg(unix)"
+reason = "platform-twin"
+issue = "permanent: Unix mode and owner metadata; the Windows owner and DACL predicates are tested in src/storage/windows_private.rs"
+
+[[gate]]
+file = "tests/breaker_contract.rs"
+item = "three_transient_failures_open_the_circuit_for_the_next_process"
+gate = "cfg(unix)"
+reason = "private-storage"
+issue = "sr-winpar.5"
+note = "sets an enforced allowance with sr budget --apply"
+
+[[gate]]
+file = "tests/effect_gate.rs"
+item = "unverified_children_start_only_when_the_gate_permits"
+gate = "cfg(unix)"
+reason = "subprocess"
+issue = "sr-winpar.11"
+note = "a /bin/sh fake cass"
+
+[[gate]]
+file = "tests/rank_acceptance.rs"
+item = "persistence_reports_disabled_only_when_the_user_disabled_it"
+gate = "cfg(unix)"
+reason = "private-storage"
+issue = "sr-winpar.4"
+note = "initializes a ledger"
+
+[[gate]]
+file = "tests/real_rank_coordination.rs"
+item = "stale_leader_superseded_cannot_overwrite_newer_cache_or_complete_lease"
+gate = "cfg(unix)"
+reason = "unix-only"
+issue = "permanent: suspends the leader with SIGSTOP/SIGCONT; POSIX signal delivery has no Windows counterpart"
+
+[[gate]]
+file = "tests/storage_contract.rs"
+item = "replacing_the_directory_is_detected_before_generation_update"
+gate = "cfg(unix)"
+reason = "platform-twin"
+issue = "permanent: Windows refuses renaming the held store and its ancestors; tests/cache_windows_contract.rs rule_9_a_held_store_cannot_be_renamed_and_a_replaced_one_is_detected and rule_9_a_store_replaced_through_a_renamed_ancestor_is_detected prove it"
+
+[[gate]]
+file = "tests/storage_contract.rs"
+item = "sidecar_permissions_are_checked_before_opening_an_existing_store"
+gate = "cfg(unix)"
+reason = "platform-twin"
+issue = "permanent: Unix modes; the Windows twin is tests/cache_windows_contract.rs rule_2_a_store_file_with_a_foreign_entry_is_refused (files, sidecars included, pass the same admission)"
+
+[[gate]]
+file = "tests/storage_contract.rs"
+item = "unsafe_ancestors_leaf_modes_and_relative_paths_are_refused"
+gate = "cfg(unix)"
+reason = "platform-twin"
+issue = "permanent: Unix modes and symlinked ancestors; the Windows twins are tests/cache_windows_contract.rs rule_2_*, rule_3_* and rule_6_*"
 

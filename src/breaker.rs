@@ -41,7 +41,7 @@ pub const MAX_COOLDOWN_MS: u64 = 300_000;
 /// it, but one malformed or hostile header must not cool the endpoint down
 /// for days, or in effect forever.
 pub const MAX_RETRY_AFTER_MS: u64 = 3_600_000;
-#[cfg_attr(not(unix), allow(dead_code))] // Read by the Unix-only store admission.
+#[cfg_attr(not(any(unix, windows)), allow(dead_code))] // Read by the store admission.
 const MAX_BREAKER_BYTES: i64 = 1024 * 1024;
 
 static COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -397,14 +397,17 @@ mod tests {
     fn temp() -> PathBuf {
         // RCH's TMPDIR can have a group-writable ancestor. A shared-store
         // success fixture must use an admissible root, not local fallback.
-        std::fs::canonicalize("/tmp")
-            .expect("resolve trusted system temporary directory")
-            .join(format!(
-                "sr-breaker-{}-{}",
-                std::process::id(),
-                COUNTER.fetch_add(1, Ordering::Relaxed)
-            ))
-            .join(BREAKER_FILE)
+        #[cfg(unix)]
+        let base =
+            std::fs::canonicalize("/tmp").expect("resolve trusted system temporary directory");
+        #[cfg(windows)]
+        let base = crate::storage::windows_private::test_root();
+        base.join(format!(
+            "sr-breaker-{}-{}",
+            std::process::id(),
+            COUNTER.fetch_add(1, Ordering::Relaxed)
+        ))
+        .join(BREAKER_FILE)
     }
 
     fn fail(breaker: &Breaker, now: u64) {
@@ -447,7 +450,6 @@ mod tests {
         assert!(breaker.admit(10, LEASE).is_ok());
     }
 
-    #[cfg(unix)]
     #[test]
     fn one_probe_owner_and_a_doubling_capped_cooldown() {
         let path = temp();
@@ -594,7 +596,6 @@ mod tests {
         assert!(breaker.admit(3, LEASE).is_ok(), "a valid response lifts it");
     }
 
-    #[cfg(unix)]
     #[test]
     fn an_origin_that_never_failed_creates_no_store() {
         let path = temp();

@@ -21,6 +21,22 @@ pub(crate) fn home_dir() -> Option<PathBuf> {
     None
 }
 
+/// A per-user store directory on Windows: `%LOCALAPPDATA%\skillranker\<kind>`
+/// (docs/windows-private-storage.md, rule 6). XDG variables are not honored on
+/// Windows. `Ok(None)` when `LOCALAPPDATA` is unset or empty; a relative value
+/// is an error, as a relative XDG directory is on Unix.
+#[cfg(windows)]
+pub(crate) fn windows_store_dir(kind: &str) -> Result<Option<PathBuf>, &'static str> {
+    let Some(root) = std::env::var_os("LOCALAPPDATA").filter(|path| !path.is_empty()) else {
+        return Ok(None);
+    };
+    let root = PathBuf::from(root);
+    if !root.is_absolute() {
+        return Err("LOCALAPPDATA must be an absolute directory");
+    }
+    Ok(Some(root.join("skillranker").join(kind)))
+}
+
 /// Expand only macOS's verified root-owned /tmp and /var system aliases.
 pub(crate) fn storage_path(path: PathBuf) -> PathBuf {
     #[cfg(target_os = "macos")]

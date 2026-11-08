@@ -47,6 +47,9 @@ winapi-util = "=0.1.11"
 # The OS CSPRNG, without unsafe code in this crate. Windows has no /dev/urandom.
 # Already in the Windows graph through ahash.
 getrandom = "=0.3.4"
+# Audited Win32 security-descriptor, volume and creation calls: the only
+# package allowed unsafe code (sr-winpar.2, docs/windows-private-storage.md).
+sr-win-sys = { path = "crates/sr-win-sys" }
 
 [build-dependencies]
 blake3 = "1.8"
