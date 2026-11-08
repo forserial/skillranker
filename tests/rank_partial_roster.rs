@@ -127,17 +127,21 @@ struct Fixture {
 impl Fixture {
     fn new() -> Self {
         static NEXT: AtomicU64 = AtomicU64::new(0);
-        let root = fs::canonicalize("/tmp")
-            .expect("resolve trusted system temporary directory")
-            .join(format!(
-                "sr-rank-partial-{}-{}-{}",
-                std::process::id(),
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap()
-                    .as_nanos(),
-                NEXT.fetch_add(1, Ordering::Relaxed)
-            ));
+        #[cfg(unix)]
+        let base = fs::canonicalize("/tmp").expect("resolve trusted system temporary directory");
+        // Windows: /tmp is C:\tmp, whose inherited entries let other users
+        // replace its children, which sr's private stores refuse.
+        #[cfg(windows)]
+        let base = support::tmp_root();
+        let root = base.join(format!(
+            "sr-rank-partial-{}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
         let workspace = root.join("workspace");
         let home = root.join("home");
         for directory in [

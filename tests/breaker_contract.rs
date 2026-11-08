@@ -75,7 +75,6 @@ impl Home {
     }
 
     /// `sr budget` as seen from the endpoint on `port`.
-    #[cfg(unix)]
     fn budget(&self, port: u16, args: &[&str]) -> Value {
         let mut full = vec!["budget", "--json"];
         full.extend_from_slice(args);
@@ -257,9 +256,6 @@ fn warning_kinds(out: &Output) -> Vec<String> {
         .unwrap_or_default()
 }
 
-// Sets an enforced request allowance with `sr budget --apply`, which Windows
-// does not have yet (sr-winpar.5).
-#[cfg(unix)]
 #[test]
 fn three_transient_failures_open_the_circuit_for_the_next_process() {
     let home = Home::new();

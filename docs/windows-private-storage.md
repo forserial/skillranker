@@ -8,8 +8,9 @@ counter), `.5` (enforced allowance), `.6` (exports, snapshots, replay cases) and
 security descriptors under `#![forbid(unsafe_code)]`
 ([Mechanism](#mechanism-sr-winpar2)). The response cache
 ([Cache](#cache-sr-winpar3)) and the ledger with its hook counter
-([Ledger](#ledger-sr-winpar4)) implement it; the allowance, exports and
-backups still refuse until their issues land
+([Ledger](#ledger-sr-winpar4)) and the enforced allowance
+([Allowance](#allowance-sr-winpar5)) implement it; exports and backups still
+refuse until their issues land
 ([platform boundary](platform-boundary.md#windows)).
 
 The user approved the defaults on 2026-11-07 and, after the observation below,
@@ -175,9 +176,16 @@ Mirrors: `revalidate`'s same-user note.
 A hostile process running as the same user, including a sandboxed process holding
 a capability SID that rule 3 accepts on ancestors, can change or replace the store
 and is outside this boundary, as same-uid processes are on Unix. Revalidation still
-detects ordinary replacement between checks: the walk holds each directory open
-without `FILE_SHARE_DELETE`, records volume serial and file index, and rechecks
-them before each effect, as `authorized_read` already does.
+detects ordinary replacement between checks: the walk holds the store directory
+open without `FILE_SHARE_DELETE` and records its volume serial and file index.
+Before each effect, its own path must still name that object, which must still
+satisfy rules 1 and 2. The ancestors are walked in full when the store is opened
+and not again: by rule 3 no principal outside the boundary can rename or
+re-permission one in between, so a repeated walk could only detect same-user or
+administrator changes. On the evidence machine each component open costs about
+0.3 ms, and repeating the full walk before every effect made one allowance
+admission take about 70 ms (37 ms without), enough for concurrent hooks to exceed
+the 250 ms lock budget (sr-winpar.5).
 
 ## Test matrix for the implementing issues
 
@@ -367,3 +375,52 @@ the rules on Windows with the same primitives as the cache.
 Native evidence: the ledger, stats, trace, observation, snooze, learning,
 onboarding, P8 and shadow-spending suites run on Windows (see
 `tests/windows_test_matrix.toml` for the cases that remain Unix-only and why).
+
+## Allowance (sr-winpar.5)
+
+The enforced request allowance runs on Windows with the Unix contract: a durable
+guard intent before accounting setup, the guard read and the debit under one
+bounded lock released before HTTP, WAL with `synchronous=FULL` read back on
+every writer, and a debit committed before each send.
+
+- **Guard folder.** The guard (`sr\allowance.toml` under the configuration
+  root) lives in a configuration folder (`windows_private::Leaf::Config`): a
+  trusted owner, ancestors under rule 3, and no write right of any kind for
+  anyone else. Like a Unix `0755` configuration folder, it may be readable by
+  others. Missing folders are created with the private descriptor.
+- **Guard, lock and temporary files.** Each is an owner-only, single-link
+  regular file created with the private file descriptor; nothing existing is
+  repaired.
+- **Lock.** The lock is `LockFileEx` (`File::try_lock`), exclusive and
+  non-blocking, retried within the caller's budget like the Unix `flock`, and
+  released when the handle closes. A byte-range lock held by another process
+  (`msvcrt.locking` in the test) blocks it, so the wait stays bounded.
+- **Publishing.** The Unix `renameat` plus a directory `fsync` becomes
+  `sr_win_sys::windows::replace_file`, which calls `MoveFileExW` with
+  `MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH`.
+  - The replacement is a single rename within the held folder, so the guard is
+    never missing.
+  - It returns only after the rename reaches the disk.
+  - A link at the target is replaced, not followed.
+  - Both names are resolved in the held folder, which cannot be renamed while
+    held.
+  - `std::fs::rename` was not enough: it does not request write-through, and
+    NTFS directories cannot be flushed from a read-only handle.
+- **Accounting.** The accounting store (`allowance.sqlite3` beside the cache) is
+  admitted like the cache by `src/allowance/accounting_windows.rs`. Its sidecars
+  must sit on the folder's volume. The SQLite layer is shared with Unix.
+- **Persistence.** The walk admits only local fixed NTFS or ReFS volumes, so
+  removable, remote and RAM-disk volumes are refused. That is the Windows form of
+  `require_persistent`; Linux tmpfs has no Windows counterpart.
+
+Native evidence:
+- `tests/allowance_contract.rs` (14 cases): setup, the interrupted-setup
+  resume, exhaustion, retries, the clock-behind refusal, a process killed after
+  its debit, four concurrent processes, and a lock held by another process.
+- The allowance unit tests (46), including the charge-consistency and
+  integrity suites.
+- Rollout and the breaker's budget case.
+
+In the concurrency case the allowance was never exceeded and every send was
+charged. A process that could not take the lock within its budget was refused
+(`budget-state`), never admitted.

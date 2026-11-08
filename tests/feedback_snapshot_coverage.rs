@@ -8,13 +8,16 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 fn fixture(invocation: &ProcessInvocation, cx: &Cx, complete: bool) -> LedgerStore {
     // Retained under repository policy; no automatic deletion of test trees.
+    // A per-process counter too: parallel tests can read the same clock value.
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let directory = support::tmp_root().join(format!(
-        "sr-feedback-coverage-{}-{}",
+        "sr-feedback-coverage-{}-{}-{}",
         std::process::id(),
         SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
-            .as_nanos()
+            .as_nanos(),
+        NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
     ));
     support::private_dir(&directory);
     let LedgerOpen::Ready(mut store) = open_ledger(

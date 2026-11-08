@@ -4,6 +4,13 @@
 
 ### Added
 
+- Windows enforces the request allowance: `sr budget --apply` writes the guard
+  under the configuration root (owner-only, `LockFileEx` lock, write-through
+  atomic replacement) and the accounting store sits beside the cache with WAL
+  and `synchronous=FULL`, so each send is charged durably before it leaves.
+  Revalidation before each store effect now rechecks the held folder by path
+  and identity instead of re-walking every ancestor, which halved admission
+  time on Windows.
 - Windows has the ledger and the hook invocation counter, in
   `%LOCALAPPDATA%\skillranker\ledger`, under the same owner-only policy as the
   cache: `sr ledger`, `observe`, `feedback`, `stats`, `snooze` and recorded

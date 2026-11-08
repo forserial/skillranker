@@ -28,27 +28,32 @@ use crate::jev::{CanonicalOrigin, RankingStage};
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use serde::Deserialize;
 use std::fmt;
-#[cfg(all(test, unix))]
+#[cfg(test)]
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 mod accounting;
 mod admission_budget;
 #[cfg(unix)]
 mod guard_file;
+/// Windows guard files (sr-winpar.5): the Unix contract through
+/// `storage::windows_private`.
 #[cfg(windows)]
+#[path = "allowance/guard_file_windows.rs"]
+mod guard_file;
+#[cfg(not(any(unix, windows)))]
 mod unsupported;
 // `platform_support::ENFORCED_ALLOWANCE` reports which state modules this build has.
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 const _: () = assert!(crate::platform_support::ENFORCED_ALLOWANCE);
-#[cfg(windows)]
+#[cfg(not(any(unix, windows)))]
 const _: () = assert!(!crate::platform_support::ENFORCED_ALLOWANCE);
 use admission_budget::AdmissionBudget;
 use guard_file::GuardLock;
-#[cfg(windows)]
+#[cfg(not(any(unix, windows)))]
 use unsupported::{accounting, guard_file};
 
 /// Relative to the trusted user configuration root.
@@ -251,7 +256,7 @@ impl AllowancePaths {
         Self::new(user_config_root, &cache)
     }
 
-    #[cfg_attr(not(unix), allow(dead_code))] // Used by the Unix-only enforced store.
+    #[cfg_attr(not(any(unix, windows)), allow(dead_code))] // Used by the enforced store.
     fn lock_path(&self) -> PathBuf {
         self.guard.with_extension("toml.sr-lock")
     }
@@ -274,6 +279,25 @@ fn create_private_dir(dir: &Path) -> Result<(), AllowanceError> {
     builder
         .create(dir)
         .map_err(|_| state("a private directory cannot be created"))
+}
+
+/// Windows: missing parents inherit, then `dir` itself gets the private
+/// descriptor sr applies at creation.
+#[cfg(all(test, windows))]
+fn create_private_dir(dir: &Path) -> Result<(), AllowanceError> {
+    if dir.is_dir() {
+        return Ok(());
+    }
+    let fail = |_| state("a private directory cannot be created");
+    if let Some(parent) = dir.parent() {
+        std::fs::create_dir_all(parent).map_err(fail)?;
+    }
+    let user = crate::storage::windows_private::user().map_err(|_| state("no token user"))?;
+    sr_win_sys::windows::create_directory_with(
+        dir,
+        &crate::storage::windows_private::directory_sddl(user),
+    )
+    .map_err(fail)
 }
 
 /// Replaces the guard durably: temporary file, fsync, rename, directory fsync.
@@ -860,18 +884,21 @@ pub fn admit(
     }))
 }
 
-#[cfg(all(test, unix))]
+#[cfg(all(test, any(unix, windows)))]
 mod tests {
     use super::*;
 
     fn temp_paths() -> (PathBuf, AllowancePaths) {
-        let root = std::fs::canonicalize("/tmp")
-            .expect("resolve trusted system temporary directory")
-            .join(format!(
-                "sr-allowance-{}-{}",
-                std::process::id(),
-                COUNTER.fetch_add(1, Ordering::Relaxed)
-            ));
+        #[cfg(unix)]
+        let base =
+            std::fs::canonicalize("/tmp").expect("resolve trusted system temporary directory");
+        #[cfg(windows)]
+        let base = crate::storage::windows_private::test_root();
+        let root = base.join(format!(
+            "sr-allowance-{}-{}",
+            std::process::id(),
+            COUNTER.fetch_add(1, Ordering::Relaxed)
+        ));
         let paths = AllowancePaths::new(&root.join("config"), &root.join("cache"));
         (root, paths)
     }
@@ -1071,7 +1098,7 @@ mod tests {
     }
 }
 
-#[cfg(all(test, unix))]
+#[cfg(all(test, any(unix, windows)))]
 #[path = "allowance/integrity_tests.rs"]
 mod integrity_tests;
 
@@ -1079,6 +1106,6 @@ mod integrity_tests;
 #[path = "allowance/inspection_tests.rs"]
 mod inspection_tests;
 
-#[cfg(all(test, unix))]
+#[cfg(all(test, any(unix, windows)))]
 #[path = "allowance/charge_consistency_tests.rs"]
 mod charge_consistency_tests;

@@ -1,8 +1,7 @@
 //! Enforced allowance state on platforms without its storage boundary.
 //!
-//! The Unix guard and accounting files rely on descriptor-relative opens,
-//! owner/mode checks and an admitted local filesystem. Windows has no audited
-//! equivalent here yet, so enforcement fails closed: an absent guard means no
+//! Unix and Windows have audited guard and accounting files (Windows since
+//! sr-winpar.5). Any other target has none, so enforcement fails closed: an absent guard means no
 //! allowance is configured (exactly as on Unix), while any existing guard or
 //! accounting state, or any attempt to create one, is refused. A refused guard
 //! withholds provider requests rather than admitting them unaccounted.

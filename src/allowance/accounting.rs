@@ -6,14 +6,28 @@
 //! same-uid mutation and uninterruptible kernel calls are outside this boundary.
 use super::admission_budget::{AdmissionBudget, checkpoint};
 use super::{ACCOUNTING_MAX_BYTES, AllowanceError, read_meta, state};
+#[cfg(unix)]
 use crate::filesystem_policy::require_persistent;
+#[cfg(unix)]
 use nix::errno::Errno;
+#[cfg(unix)]
 use nix::fcntl::{AtFlags, OFlag, open, openat};
+#[cfg(unix)]
 use nix::sys::stat::{FileStat, Mode, SFlag, fstat, fstatat, mkdirat};
 use rusqlite::{Connection, OpenFlags, TransactionBehavior, config::DbConfig, limits::Limit};
+#[cfg(unix)]
 use std::fs::File;
-use std::path::{Component, Path, PathBuf};
+use std::path::Path;
+#[cfg(unix)]
+use std::path::{Component, PathBuf};
 use std::time::Duration;
+
+/// Windows file admission (sr-winpar.5); the SQLite layer below is shared.
+#[cfg(windows)]
+#[path = "accounting_windows.rs"]
+mod windows_files;
+#[cfg(windows)]
+pub(super) use windows_files::Files;
 
 const FAMILY_MAX_BYTES: i64 = 64 * 1024 * 1024;
 
@@ -25,6 +39,7 @@ fn capacity() -> AllowanceError {
     state("the accounting storage quota is exhausted; storage may be full")
 }
 
+#[cfg(unix)]
 fn directory(stat: &FileStat, leaf: bool, writable: bool) -> Result<(), AllowanceError> {
     let uid = nix::unistd::geteuid().as_raw();
     let mode = stat.st_mode & 0o7777;
@@ -40,6 +55,7 @@ fn directory(stat: &FileStat, leaf: bool, writable: bool) -> Result<(), Allowanc
     Ok(())
 }
 
+#[cfg(unix)]
 fn regular(stat: &FileStat, writable: bool) -> Result<(), AllowanceError> {
     let mode = stat.st_mode & 0o7777;
     if SFlag::from_bits_truncate(stat.st_mode) != SFlag::S_IFREG
@@ -53,6 +69,7 @@ fn regular(stat: &FileStat, writable: bool) -> Result<(), AllowanceError> {
     Ok(())
 }
 
+#[cfg(unix)]
 fn parent(
     path: &Path,
     create: bool,
@@ -109,6 +126,7 @@ fn parent(
 }
 
 /// Retain admitted identities for the complete lifetime of the SQLite connection.
+#[cfg(unix)]
 pub(super) struct Files {
     path: PathBuf,
     directory: File,
@@ -117,6 +135,7 @@ pub(super) struct Files {
     budget: Option<AdmissionBudget>,
 }
 
+#[cfg(unix)]
 impl Files {
     fn open(path: &Path, create: bool, writable: bool) -> Result<Option<Self>, AllowanceError> {
         Self::open_with_budget(path, create, writable, None)
@@ -431,6 +450,8 @@ pub(super) fn open_writer_with_budget(
     Ok(store)
 }
 
-#[cfg(test)]
+// Unix modes, FIFOs and symlinks; the Windows admission is exercised by
+// tests/allowance_contract.rs and tests/allowance_filesystem_contract.rs.
+#[cfg(all(test, unix))]
 #[path = "accounting_tests.rs"]
 mod tests;

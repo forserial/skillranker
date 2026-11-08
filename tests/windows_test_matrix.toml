@@ -37,52 +37,17 @@ schema_version = 1
 
 [[gate]]
 file = "src/allowance.rs"
-item = "mod accounting"
-gate = "cfg(unix)"
-reason = "private-storage"
-issue = "sr-winpar.5"
-
-[[gate]]
-file = "src/allowance.rs"
-item = "mod charge_consistency_tests"
-gate = "cfg(all(test, unix))"
-reason = "private-storage"
-issue = "sr-winpar.5"
-
-[[gate]]
-file = "src/allowance.rs"
 item = "mod guard_file"
 gate = "cfg(unix)"
-reason = "private-storage"
-issue = "sr-winpar.5"
+reason = "platform-twin"
+issue = "permanent: the Unix guard files (descriptor walk, modes, flock, renameat); Windows uses src/allowance/guard_file_windows.rs, exercised by tests/allowance_contract.rs and the allowance unit tests"
 
 [[gate]]
 file = "src/allowance.rs"
 item = "mod inspection_tests"
 gate = "cfg(all(test, unix))"
-reason = "private-storage"
-issue = "sr-winpar.5"
-
-[[gate]]
-file = "src/allowance.rs"
-item = "mod integrity_tests"
-gate = "cfg(all(test, unix))"
-reason = "private-storage"
-issue = "sr-winpar.5"
-
-[[gate]]
-file = "src/allowance.rs"
-item = "mod tests"
-gate = "cfg(all(test, unix))"
-reason = "private-storage"
-issue = "sr-winpar.5"
-
-[[gate]]
-file = "src/allowance/admission_budget_tests.rs"
-item = "mod native"
-gate = "cfg(any(target_os = \"linux\", target_os = \"macos\"))"
-reason = "private-storage"
-issue = "sr-winpar.5"
+reason = "platform-twin"
+issue = "permanent: Unix modes (0500/0400 read-only stores, 0700/0600); Windows owner-only admission is tested in tests/cache_windows_contract.rs and src/storage/windows_private.rs"
 
 [[gate]]
 file = "src/breaker/store.rs"
@@ -165,18 +130,11 @@ issue = "permanent: arbitrary non-UTF-8 filename bytes are a Linux filesystem pr
 note = "nested inside a gated module"
 
 [[gate]]
-file = "tests/allowance_contract.rs"
-item = "*"
-gate = "cfg(any(target_os = \"linux\", target_os = \"macos\"))"
-reason = "private-storage"
-issue = "sr-winpar.5"
-
-[[gate]]
 file = "tests/allowance_filesystem_contract.rs"
 item = "*"
 gate = "cfg(any(target_os = \"linux\", target_os = \"macos\"))"
-reason = "private-storage"
-issue = "sr-winpar.5"
+reason = "platform-twin"
+issue = "permanent: Linux tmpfs and statfs classification; Windows refuses RAM-disk, removable and remote volumes in storage::windows_private (only_local_fixed_ntfs_or_refs_through_the_named_drive_is_admitted) and runs the persistent cases in tests/allowance_contract.rs"
 
 [[gate]]
 file = "tests/allowance_filesystem_contract.rs"
@@ -302,7 +260,6 @@ item = "*"
 gate = "cfg(unix)"
 reason = "hook-suite"
 issue = "sr-winpar.17"
-also = ["sr-winpar.5"]
 
 [[gate]]
 file = "tests/hook_installer_contract.rs"
@@ -341,7 +298,6 @@ item = "*"
 gate = "cfg(any(target_os = \"linux\", target_os = \"macos\"))"
 reason = "hook-suite"
 issue = "sr-winpar.17"
-also = ["sr-winpar.5"]
 
 [[gate]]
 file = "tests/p7_gate.rs"
@@ -377,14 +333,6 @@ item = "replay_save_and_load_enforces_owner_only_and_no_clobber"
 gate = "cfg(unix)"
 reason = "private-storage"
 issue = "sr-winpar.6"
-
-[[gate]]
-file = "tests/rollout_contract.rs"
-item = "*"
-gate = "cfg(any(target_os = \"linux\", target_os = \"macos\"))"
-reason = "private-storage"
-issue = "sr-winpar.5"
-note = "sr budget --apply"
 
 [[gate]]
 file = "tests/roster_cli.rs"
@@ -552,14 +500,6 @@ reason = "platform-twin"
 issue = "permanent: Unix mode and owner metadata; the Windows owner and DACL predicates are tested in src/storage/windows_private.rs"
 
 [[gate]]
-file = "tests/breaker_contract.rs"
-item = "three_transient_failures_open_the_circuit_for_the_next_process"
-gate = "cfg(unix)"
-reason = "private-storage"
-issue = "sr-winpar.5"
-note = "sets an enforced allowance with sr budget --apply"
-
-[[gate]]
 file = "tests/effect_gate.rs"
 item = "unverified_children_start_only_when_the_gate_permits"
 gate = "cfg(unix)"
@@ -637,3 +577,10 @@ gate = "cfg(unix)"
 reason = "subprocess"
 issue = "sr-winpar.11"
 note = "selects a cass session"
+
+[[gate]]
+file = "src/allowance/accounting.rs"
+item = "mod tests"
+gate = "cfg(all(test, unix))"
+reason = "platform-twin"
+issue = "permanent: Unix modes, FIFOs and symlinks; the Windows accounting admission (src/allowance/accounting_windows.rs) is exercised by tests/allowance_contract.rs and the allowance unit tests"

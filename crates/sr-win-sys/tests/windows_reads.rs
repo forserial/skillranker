@@ -178,3 +178,25 @@ fn directories_and_files_are_created_with_the_given_descriptor() {
     assert_eq!(error.raw_os_error(), Some(87), "ERROR_INVALID_PARAMETER");
     assert!(!dir.join("bad").exists());
 }
+
+#[test]
+fn replace_file_swaps_the_target_atomically_and_keeps_the_source_handle_valid() {
+    use sr_win_sys::windows::{create_new_file_with, replace_file};
+    use std::io::Write;
+    let dir = scratch("replace");
+    let user = token_user_sid().unwrap();
+    let target = dir.join("allowance.toml");
+    fs::write(&target, b"old").unwrap();
+    let staged = dir.join("allowance.toml.sr-tmp.1");
+    let mut file = create_new_file_with(&staged, &private_sddl(&user)).unwrap();
+    file.write_all(b"new").unwrap();
+    file.sync_all().unwrap();
+    replace_file(&staged, &target).unwrap();
+    assert_eq!(fs::read(&target).unwrap(), b"new");
+    assert!(!staged.exists());
+    // The handle still names the renamed file.
+    assert_eq!(security_of(&file).unwrap().owner, user);
+    // A missing source fails and leaves the target alone.
+    assert!(replace_file(&dir.join("absent"), &target).is_err());
+    assert_eq!(fs::read(&target).unwrap(), b"new");
+}

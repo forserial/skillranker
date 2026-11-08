@@ -258,6 +258,45 @@ pub(crate) struct HeldDirectory {
     pub(crate) identity: Identity,
 }
 
+/// Rights that let a principal add, change or remove a directory's entries,
+/// or re-permission it: the Windows reading of a group/other write bit.
+const WRITE_ANY: u32 =
+    REPLACE_CAPABLE | 0x0000_0002 | 0x0000_0004 | 0x0000_0010 | 0x0000_0100 | 0x4000_0000;
+
+/// What the final directory of a walk must be.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum Leaf {
+    /// A private store directory (rules 1 and 2).
+    Store,
+    /// A configuration directory holding owner-only files, such as the
+    /// allowance guard's: like a Unix directory that may be searchable (0755)
+    /// but never writable by another user. A trusted owner, and no one else
+    /// holds any write right through an entry that applies to it. Capability
+    /// SIDs count as the user, as on ancestors.
+    Config,
+}
+
+/// The configuration-directory rule ([`Leaf::Config`]).
+pub(crate) fn config_directory_admitted(
+    descriptor: &Descriptor,
+    user: &Sid,
+) -> Result<(), StoreError> {
+    ancestor_admitted(descriptor, user)?;
+    let aces = descriptor.dacl.as_ref().ok_or(StoreError::Permissions)?;
+    for ace in aces.iter().filter(|ace| ace.applies_to_object()) {
+        if ace.kind == AceKind::Allowed
+            && ace.mask & WRITE_ANY != 0
+            && ace
+                .sid
+                .as_ref()
+                .is_some_and(|sid| !trusted_owner(sid, user) && !sid.is_capability())
+        {
+            return Err(StoreError::Permissions);
+        }
+    }
+    Ok(())
+}
+
 /// Walk from the volume root to `path`, admitting each ancestor (rule 3) and
 /// the final directory as a store directory (rules 1 and 2), creating missing
 /// components with the private descriptor when `create` (rule 7). Existing
@@ -265,7 +304,17 @@ pub(crate) struct HeldDirectory {
 pub(crate) fn walk(
     path: &Path,
     create: bool,
+    checkpoint: impl FnMut() -> Result<(), StoreError>,
+) -> Result<HeldDirectory, StoreError> {
+    walk_with(path, create, checkpoint, Leaf::Store)
+}
+
+/// [`walk`] with the final directory admitted by `leaf`.
+pub(crate) fn walk_with(
+    path: &Path,
+    create: bool,
     mut checkpoint: impl FnMut() -> Result<(), StoreError>,
+    leaf: Leaf,
 ) -> Result<HeldDirectory, StoreError> {
     let (drive, names) = parse(path)?;
     let user = user()?;
@@ -293,7 +342,10 @@ pub(crate) fn walk(
         let opened_identity = plain_directory(&opened)?;
         let found = descriptor(&opened)?;
         if index == last {
-            store_directory_admitted(&found, user)?;
+            match leaf {
+                Leaf::Store => store_directory_admitted(&found, user)?,
+                Leaf::Config => config_directory_admitted(&found, user)?,
+            }
             identity = Some(opened_identity);
         } else {
             ancestor_admitted(&found, user)?;
@@ -306,6 +358,27 @@ pub(crate) fn walk(
         drive,
         identity: identity.ok_or(StoreError::UnsafePath)?,
     })
+}
+
+/// Revalidate a held directory before an effect: its own path must still name
+/// the same object (volume serial and file index), and that object must still
+/// satisfy `leaf`. The ancestors were walked in full when it was opened; by
+/// rule 3 no principal outside the boundary can rename or re-permission an
+/// ancestor in between, so walking them again could only detect same-user or
+/// administrator changes, which rule 9 leaves outside the boundary. On Windows
+/// each component open costs about 0.3 ms (filter drivers), and the full re-walk
+/// before every effect pushed one allowance admission past 60 ms.
+pub(crate) fn revalidate(held: &HeldDirectory, leaf: Leaf) -> Result<(), StoreError> {
+    let current = open_directory(&held.path).map_err(|error| io_error(&error))?;
+    if plain_directory(&current)? != held.identity {
+        return Err(StoreError::StoreReplaced);
+    }
+    let found = descriptor(&current)?;
+    let user = user()?;
+    match leaf {
+        Leaf::Store => store_directory_admitted(&found, user),
+        Leaf::Config => config_directory_admitted(&found, user),
+    }
 }
 
 /// Rule 4 plus rules 1 and 2 for a held store file: a regular single-link
@@ -492,6 +565,33 @@ pub(crate) fn open_existing(
         .map_err(|error| io_error(&error))?;
     admitted_file(&file)?;
     Ok(file)
+}
+
+/// Open the existing store file `name` in `directory` without following a
+/// link, for reading or for reading and writing, shared with every other
+/// opener, and admit it (rules 1, 2 and 4).
+pub(crate) fn open_store_file(
+    directory: &Path,
+    name: &std::ffi::OsStr,
+    write: bool,
+) -> Result<File, StoreError> {
+    let file = OpenOptions::new()
+        .read(true)
+        .write(write)
+        .share_mode(FILE_SHARE_ALL)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
+        .open(directory.join(name))
+        .map_err(|error| io_error(&error))?;
+    admitted_file(&file)?;
+    Ok(file)
+}
+
+/// Create the new store file `name` in `directory` with the private file
+/// descriptor (rule 7), never opening an existing name. `AlreadyExists` is
+/// returned as is, so a caller can tell a raced-in creator apart.
+pub(crate) fn create_store_file(directory: &Path, name: &std::ffi::OsStr) -> io::Result<File> {
+    let user = user().map_err(|_| io::Error::new(io::ErrorKind::PermissionDenied, "token user"))?;
+    create_new_file_with(&directory.join(name), &file_sddl(user))
 }
 
 #[cfg(test)]
@@ -700,6 +800,36 @@ mod tests {
             ],
         );
         assert_eq!(store_file_admitted(&inherited, &user), Ok(()));
+    }
+
+    #[test]
+    fn a_config_directory_may_be_readable_but_not_writable_by_others() {
+        let user = user_sid();
+        let users = sid(&[32, 545]);
+        let readable = descriptor(
+            user.clone(),
+            false,
+            vec![
+                allow(user.clone(), 0, FULL),
+                allow(users.clone(), 0, READ_EXECUTE),
+            ],
+        );
+        assert_eq!(config_directory_admitted(&readable, &user), Ok(()));
+        for mask in [0x2, 0x4, 0x10, 0x100, 0x4000_0000, 0x0001_0000] {
+            let writable = descriptor(user.clone(), false, vec![allow(users.clone(), 0, mask)]);
+            assert_eq!(
+                config_directory_admitted(&writable, &user),
+                Err(StoreError::Permissions),
+                "{mask:#x}"
+            );
+        }
+        // Inherit-only write rights do not apply to the directory itself.
+        let inherit_only = descriptor(
+            user.clone(),
+            false,
+            vec![allow(users, INHERIT_ONLY | OBJECT_INHERIT, FULL)],
+        );
+        assert_eq!(config_directory_admitted(&inherit_only, &user), Ok(()));
     }
 
     #[test]

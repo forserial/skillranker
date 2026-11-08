@@ -1,6 +1,3 @@
-// Applies an enforced request allowance with `sr budget --apply`, which
-// Windows does not have yet (sr-winpar.5).
-#![cfg(any(target_os = "linux", target_os = "macos"))]
 //! Phase P7 advisory rollout and return-to-shadow fencing contract.
 //!
 //! Satisfies contract boundary `p7_advisory_rollout` (sr-roadmap-l1i.8.6,

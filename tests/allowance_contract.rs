@@ -1,14 +1,15 @@
-#![cfg(any(target_os = "linux", target_os = "macos"))]
 //! The trusted shared HTTP-attempt allowance (sr-roadmap-l1i.7.4, .7.5):
 //! `sr budget` setup with a crash-safe activation intent, and durable debits
 //! before each send, through the real binary against the loopback TLS Jev
 //! fixture. Synthetic skills and sessions only.
 
+#[path = "support/stub_python.rs"]
+mod stub_python;
 mod support;
+use support::PlatformEnv;
 
 use serde_json::{Value, json};
 use std::io::{BufRead, BufReader};
-use std::os::unix::fs::DirBuilderExt;
 use std::path::PathBuf;
 use std::process::{Child, ChildStdout, Command, Output, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -23,10 +24,7 @@ impl Home {
     fn new() -> Self {
         let root = support::private_store_dir("allowance");
         for dir in ["home", "config", "cache", "data", "workspace"] {
-            std::fs::DirBuilder::new()
-                .mode(0o700)
-                .create(root.join(dir))
-                .unwrap();
+            support::private_dir(root.join(dir));
         }
         for (name, description) in [
             ("alpha", "Runs and repairs failing rust tests."),
@@ -52,8 +50,18 @@ impl Home {
         self.root.join("config/sr/allowance.toml")
     }
 
+    /// `$XDG_CACHE_HOME/sr` on Unix; on Windows the cache folder under the
+    /// fixture's LOCALAPPDATA.
     fn accounting(&self) -> PathBuf {
-        self.root.join("cache/sr/allowance.sqlite3")
+        #[cfg(unix)]
+        return self.root.join("cache/sr/allowance.sqlite3");
+        #[cfg(windows)]
+        return self
+            .root
+            .join("data")
+            .join("skillranker")
+            .join("cache")
+            .join("allowance.sqlite3");
     }
 
     fn command(&self, port: u16, args: &[&str]) -> Command {
@@ -63,10 +71,13 @@ impl Home {
         command
             .stdin(Stdio::null())
             .env_clear()
+            .platform_env()
             .env("HOME", self.root.join("home"))
             .env("XDG_CONFIG_HOME", self.root.join("config"))
             .env("XDG_CACHE_HOME", self.root.join("cache"))
             .env("XDG_DATA_HOME", self.root.join("data"))
+            // Windows keeps the ledger and cache under LOCALAPPDATA.
+            .env("LOCALAPPDATA", self.root.join("data"))
             .env("TYPESAFE_API_KEY", "synthetic-allowance-canary")
             .env("TYPESAFE_ENDPOINT", format!("https://localhost:{port}"))
             .env("SSL_CERT_FILE", self.root.join("fixture-ca.pem"))
@@ -173,11 +184,10 @@ impl Provider {
         ] {
             std::fs::write(dir.join(name), bytes).unwrap();
         }
-        let mut child = Command::new("/usr/bin/python3")
+        let mut child = stub_python::python_command()
             .arg(dir.join("provider_server.py"))
             .arg(scenario)
             .args(args)
-            .env_clear()
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit())
@@ -610,7 +620,7 @@ fn provider_survives_incomplete_tls_requests_and_then_answers_real_ranking() {
     let home = Home::new();
     let provider = Provider::start(&home);
     let port = provider.port;
-    let aborted = Command::new("/usr/bin/python3")
+    let aborted = stub_python::python_command()
         .arg("-c")
         .arg(
             r#"import socket, ssl, sys
@@ -626,7 +636,6 @@ for payload in [b'', partial]:
         )
         .arg(port.to_string())
         .arg(home.root.join("fixture-ca.pem"))
-        .env_clear()
         .output()
         .unwrap();
     assert!(aborted.status.success(), "{}", describe(&aborted));
@@ -677,20 +686,32 @@ fn a_killed_process_keeps_its_charge() {
     provider.finish();
 }
 
+/// Holds the guard lock from another process: `flock` on Unix; on Windows a
+/// byte-range lock (`msvcrt.locking`, `LockFile`), which conflicts with sr's
+/// whole-file `LockFileEx`.
+#[cfg(unix)]
+const LOCK_HOLDER: &str = "import fcntl, sys, time
+f = open(sys.argv[1], 'w')
+fcntl.flock(f, fcntl.LOCK_EX)
+print('locked', flush=True)
+time.sleep(30)
+";
+#[cfg(windows)]
+const LOCK_HOLDER: &str = "import msvcrt, sys, time
+f = open(sys.argv[1], 'r+b')
+msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)
+print('locked', flush=True)
+time.sleep(30)
+";
+
 #[test]
 fn a_guard_lock_held_elsewhere_withholds_sends_within_a_bounded_wait() {
     let home = Home::new();
     home.budget(1, &["--max-attempts", "10", "--window", "1h", "--apply"]);
     let lock = home.root.join("config/sr/allowance.toml.sr-lock");
-    let mut holder = Command::new("/usr/bin/python3")
+    let mut holder = stub_python::python_command()
         .arg("-c")
-        .arg(
-            "import fcntl, sys, time\n\
-             f = open(sys.argv[1], 'w')\n\
-             fcntl.flock(f, fcntl.LOCK_EX)\n\
-             print('locked', flush=True)\n\
-             time.sleep(30)\n",
-        )
+        .arg(LOCK_HOLDER)
         .arg(&lock)
         .stdout(Stdio::piped())
         .spawn()

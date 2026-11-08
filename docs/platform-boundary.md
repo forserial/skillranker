@@ -89,8 +89,9 @@ claimed as passed by this document.
 
 Windows builds compile the same library and binary. Ranking, roster
 discovery, Claude transcript and session reads, `doctor`, `capabilities`,
-`demo`, hook installation, the response cache and the ledger work. Their
-owner-only stores follow [Windows private storage](windows-private-storage.md).
+`demo`, hook installation, the response cache, the ledger and the enforced
+request allowance work. Their owner-only stores follow
+[Windows private storage](windows-private-storage.md).
 Every component that depends on a private store not yet ported fails closed
 instead of being emulated:
 
@@ -99,7 +100,7 @@ instead of being emulated:
 | Response cache, coordinator leases | Work, in `%LOCALAPPDATA%\skillranker\cache` (sr-winpar.3); a store that fails the policy is refused with its typed error, and optional caching is skipped visibly |
 | Ledger | Works, in `%LOCALAPPDATA%\skillranker\ledger` (sr-winpar.4): `sr ledger`, `observe`, `feedback`, `stats`, `snooze`, recorded shadow trials; a store that fails the policy is refused with its typed error |
 | Provider breaker state | Recorded beside the cache, so cooldowns and half-open probes are shared across processes (sr-winpar.3); an unusable store degrades to process-local protection with a warning |
-| Enforced request allowance | An absent guard means no allowance is configured, as on Unix; an existing guard, accounting store or `sr budget --apply` is refused, which withholds provider requests |
+| Enforced request allowance | Works (sr-winpar.5): `sr budget --apply` writes the guard under the configuration root, the accounting store lives beside the cache, every send is charged durably before it leaves, and any unverifiable guard or accounting state withholds provider requests |
 | Hook invocation counter | Recorded beside the ledger, as on Unix (sr-winpar.4) |
 | Shadow-mode hooks | As on Unix: rank and record when an initialized ledger can record; otherwise skip before any provider request with one stderr line saying why. Advisory mode ranks and publishes |
 | Owner-only exports, roster snapshots and replay case files | Refused: Windows ACLs are not inspected, so owner-only access cannot be established |
@@ -244,9 +245,9 @@ can run out and report `Budget`, as on any loaded host.
   cancelling it would need `unsafe` code the crate forbids.
 - `sr roster --snapshot` is refused along with other owner-only exports.
   `--diff` reads a saved snapshot, but Windows cannot write one.
-- The ledger, hook counter, allowance, breaker, exports and backups still wait
-  on their ports of [Windows private storage](windows-private-storage.md); the
-  cache's implementation and its limits are recorded there.
+- Exports, snapshots, replay cases and installer backups still wait on their
+  ports of [Windows private storage](windows-private-storage.md); the cache,
+  ledger and allowance implementations and their limits are recorded there.
 
 ### Evidence
 

@@ -194,8 +194,10 @@ impl Workspace {
         #[cfg(unix)]
         let base =
             std::fs::canonicalize("/tmp").expect("resolve trusted system temporary directory");
+        // Windows: %LOCALAPPDATA%\sr-tests; %TEMP% may let other local
+        // accounts replace its children, which sr's private stores refuse.
         #[cfg(windows)]
-        let base = std::env::temp_dir();
+        let base = support::tmp_root();
         let root = base.join(format!(
             "sr-cache-identity-{}-{}-{}",
             std::process::id(),

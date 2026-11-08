@@ -33,8 +33,9 @@ pub const PRIVATE_STORAGE: bool = cfg!(any(unix, windows));
 pub const OWNER_ONLY_FILES: bool = cfg!(unix);
 /// `subprocess::run` spawns children.
 pub const OWNED_SUBPROCESS: bool = cfg!(any(target_os = "linux", target_os = "macos", windows));
-/// `allowance` has its guard and accounting modules.
-pub const ENFORCED_ALLOWANCE: bool = cfg!(unix);
+/// `allowance` has its guard and accounting modules: Unix, and Windows since
+/// sr-winpar.5.
+pub const ENFORCED_ALLOWANCE: bool = cfg!(any(unix, windows));
 
 /// Components can also wait on their own port after their boundary exists.
 /// The ledger and the hook invocation counter beside it (`storage::ledger`,

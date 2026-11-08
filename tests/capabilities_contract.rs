@@ -259,17 +259,19 @@ fn platform_availability_is_complete_and_internally_consistent() {
 #[test]
 fn windows_reports_every_unqualified_boundary_as_unavailable() {
     let platform = &registry()["platform"];
-    // Owned subprocesses (sr-winpar.9) and private storage (sr-winpar.3) run
-    // on Windows; the other boundaries do not yet.
+    // Owned subprocesses (sr-winpar.9), private storage (sr-winpar.3) and the
+    // enforced allowance (sr-winpar.5) run on Windows; owner-only files do not
+    // yet.
     for boundary in platform["boundaries"].as_array().unwrap() {
-        let ported =
-            boundary["name"] == "owned-subprocess" || boundary["name"] == "private-storage";
+        let ported = ["owned-subprocess", "private-storage", "enforced-allowance"]
+            .contains(&boundary["name"].as_str().unwrap());
         assert_eq!(boundary["available"], ported, "{boundary}");
         assert_eq!(boundary["reason"].is_string(), !ported, "{boundary}");
     }
     // Ported components: Git dirty_paths (sr-winpar.10); the response cache,
     // its coordinator leases and provider breaker state (sr-winpar.3); the
-    // ledger and hook invocation counter (sr-winpar.4). cass sessions wait on
+    // ledger and hook invocation counter (sr-winpar.4); the enforced request
+    // allowance (sr-winpar.5). cass sessions wait on
     // sr-winpar.11. A component whose boundary exists but which is not ported
     // says so.
     let ported = [
@@ -279,6 +281,7 @@ fn windows_reports_every_unqualified_boundary_as_unavailable() {
         "provider-breaker-state",
         "ledger",
         "hook-invocation-counter",
+        "request-allowance",
     ];
     for component in platform["components"].as_array().unwrap() {
         let expected = ported.contains(&component["name"].as_str().unwrap());

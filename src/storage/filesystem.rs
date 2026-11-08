@@ -546,14 +546,13 @@ impl PrivateDirectory {
         self.path.join(CACHE_FILE)
     }
 
-    /// SQLite opens a pathname, as on Unix: walk and admit the chain again and
-    /// require the same store directory before each effect.
+    /// SQLite opens a pathname, as on Unix: before each effect the store's
+    /// path must still name the held, admitted directory
+    /// (`windows_private::revalidate`).
     pub fn revalidate(&self, clock: EntryClock, cx: &Cx) -> Result<(), StoreError> {
-        let current = super::windows_private::walk(&self.path, false, || check_work(clock, cx))?;
-        if current.identity != self.identity {
-            return Err(StoreError::StoreReplaced);
-        }
-        Ok(())
+        check_work(clock, cx)?;
+        debug_assert_eq!(self.identity, self.held.identity);
+        super::windows_private::revalidate(&self.held, super::windows_private::Leaf::Store)
     }
 
     pub fn inspect_files(&self) -> Result<u64, StoreError> {

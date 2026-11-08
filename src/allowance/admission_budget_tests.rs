@@ -162,23 +162,32 @@ fn late_postcommit_checkpoint_does_not_refund_committed_work() {
     );
 }
 
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
 mod native {
     use super::super::super::{
         Admission, AllowancePaths, COUNTER, accounting, admit, apply_setup, inspect, wall_clock_ms,
     };
     use super::*;
     use crate::jev::{CanonicalOrigin, RankingStage};
-    use std::fs::{self, File};
+    use std::fs;
+    #[cfg(unix)]
+    use std::fs::File;
+    #[cfg(unix)]
     use std::os::unix::fs::DirBuilderExt;
+    #[cfg(unix)]
     use std::path::PathBuf;
     use std::sync::atomic::Ordering;
 
     const GENEROUS: Duration = Duration::from_secs(30);
 
     fn unused_paths() -> AllowancePaths {
+        #[cfg(unix)]
         let base = std::env::var_os("SR_TEST_PERSISTENT_ROOT")
             .map_or_else(|| PathBuf::from("/tmp"), PathBuf::from);
+        // Windows: the walk admits only local fixed NTFS/ReFS volumes, which
+        // is its persistence requirement.
+        #[cfg(windows)]
+        let base = crate::storage::windows_private::test_root();
         let root = base.join(format!(
             "sr-admission-clock-{}-{}",
             std::process::id(),
@@ -189,10 +198,13 @@ mod native {
 
     fn ready() -> AllowancePaths {
         let paths = unused_paths();
-        let root = paths.accounting.parent().unwrap().parent().unwrap();
-        fs::DirBuilder::new().mode(0o700).create(root).unwrap();
-        crate::filesystem_policy::require_persistent(&File::open(root).unwrap())
-            .expect("SR_TEST_PERSISTENT_ROOT must be a supported persistent filesystem");
+        #[cfg(unix)]
+        {
+            let root = paths.accounting.parent().unwrap().parent().unwrap();
+            fs::DirBuilder::new().mode(0o700).create(root).unwrap();
+            crate::filesystem_policy::require_persistent(&File::open(root).unwrap())
+                .expect("SR_TEST_PERSISTENT_ROOT must be a supported persistent filesystem");
+        }
         apply_setup(&paths, 2, GENEROUS, None).unwrap();
         paths
     }

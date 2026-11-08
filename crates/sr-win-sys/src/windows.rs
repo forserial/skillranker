@@ -8,9 +8,10 @@
 //! - Reads never re-resolve a caller's path: object identity comes from the
 //!   handle. The one path a read uses ([`free_bytes_for_caller`]) is the volume
 //!   GUID root that Windows reports for that handle. The two creation calls
-//!   ([`create_directory_with`], [`create_new_file_with`]) take the path the
-//!   caller names, because Win32 creates by name; the caller holds the checked
-//!   parent open so that name still denotes a child of it.
+//!   ([`create_directory_with`], [`create_new_file_with`]) and
+//!   [`replace_file`] take the paths the caller names, because Win32 creates
+//!   and renames by name; the caller holds the checked parent open so those
+//!   names still denote children of it.
 //! - Buffers are Rust-owned with lengths passed in units Windows expects;
 //!   memory Windows allocates (`GetSecurityInfo`,
 //!   `ConvertStringSecurityDescriptorToSecurityDescriptorW`) is freed by a guard
@@ -47,7 +48,8 @@ use windows_sys::Win32::Storage::FileSystem::{
     CREATE_NEW, CreateDirectoryW, CreateFileW, FILE_ATTRIBUTE_NORMAL, FILE_FLAG_OPEN_REPARSE_POINT,
     FILE_REMOTE_PROTOCOL_INFO, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
     FileRemoteProtocolInfo, GetDiskFreeSpaceExW, GetDriveTypeW, GetFileInformationByHandleEx,
-    GetFinalPathNameByHandleW, GetVolumeInformationByHandleW, VOLUME_NAME_DOS, VOLUME_NAME_GUID,
+    GetFinalPathNameByHandleW, GetVolumeInformationByHandleW, MOVEFILE_REPLACE_EXISTING,
+    MOVEFILE_WRITE_THROUGH, MoveFileExW, VOLUME_NAME_DOS, VOLUME_NAME_GUID,
 };
 use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
 
@@ -478,6 +480,30 @@ pub fn create_new_file_with(path: &Path, sddl: &str) -> io::Result<File> {
     // SAFETY: CreateFileW returned a valid handle that this function owns;
     // the File closes it exactly once.
     Ok(File::from(unsafe { OwnedHandle::from_raw_handle(handle) }))
+}
+
+/// Atomically replaces `to` with `from` (both in the same directory), the
+/// Windows counterpart of `renameat` followed by a directory `fsync`:
+/// `MoveFileExW` with `MOVEFILE_REPLACE_EXISTING`, so an existing target is
+/// replaced in one rename and never left missing, and `MOVEFILE_WRITE_THROUGH`,
+/// so the call returns only after the rename is flushed to disk. A target that
+/// is a link is replaced, not followed. Fails if `from` is open without
+/// `FILE_SHARE_DELETE` or `to` is open by a process that did not share delete.
+pub fn replace_file(from: &Path, to: &Path) -> io::Result<()> {
+    let from = wide_path(from)?;
+    let to = wide_path(to)?;
+    // SAFETY: both paths are NUL-terminated and outlive the call.
+    if unsafe {
+        MoveFileExW(
+            from.as_ptr(),
+            to.as_ptr(),
+            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+        )
+    } == 0
+    {
+        return Err(last_error());
+    }
+    Ok(())
 }
 
 #[cfg(test)]

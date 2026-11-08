@@ -9,6 +9,10 @@
 //!   network-free disclosure preflight, and scores baselines from the same answers.
 //! - `--labels` scores a labeled case frame; `--sample-size`/`--seed` freeze a sample first.
 
+#[path = "support/stub_python.rs"]
+mod stub_python;
+mod support;
+
 #[path = "support/links.rs"]
 mod links;
 use links::symlink;
@@ -22,17 +26,21 @@ use std::time::{Duration, Instant};
 static FIXTURE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 fn temp_root() -> PathBuf {
-    let root = std::fs::canonicalize("/tmp")
-        .expect("resolve trusted system temporary directory")
-        .join(format!(
-            "sr-eval-cli-{}-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos(),
-            FIXTURE_COUNTER.fetch_add(1, Ordering::Relaxed),
-        ));
+    #[cfg(unix)]
+    let base = std::fs::canonicalize("/tmp").expect("resolve trusted system temporary directory");
+    // Windows: /tmp is C:\tmp, whose inherited entries let other users replace
+    // its children, which sr's private stores refuse.
+    #[cfg(windows)]
+    let base = support::tmp_root();
+    let root = base.join(format!(
+        "sr-eval-cli-{}-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos(),
+        FIXTURE_COUNTER.fetch_add(1, Ordering::Relaxed),
+    ));
     fs::create_dir_all(root.join("workspace")).unwrap();
     fs::create_dir_all(root.join("config")).unwrap();
     root
@@ -751,16 +759,9 @@ impl LiveProvider {
         ] {
             fs::write(dir.join(name), bytes).unwrap();
         }
-        // Windows has no fixed interpreter path, and Python needs SystemRoot there.
-        let mut server = Command::new(if cfg!(windows) {
-            "python"
-        } else {
-            "/usr/bin/python3"
-        });
-        if cfg!(not(windows)) {
-            server.env_clear();
-        }
-        let mut child = server
+        // The shared interpreter lookup: /usr/bin/python3 on Unix, the real
+        // interpreter behind `python` on Windows, with SystemRoot kept there.
+        let mut child = stub_python::python_command()
             .arg(dir.join("provider_server.py"))
             .arg(scenario)
             .stdin(Stdio::null())

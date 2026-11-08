@@ -2444,12 +2444,12 @@ impl PrivateLedgerDirectory {
         admitted_file(&current).map(|_| ())
     }
 
+    /// Before each effect the ledger's path must still name the held,
+    /// admitted directory (`windows_private::revalidate`).
     pub fn revalidate(&self, clock: EntryClock, cx: &Cx) -> Result<(), StoreError> {
-        let current = super::windows_private::walk(&self.path, false, || check_work(clock, cx))?;
-        if current.identity != self.identity {
-            return Err(StoreError::StoreReplaced);
-        }
-        Ok(())
+        check_work(clock, cx)?;
+        debug_assert_eq!(self.identity, self.held.identity);
+        super::windows_private::revalidate(&self.held, super::windows_private::Leaf::Store)
     }
 
     pub fn inspect_files(&self) -> Result<u64, StoreError> {

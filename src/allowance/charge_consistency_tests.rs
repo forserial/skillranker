@@ -39,13 +39,15 @@ fn verified(db: &mut Connection, origin: &str, window: u64) -> Result<u32, Allow
 }
 
 fn paths() -> AllowancePaths {
-    let root = std::fs::canonicalize("/tmp")
-        .expect("resolve trusted system temporary directory")
-        .join(format!(
-            "sr-charge-consistency-{}-{}",
-            std::process::id(),
-            COUNTER.fetch_add(1, Ordering::Relaxed)
-        ));
+    #[cfg(unix)]
+    let base = std::fs::canonicalize("/tmp").expect("resolve trusted system temporary directory");
+    #[cfg(windows)]
+    let base = crate::storage::windows_private::test_root();
+    let root = base.join(format!(
+        "sr-charge-consistency-{}-{}",
+        std::process::id(),
+        COUNTER.fetch_add(1, Ordering::Relaxed)
+    ));
     AllowancePaths::new(&root.join("config"), &root.join("cache"))
 }
 
