@@ -524,3 +524,76 @@ The original overlap/concurrent-read implementation and executed synthetic
 unchanged-outcome/measured-improvement acceptance are complete. Review and
 fresh re-execution were solo; there was no independent verifier. Separate
 quality, organic rollout, public-provider and platform gates remain open.
+
+## 2026-11-08, native Windows live run (sr-winpar.20)
+
+- Binary: `cargo build --release --locked --bin sr` at `aaf2948`, `sr.exe`
+  SHA256 `1eeb3be27970253e607740f651c4fcd5e7a0f4b1e7367a8041f1b53d6cee0289`.
+- Host: Intel Core i7-12700KF, 20 logical CPUs, 128 GiB, Windows 11 Pro
+  10.0.26300, NTFS; the maintainer's desktop, not a quiet benchmark host.
+- Provider: TypeSafe, live, `jev-latest` answered as `jev-1.14.0` for both
+  stages. Credential from the user environment, never printed.
+- Isolation: a throwaway `XDG_CONFIG_HOME` and `LOCALAPPDATA` under
+  `%LOCALAPPDATA%\sr-tests\sr-live-20` held the trusted network consent,
+  advisory mode, the cache and an enforced allowance of 44 attempts per hour
+  (`sr budget --apply`). All 44 were used and none more.
+- Roster: 303 skills from one configured root (`~\.skills-manager\skills`).
+  The default `~\.claude\skills` holds only symlinked folders, which
+  discovery skips, so the default roster is empty on this machine. 303 is
+  above the 254-skill limit, so the lexical prefilter ran.
+- Context: a real 10 MB Claude Code transcript of this repository (bounded
+  tail, redacted as always) and synthetic hook prompts. No transcript text is
+  recorded here.
+- Method: each hook run is a fresh `sr hook claude` process fed one
+  `UserPromptSubmit` payload. Wall time is measured around the process, and
+  peak working set is sampled every 10 ms.
+
+Live rank (`sr rank --transcript FILE --harness claude_code --allow-network`):
+`ranked`, 1,216 ms (1,263 ms wall clock), 2 requests and 2 HTTP attempts,
+16,323 input and 2,774 output tokens, no unknown usage.
+
+| Path | n | p50 / p95 / p99 | Min / max | Requests | Peak working set |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Network hook, cold first run | 1 | 1,358 ms | | 2 | 26.6 MB |
+| Network hook, warm | 18 | 1,260 / 1,490 / 1,490 ms | 1,193 / 1,490 ms | 36 | 26.3-27.2 MB |
+| Exact-cache hook hit | 19 | 745 / 972 / 972 ms | 651 / 972 ms | 0 | 22.2-22.8 MB |
+
+- Every run exited 0 with no timeout, fallback or error. Of the 19 network
+  runs, 11 published advice and 8 abstained silently. Each made both requests,
+  since `none` won after the rerank. The first repeat of the exact-cache
+  prompt missed (1,250 ms, 2 requests); the next 19 hit and published.
+- p99 at n = 18-19 is the maximum.
+- The hook does not report token usage, so usage for the hook runs is the
+  attempt count above. Unknown usage was zero in the live rank.
+
+Against the targets (README, AGENTS.md):
+
+| Target | Measured | Status |
+| --- | --- | --- |
+| Exact-cache p95 <= 100 ms | 972 ms | Not met |
+| Warm network hook p50 <= 600 ms | 1,260 ms | Not met |
+| Warm network hook p95 <= 1,500 ms | 1,490 ms | Met, narrowly |
+| Within the 3,000 ms deadline | max 1,490 ms | Met |
+
+The exact-cache hit costs about 650-970 ms on Windows, against 73 ms (p50)
+on the Linux host above with 206 skills. That time is local work before and
+around the cache: process start, discovery of a 303-skill roster through
+the Windows walk, the transcript tail read and the private-store checks.
+Profiling it is follow-up work. The network p50 adds two sequential provider
+stages to that local cost.
+
+Real Claude Code turn: Claude Code 2.1.296, signed in through claude.ai.
+`sr install-hook claude --settings-file TEMP --apply` wrote
+`"C:/Users/jmdzi/git/skillranker/target/release/sr.exe" hook claude` (the
+Git Bash form) with a 4 s timeout. One `claude -p --settings TEMP` turn then
+asked the model to report whether a SkillRanker note was present.
+
+- The model answered `SKILLRANKER: yes code-evolution`.
+- The session transcript holds a `hook_additional_context` attachment from
+  `UserPromptSubmit`: "Suggested skill for the next step: code-evolution. Use
+  it only if it fits the user's request and current instructions."
+- The turn took 34.6 s wall clock, mostly the model.
+- The model also noted that `code-evolution` was not among its loadable
+  skills. The configured root (303 skills) is wider than what Claude sees
+  through `~\.claude\skills` (53 links), which is why `sr` marks configured
+  roots `unverified`.
