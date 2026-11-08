@@ -396,10 +396,14 @@ fn concurrent_processes_never_exceed_the_window() {
     let served = provider.finish();
     assert!(served <= 5, "{served} sends exceeded the allowance of 5");
     let report = home.budget(port, &[]);
-    assert_eq!(
-        report["charged_attempts"].as_u64(),
-        Some(served as u64),
-        "every send was charged exactly once: {report}"
+    // Every send was charged, and no more than the limit was charged. A charge
+    // may exceed the sends: an admission whose deadline expires after its
+    // debit committed is withheld and, by design, never refunded
+    // (`allowance::admit`; sr-winpar.28).
+    let charged = report["charged_attempts"].as_u64().unwrap();
+    assert!(
+        served as u64 <= charged && charged <= 5,
+        "sends {served} <= charges {charged} <= 5 does not hold: {report}"
     );
     let refused = outputs
         .iter()

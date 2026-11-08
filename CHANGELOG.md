@@ -98,6 +98,15 @@
 
 ### Fixed
 
+- Concurrent rankings no longer time out waiting for the request allowance
+  on Windows. Each admission now opens and checks the accounting store
+  before taking the shared lock, reads the guard through the lock's
+  already-checked folder, and no longer re-checks the lock file on every poll
+  while waiting. The lock is held for about half as long. Before, four
+  concurrent `sr rank` processes could exceed the 250 ms admission budget
+  and get `budget-state`, sometimes after their charge was kept. On Unix the
+  store is also opened before the lock; the other checks are unchanged.
+
 - Unix hook-installer and snooze backups are now owner-only or refused. The
   backups directory is walked and created without following symlinks. It must
   be owned by you with mode 0700, under parents nobody else can write to, and

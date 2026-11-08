@@ -734,6 +734,20 @@ pub enum Admission {
     Debited(Debit),
 }
 
+/// The admission budget unit tests give operations that are not testing the
+/// budget itself (those pass `Duration::ZERO`). The product budget is 250 ms
+/// (`pipeline::debit_allowance`), exercised across processes by
+/// tests/allowance_contract.rs. On Windows each admission costs about ten
+/// times its Unix cost in owner-only checks, and about 45 unit tests run in
+/// parallel threads with `synchronous=FULL` writes, so 200 ms occasionally
+/// expired there (sr-winpar.28).
+#[cfg(test)]
+const TEST_LOCK_BUDGET: Duration = if cfg!(windows) {
+    Duration::from_millis(1_000)
+} else {
+    Duration::from_millis(200)
+};
+
 /// Checks the guard and, when it is ready, debits one attempt durably.
 ///
 /// Under the setup lock: re-read the guard, match its generation to the
@@ -747,6 +761,8 @@ pub enum Admission {
 /// scans, lock waits and commit verification share one monotonic start time.
 /// Expiry before commit rolls back; expiry after a possible commit withholds
 /// admission without refund. Unconfigured/stateless behavior is unchanged.
+/// The accounting store is opened before the lock and verified again under
+/// it, so the lock covers only the guard read, the checks and the debit.
 /// These are cooperative checks, not interruption of a kernel filesystem wait.
 pub fn admit(
     paths: &AllowancePaths,
@@ -770,9 +786,18 @@ pub fn admit(
     if read_guard(paths)?.is_none() {
         return Ok(Admission::Unguarded);
     }
+    // Open, admit and configure the accounting store before taking the lock,
+    // so concurrent admissions overlap that work instead of queuing behind it
+    // (sr-winpar.28: on Windows it is about half of the time an admission
+    // held the lock). Nothing it read is trusted yet: under the lock the guard
+    // is read again, the files are verified again, and the debit transaction
+    // re-reads the generation and charges. An early open that fails, such as
+    // during an interrupted setup, is redone under the lock, which reports the
+    // same error the earlier order did.
+    let early = accounting::open_writer_with_budget(&paths.accounting, false, Some(budget)).ok();
     let _lock = GuardLock::acquire(paths, budget.remaining()?)?;
     budget.check()?;
-    let guard = read_guard(paths)?;
+    let guard = _lock.read_guard(&paths.guard)?;
     budget.check()?;
     let Some(guard) = guard else {
         drop(_lock);
@@ -784,8 +809,10 @@ pub fn admit(
             "allowance setup is incomplete; rerun sr budget --apply to finish it",
         ));
     }
-    let mut accounting =
-        accounting::open_writer_with_budget(&paths.accounting, false, Some(budget))?;
+    let mut accounting = match early {
+        Some(store) => store,
+        None => accounting::open_writer_with_budget(&paths.accounting, false, Some(budget))?,
+    };
     accounting.files.verify()?;
     budget.refresh_busy_wait(&accounting.connection)?;
     let tx = accounting
@@ -907,7 +934,7 @@ mod tests {
         CanonicalOrigin::production()
     }
 
-    const LOCK: Duration = Duration::from_millis(200);
+    const LOCK: Duration = super::TEST_LOCK_BUDGET;
 
     #[test]
     fn the_accounting_writer_is_wal_with_synchronous_full() {

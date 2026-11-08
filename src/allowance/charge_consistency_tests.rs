@@ -1,7 +1,7 @@
 //! Totals and per-attempt evidence must agree before an enforced admission.
 use super::*;
 
-const LOCK: Duration = Duration::from_millis(200);
+const LOCK: Duration = TEST_LOCK_BUDGET;
 
 fn database() -> Connection {
     let db = Connection::open_in_memory().unwrap();

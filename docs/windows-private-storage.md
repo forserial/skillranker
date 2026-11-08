@@ -413,6 +413,24 @@ every writer, and a debit committed before each send.
     held.
   - `std::fs::rename` was not chosen: it does not request write-through, and
     NTFS directories cannot be flushed from a read-only handle.
+- **Lock hold time (sr-winpar.28).** The lock is held only for the guard
+  read, the store checks and the debit.
+  - **Why it mattered.** Each Windows check costs about ten times its Unix
+    equivalent. Holding the lock for a whole admission took about 30 ms, and
+    four concurrent processes with two stages each could queue past the 250 ms
+    admission budget. A queued process was refused with `budget-state`,
+    sometimes after its charge had committed (kept, never refunded).
+  - **Before the lock.** Each admission opens, admits and configures the
+    accounting store. Nothing read then is trusted yet: under the lock the guard
+    is read again, the files are verified again, and the debit transaction
+    re-reads the generation. An early open that fails is redone under the lock.
+  - **Under the lock.** The guard is read through the lock's held folder, which
+    is revalidated rather than walked again from the volume root.
+  - **While waiting.** A waiting process no longer re-checks the lock file on
+    every 2 ms poll; it checks once it holds the lock.
+  - **Result on the evidence machine.** The lock is held for about 15 ms. The
+    four-process case passed 40 of 40 runs alone and the allowance suite 20 of
+    20, where before it failed about two runs in five.
 - **Accounting.** The accounting store (`allowance.sqlite3` beside the cache) is
   admitted like the cache by `src/allowance/accounting_windows.rs`. Its sidecars
   must sit on the folder's volume. The SQLite layer is shared with Unix.

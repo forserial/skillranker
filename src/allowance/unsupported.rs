@@ -52,6 +52,13 @@ pub(super) mod guard_file {
         ) -> Result<Self, AllowanceError> {
             Err(unsupported())
         }
+
+        pub(in crate::allowance) fn read_guard(
+            &self,
+            _: &std::path::Path,
+        ) -> Result<Option<Guard>, AllowanceError> {
+            match *self {}
+        }
     }
 
     pub(in crate::allowance) fn publish(

@@ -110,18 +110,16 @@ impl Parent {
     }
 }
 
-struct Reader {
-    parent: Parent,
+struct Reader<'a> {
+    parent: &'a Parent,
     name: OsString,
     file: File,
     before: Metadata,
 }
 
-impl Reader {
-    fn open(path: &Path) -> Result<Option<Self>, AllowanceError> {
-        let Some((parent, name)) = Parent::open(path, false)? else {
-            return Ok(None);
-        };
+impl<'a> Reader<'a> {
+    /// Open the guard `name` in an already admitted folder.
+    fn open_in(parent: &'a Parent, name: OsString) -> Result<Option<Self>, AllowanceError> {
         if !parent.inspect(&name)? {
             parent.revalidate()?;
             return Ok(None);
@@ -161,16 +159,43 @@ impl Reader {
 }
 
 pub(super) fn read(path: &Path) -> Result<Option<Guard>, AllowanceError> {
-    Reader::open(path)?.map(Reader::read).transpose()
+    let Some((parent, name)) = Parent::open(path, false)? else {
+        return Ok(None);
+    };
+    Reader::open_in(&parent, name)?
+        .map(Reader::read)
+        .transpose()
 }
 
 /// This lock file is never renamed or deleted by sr. The same opened file is
-/// retried; the lock is released when the handle closes.
+/// retried; the lock is released when the handle closes. The folder walked to
+/// reach it stays held, so the guard beside it can be read under the lock
+/// without walking from the volume root again.
 pub(super) struct GuardLock {
     _file: File,
+    parent: Parent,
 }
 
 impl GuardLock {
+    /// Read the guard under this lock. When the guard sits in the lock's own
+    /// folder, that held folder is revalidated (its path still names it and
+    /// it still satisfies the configuration-folder rule) instead of walked
+    /// again from the volume root; about 4 ms less of the lock's hold time on
+    /// Windows (sr-winpar.28). Any other location is read as `read` reads it.
+    pub(super) fn read_guard(&self, path: &Path) -> Result<Option<Guard>, AllowanceError> {
+        let path = crate::platform_path::storage_path(path.to_path_buf());
+        let (Some(parent), Some(name)) = (path.parent(), path.file_name()) else {
+            return Err(unavailable());
+        };
+        if parent != self.parent.path {
+            return read(&path);
+        }
+        self.parent.revalidate()?;
+        Reader::open_in(&self.parent, name.to_owned())?
+            .map(Reader::read)
+            .transpose()
+    }
+
     pub(super) fn acquire(
         paths: &AllowancePaths,
         budget: Duration,
@@ -184,7 +209,10 @@ impl GuardLock {
             match file.try_lock() {
                 Ok(()) => {
                     parent.verify(&name, &file)?;
-                    return Ok(Self { _file: file });
+                    return Ok(Self {
+                        _file: file,
+                        parent,
+                    });
                 }
                 Err(TryLockError::WouldBlock) => {
                     let remaining = budget.saturating_sub(started.elapsed());
@@ -196,7 +224,11 @@ impl GuardLock {
                     if started.elapsed() >= budget {
                         return Err(state("the guard lock is busy"));
                     }
-                    parent.verify(&name, &file)?;
+                    // Unlike Unix, no re-check while waiting: on Windows it
+                    // costs about 1.5 ms of handle opens and descriptor reads
+                    // per 2 ms poll, which slowed the holder of the lock
+                    // (sr-winpar.28). The lock file is verified again as soon
+                    // as it is acquired, before anything is trusted.
                 }
                 Err(TryLockError::Error(_)) => {
                     return Err(state("the guard lock cannot be acquired"));

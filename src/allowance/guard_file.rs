@@ -236,6 +236,12 @@ pub(super) struct GuardLock {
 }
 
 impl GuardLock {
+    /// Read the guard under this lock: on Unix, exactly as [`read`] does (the
+    /// descriptor walk is cheap). Windows reuses the lock's held folder.
+    pub(super) fn read_guard(&self, path: &Path) -> Result<Option<Guard>, AllowanceError> {
+        read(path)
+    }
+
     pub(super) fn acquire(
         paths: &AllowancePaths,
         budget: Duration,
