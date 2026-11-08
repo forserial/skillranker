@@ -1,3 +1,5 @@
+// Applies an enforced request allowance with `sr budget --apply`, which
+// Windows does not have yet (sr-winpar.5).
 #![cfg(any(target_os = "linux", target_os = "macos"))]
 //! Phase P7 advisory rollout and return-to-shadow fencing contract.
 //!
@@ -13,12 +15,16 @@
 //!    in flight fences the prepared recommendation before stdout publication, and
 //!    subsequent turns remain quiet under provider outage (`503`).
 
+#[path = "support/stub_python.rs"]
+mod stub_python;
 mod support;
+use support::PlatformEnv;
 
 use serde_json::{Value, json};
 use skillranker::limits::HOOK_ADDITIONAL_CONTEXT_SCALARS;
 use std::io::{BufRead, BufReader, Write};
-use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::process::{Child, ChildStdout, Command, Output, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -43,11 +49,7 @@ impl Home {
             "state",
             "workspace",
         ] {
-            std::fs::DirBuilder::new()
-                .recursive(true)
-                .mode(0o700)
-                .create(root.join(dir))
-                .unwrap();
+            support::create_private_dir(root.join(dir));
         }
         let skill = root.join("workspace/.claude/skills/rust-repair");
         std::fs::create_dir_all(&skill).unwrap();
@@ -70,13 +72,10 @@ impl Home {
 
     fn write_trusted_config(&self, body: &str) {
         let dir = self.root.join("config/sr");
-        std::fs::DirBuilder::new()
-            .recursive(true)
-            .mode(0o700)
-            .create(&dir)
-            .unwrap();
+        support::create_private_dir(&dir);
         let path = self.config_path();
         std::fs::write(&path, body).unwrap();
+        #[cfg(unix)]
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
     }
 
@@ -84,10 +83,13 @@ impl Home {
         let mut command = Command::new(env!("CARGO_BIN_EXE_sr"));
         command
             .env_clear()
+            .platform_env()
             .env("HOME", self.root.join("home"))
             .env("XDG_CONFIG_HOME", self.root.join("config"))
             .env("XDG_CACHE_HOME", self.root.join("cache"))
             .env("XDG_DATA_HOME", self.root.join("data"))
+            // Windows keeps the ledger and cache under LOCALAPPDATA.
+            .env("LOCALAPPDATA", self.root.join("data"))
             .env("XDG_STATE_HOME", self.root.join("state"))
             .env("TYPESAFE_API_KEY", CANARY)
             .env("TYPESAFE_ENDPOINT", format!("https://localhost:{port}"))
@@ -201,11 +203,10 @@ impl Provider {
         ] {
             std::fs::write(dir.join(name), bytes).unwrap();
         }
-        let mut cmd = Command::new("/usr/bin/python3");
+        let mut cmd = stub_python::python_command();
         cmd.arg(dir.join("provider_server.py"))
             .arg(scenario)
             .args(extra_args)
-            .env_clear()
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit());

@@ -6,16 +6,18 @@
 //! - Distinct ranking and observation watermarks for session cursors
 //! - Privacy invariants: no skill bodies or secrets in roster snapshots
 //! - Headroom and store replacement protection
-// Exercises the Unix-only private store; Windows builds refuse it (see docs/platform-boundary.md).
-#![cfg(unix)]
+
+mod support;
+#[cfg(unix)]
+use support::OwnerOnly;
 
 use asupersync::Cx;
 use rusqlite::Connection;
 use skillranker::runtime::ProcessInvocation;
 use skillranker::storage::StoreError;
 use skillranker::storage::ledger::*;
+#[cfg(unix)]
 use std::fs;
-use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -548,6 +550,9 @@ fn generous_invocation() -> (ProcessInvocation, Cx) {
     (invocation, cx)
 }
 
+// Windows refuses renaming a database SQLite holds open (sharing violation),
+// so the replacement cannot be staged there.
+#[cfg(unix)]
 #[test]
 fn ledger_handle_rejects_same_directory_database_replacement() {
     let (inv, cx) = test_invocation();
@@ -585,7 +590,7 @@ fn ledger_handle_rejects_same_directory_database_replacement() {
     let replacement = fs::OpenOptions::new()
         .write(true)
         .create_new(true)
-        .mode(0o600)
+        .owner_only()
         .open(&path)
         .unwrap();
     let read = store.get_session_cursor(
@@ -655,7 +660,7 @@ fn ledger_handle_uses_current_context_after_opener_cancel_or_expiry() {
 fn temp_ledger_dir(test_name: &str) -> PathBuf {
     // RCH's TMPDIR can have ancestors owned by a different user. Exercise
     // storage under Linux's root-owned sticky /tmp without relaxing checks.
-    let dir = PathBuf::from("/tmp").join(format!(
+    let dir = support::tmp_root().join(format!(
         "sr-ledger-test-{}-{}-{}",
         test_name,
         std::process::id(),
@@ -664,11 +669,7 @@ fn temp_ledger_dir(test_name: &str) -> PathBuf {
             .unwrap()
             .as_nanos()
     ));
-    fs::DirBuilder::new()
-        .mode(0o700)
-        .recursive(true)
-        .create(&dir)
-        .expect("temp dir create");
+    support::create_private_dir(&dir);
     dir
 }
 

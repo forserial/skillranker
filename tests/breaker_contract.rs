@@ -25,7 +25,7 @@ impl Home {
     fn new() -> Self {
         let root = support::private_store_dir("breaker");
         for dir in ["home", "config", "cache", "data", "workspace"] {
-            support::create_private_dir(&root.join(dir));
+            support::create_private_dir(root.join(dir));
         }
         for (name, description) in [
             ("alpha", "Runs and repairs failing rust tests."),

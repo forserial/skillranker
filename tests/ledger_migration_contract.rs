@@ -9,8 +9,9 @@
 //! - Hooks / rank never silently initialize or migrate ledger (`LedgerAccess::ExistingOnly` returns `LedgerOpen::Missing` if absent).
 //! - Real live WAL data survives backup/restore.
 //! - Crash each migration boundary, repeat init, test new/old schemas, quota failure, concurrent writer.
-// Exercises the Unix-only private store; Windows builds refuse it (see docs/platform-boundary.md).
-#![cfg(unix)]
+
+mod support;
+use support::OwnerOnly;
 
 use asupersync::Cx;
 use rusqlite::Connection;
@@ -18,13 +19,12 @@ use skillranker::runtime::ProcessInvocation;
 use skillranker::storage::ledger::*;
 use skillranker::storage::*;
 use std::fs;
-use std::os::unix::fs::DirBuilderExt;
 use std::path::PathBuf;
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 fn temp_private_dir(prefix: &str) -> PathBuf {
-    let dir = PathBuf::from("/tmp").join(format!(
+    let dir = support::tmp_root().join(format!(
         "sr-{}-{}-{}",
         prefix,
         std::process::id(),
@@ -33,11 +33,7 @@ fn temp_private_dir(prefix: &str) -> PathBuf {
             .unwrap()
             .as_nanos()
     ));
-    fs::DirBuilder::new()
-        .mode(0o700)
-        .recursive(true)
-        .create(&dir)
-        .expect("temp dir create");
+    support::create_private_dir(&dir);
     dir
 }
 
@@ -218,12 +214,11 @@ fn absent_only_init_creates_schema_and_reinit_is_idempotent_without_reset() {
     let bad_dir = temp_private_dir("bad-store");
     let bad_db_path = bad_dir.join(LEDGER_FILE);
     {
-        use std::os::unix::fs::OpenOptionsExt;
         let _ = fs::OpenOptions::new()
             .write(true)
             .create(true)
             .truncate(true)
-            .mode(0o600)
+            .owner_only()
             .open(&bad_db_path)
             .unwrap();
         let conn = Connection::open(&bad_db_path).unwrap();

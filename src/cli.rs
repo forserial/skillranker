@@ -5777,7 +5777,7 @@ fn hook_prerequisites(
         });
     let ledger = match ledger {
         _ if !crate::platform_support::LEDGER_STORAGE => {
-            "unavailable: Windows builds have no ledger, so a recorded trial is not possible; \
+            "unavailable: this platform has no ledger, so a recorded trial is not possible; \
              shadow hooks skip ranking and send no provider requests"
                 .to_owned()
         }
@@ -7190,7 +7190,6 @@ mod invocation_cleanup_tests {
         assert_eq!(result.as_value(), &original);
     }
 
-    #[cfg(unix)]
     fn prepared_explicit_pipeline() -> (
         ProcessInvocation,
         crate::pipeline::PipelineOutcome,
@@ -7200,7 +7199,11 @@ mod invocation_cleanup_tests {
         static NEXT: AtomicU64 = AtomicU64::new(0);
         // RCH's TMPDIR can have writable ancestors. Use the same trusted
         // sticky /tmp boundary as the private-store integration tests.
-        let root = std::path::Path::new("/tmp").join(format!(
+        #[cfg(unix)]
+        let base = std::path::PathBuf::from("/tmp");
+        #[cfg(windows)]
+        let base = crate::storage::windows_private::test_root();
+        let root = base.join(format!(
             "sr-completion-test-{}-{}",
             std::process::id(),
             NEXT.fetch_add(1, Ordering::Relaxed),
@@ -7306,8 +7309,6 @@ mod invocation_cleanup_tests {
         (invocation, outcome, connection)
     }
 
-    // Initializes a ledger, which Windows does not have yet (sr-winpar.4).
-    #[cfg(unix)]
     #[test]
     fn timely_pipeline_advice_survives_a_delayed_cli_continuation() {
         let (invocation, outcome, _) = prepared_explicit_pipeline();
@@ -7345,8 +7346,6 @@ mod invocation_cleanup_tests {
         );
     }
 
-    // Initializes a ledger, which Windows does not have yet (sr-winpar.4).
-    #[cfg(unix)]
     #[test]
     fn expired_cli_completion_exposes_the_unreconciled_prepared_ledger_outcome() {
         let (invocation, outcome, connection) = prepared_explicit_pipeline();

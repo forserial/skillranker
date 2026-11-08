@@ -38,8 +38,8 @@ pub const ENFORCED_ALLOWANCE: bool = cfg!(unix);
 
 /// Components can also wait on their own port after their boundary exists.
 /// The ledger and the hook invocation counter beside it (`storage::ledger`,
-/// `storage::hook_entries`) run only on Unix; sr-winpar.4.
-pub const LEDGER_STORAGE: bool = cfg!(unix);
+/// `storage::hook_entries`): Unix, and Windows since sr-winpar.4.
+pub const LEDGER_STORAGE: bool = cfg!(any(unix, windows));
 /// Provider breaker state (`breaker::store`): Unix, and Windows since
 /// sr-winpar.3.
 pub const BREAKER_STORAGE: bool = cfg!(any(unix, windows));

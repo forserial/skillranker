@@ -1,4 +1,3 @@
-#![cfg(unix)]
 //! Provider attempts recorded by a real ranking run (sr-roadmap-l1i.6.7).
 //!
 //! This is the harness that did not exist. Recording needs a provider, so the hook
@@ -12,9 +11,12 @@
 //! with an initialised ledger, then reads `provider_attempts` with a plain SQLite
 //! connection. The fixture follows `tests/real_rank_coordination.rs`, which owns the
 //! same provider server.
+#[path = "support/stub_python.rs"]
+mod stub_python;
+mod support;
+
 use serde_json::{Value, json};
 use std::io::{BufRead, BufReader};
-use std::os::unix::fs::DirBuilderExt;
 use std::path::PathBuf;
 use std::process::{Child, ChildStdout, Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -45,7 +47,7 @@ impl Fixture {
         // Owner-only directories under Linux's root-owned sticky /tmp: the store
         // refuses a group- or other-writable ancestor, and a worker's TMPDIR can
         // have one.
-        let root = PathBuf::from("/tmp").join(format!(
+        let root = support::tmp_root().join(format!(
             "sr-attempt-rec-{}-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
@@ -54,17 +56,9 @@ impl Fixture {
                 .as_nanos(),
             NEXT.fetch_add(1, Ordering::Relaxed)
         ));
-        std::fs::DirBuilder::new()
-            .mode(0o700)
-            .recursive(true)
-            .create(&root)
-            .unwrap();
+        support::create_private_dir(&root);
         for sub in ["workspace/.claude/skills", "config/sr", "home", "data"] {
-            std::fs::DirBuilder::new()
-                .mode(0o700)
-                .recursive(true)
-                .create(root.join(sub))
-                .unwrap();
+            support::create_private_dir(root.join(sub));
         }
         std::fs::write(root.join("config/sr/config.toml"), CONSENT).unwrap();
         let f = Self { root };
@@ -82,7 +76,7 @@ impl Fixture {
     }
 
     fn ledger_db(&self) -> PathBuf {
-        self.data_home().join("sr/ledger.sqlite3")
+        support::ledger_under(&self.data_home()).join("ledger.sqlite3")
     }
 
     fn skill(&self, name: &str, description: &str) {
@@ -101,12 +95,12 @@ impl Fixture {
 
     /// A transcript whose records carry `uuid`s, as Claude's own do.
     fn claude_session(&self, session: &str, request: &str) {
-        let workspace = std::fs::canonicalize(self.workspace()).unwrap();
+        let workspace = support::canonical(&self.workspace());
         let workspace_str = workspace.to_str().unwrap();
         let directory = self
             .root
             .join("home/.claude/projects")
-            .join(workspace_str.replace('/', "-"));
+            .join(support::claude_project_name(workspace_str));
         std::fs::create_dir_all(&directory).unwrap();
         let record = |n: u8, parent: Option<String>, text: &str| {
             json!({
@@ -135,12 +129,12 @@ impl Fixture {
     /// Appends another user turn, as Claude does between hook invocations: a new
     /// record with its own uuid, parented on the previous one.
     fn append_turn(&self, session: &str, request: &str, n: u8) {
-        let workspace = std::fs::canonicalize(self.workspace()).unwrap();
+        let workspace = support::canonical(&self.workspace());
         let workspace_str = workspace.to_str().unwrap();
         let directory = self
             .root
             .join("home/.claude/projects")
-            .join(workspace_str.replace('/', "-"));
+            .join(support::claude_project_name(workspace_str));
         let path = directory.join(format!("{session}.jsonl"));
         let record = json!({
             "type": "user",
@@ -195,7 +189,7 @@ impl Fixture {
     }
 
     fn append_record(&self, session: &str, n: u8, mut record: Value) {
-        let workspace = std::fs::canonicalize(self.workspace()).unwrap();
+        let workspace = support::canonical(&self.workspace());
         let workspace_str = workspace.to_str().unwrap();
         let object = record.as_object_mut().unwrap();
         object.insert("uuid".into(), json!(format!("{session}-{n}")));
@@ -206,7 +200,7 @@ impl Fixture {
         let path = self
             .root
             .join("home/.claude/projects")
-            .join(workspace_str.replace('/', "-"))
+            .join(support::claude_project_name(workspace_str))
             .join(format!("{session}.jsonl"));
         let mut existing = std::fs::read_to_string(&path).unwrap();
         existing.push_str(&record.to_string());
@@ -215,10 +209,10 @@ impl Fixture {
     }
 
     fn transcript(&self, session: &str) -> PathBuf {
-        let workspace = std::fs::canonicalize(self.workspace()).unwrap();
+        let workspace = support::canonical(&self.workspace());
         self.root
             .join("home/.claude/projects")
-            .join(workspace.to_str().unwrap().replace('/', "-"))
+            .join(support::claude_project_name(workspace.to_str().unwrap()))
             .join(format!("{session}.jsonl"))
     }
 
@@ -227,12 +221,12 @@ impl Fixture {
     /// after `pair_at` of them. The padding matters: the window is bounded by records AND by
     /// bytes, and a defect that only shows past one of those bounds is still a defect.
     fn long_claude_session(&self, session: &str, turns: usize, pair_at: usize) {
-        let workspace = std::fs::canonicalize(self.workspace()).unwrap();
+        let workspace = support::canonical(&self.workspace());
         let workspace_str = workspace.to_str().unwrap();
         let directory = self
             .root
             .join("home/.claude/projects")
-            .join(workspace_str.replace('/', "-"));
+            .join(support::claude_project_name(workspace_str));
         std::fs::create_dir_all(&directory).unwrap();
         let padding = "x".repeat(600);
         let mut lines = Vec::with_capacity(turns + 2);
@@ -313,11 +307,16 @@ impl Fixture {
             .env("XDG_CONFIG_HOME", self.root.join("config"))
             .env("XDG_CACHE_HOME", self.root.join("cache"))
             .env("XDG_DATA_HOME", self.data_home())
+            // Windows keeps the ledger and cache under LOCALAPPDATA, and needs
+            // SystemRoot to start Winsock.
+            .env("LOCALAPPDATA", self.data_home())
             .env("TYPESAFE_API_KEY", "synthetic-acceptance-canary")
             .env("TYPESAFE_ENDPOINT", format!("https://localhost:{port}"))
             .env("SSL_CERT_FILE", &ca)
             .current_dir(self.workspace())
             .args(args);
+        #[cfg(windows)]
+        command.env("SystemRoot", std::env::var_os("SystemRoot").unwrap());
         command
     }
 
@@ -733,11 +732,7 @@ fn workspaces_with_the_same_visible_roster_each_record_their_rankings() {
         ("workspace-one", &later),
     ] {
         let workspace = f.root.join(name);
-        std::fs::DirBuilder::new()
-            .mode(0o700)
-            .recursive(true)
-            .create(&workspace)
-            .unwrap();
+        support::create_private_dir(&workspace);
         let out = f
             .command(
                 1,
@@ -913,11 +908,10 @@ impl Provider {
         ] {
             std::fs::write(directory.join(name), bytes).unwrap();
         }
-        let mut child = Command::new("/usr/bin/python3")
+        let mut child = stub_python::python_command()
             .arg(directory.join("provider_server.py"))
             .arg(scenario)
             .args(extra)
-            .env_clear()
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit())
@@ -964,6 +958,8 @@ impl Provider {
     }
 }
 
+// waitpid/ECHILD reaping evidence is a POSIX process mechanism.
+#[cfg(unix)]
 #[test]
 fn dropping_an_unfinished_provider_terminates_and_reaps_its_child() {
     use nix::errno::Errno;
@@ -1598,6 +1594,8 @@ fn an_invocation_killed_mid_flight_is_still_recorded() {
     );
 }
 
+// Sends SIGTERM; POSIX signals have no Windows counterpart.
+#[cfg(unix)]
 #[test]
 fn a_terminated_invocation_drains_and_records_its_turn() {
     // sr-c4v6. Claude's hook timeout sends SIGTERM and kills only about 1.2 s

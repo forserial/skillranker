@@ -1,8 +1,9 @@
-#![cfg(any(target_os = "linux", target_os = "macos"))]
 //! Repeated public-library rankings must retain every real TLS attempt and
 //! timestamp it against its own invocation, including duplicate event delivery.
 //! Synthetic loopback provider data; real HTTP/TLS, pipeline and SQLite.
 
+#[path = "support/stub_python.rs"]
+mod stub_python;
 mod support;
 
 use asupersync::tls::Certificate;
@@ -20,9 +21,8 @@ use skillranker::roster::LocalPath;
 use skillranker::runtime::{EntryClock, ProcessInvocation};
 use std::fs;
 use std::io::{BufRead, BufReader, Write};
-use std::os::unix::fs::DirBuilderExt;
 use std::path::PathBuf;
-use std::process::{Child, ChildStdout, Command, Stdio};
+use std::process::{Child, ChildStdout, Stdio};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 fn unix_ms() -> u64 {
@@ -57,11 +57,7 @@ impl Fixture {
     fn new(scenario: &str) -> Self {
         let root = support::private_store_dir("invocation-identity");
         for dir in ["workspace/.claude/skills", "ledger", "provider"] {
-            fs::DirBuilder::new()
-                .mode(0o700)
-                .recursive(true)
-                .create(root.join(dir))
-                .unwrap();
+            support::create_private_dir(root.join(dir));
         }
         for name in ["alpha", "beta"] {
             let dir = root.join("workspace/.claude/skills").join(name);
@@ -92,10 +88,9 @@ impl Fixture {
         ] {
             fs::write(root.join("provider").join(name), bytes).unwrap();
         }
-        let mut provider = Command::new("/usr/bin/python3")
+        let mut provider = stub_python::python_command()
             .arg(root.join("provider/provider_server.py"))
             .arg(scenario)
-            .env_clear()
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit())

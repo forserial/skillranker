@@ -10,22 +10,20 @@
 //! - Explicit prune/clear preview does not mutate; --apply mutates after preflighting headroom.
 //! - Doctor reports cleanup debt. No secure-erasure claim.
 //! - WAL checkpoint and separate budget/capacity behavior unaffected.
-// Exercises the Unix-only private store; Windows builds refuse it (see docs/platform-boundary.md).
-#![cfg(unix)]
+
+mod support;
 
 use asupersync::Cx;
 use rusqlite::Connection;
 use skillranker::runtime::ProcessInvocation;
 use skillranker::storage::ledger::*;
 use skillranker::storage::*;
-use std::fs;
-use std::os::unix::fs::DirBuilderExt;
 use std::path::PathBuf;
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 fn temp_private_dir(prefix: &str) -> PathBuf {
-    let dir = PathBuf::from("/tmp").join(format!(
+    let dir = support::tmp_root().join(format!(
         "sr-ret-{}-{}-{}",
         prefix,
         std::process::id(),
@@ -34,11 +32,7 @@ fn temp_private_dir(prefix: &str) -> PathBuf {
             .unwrap()
             .as_nanos()
     ));
-    fs::DirBuilder::new()
-        .mode(0o700)
-        .recursive(true)
-        .create(&dir)
-        .expect("temp dir create");
+    support::create_private_dir(&dir);
     dir
 }
 

@@ -8,7 +8,9 @@
 
 use super::hook_entries::HookCounter;
 #[cfg(unix)]
-use super::platform::{DirectoryIdentity, local_filesystem, storage_path};
+use super::platform::local_filesystem;
+#[cfg(any(unix, windows))]
+use super::platform::{DirectoryIdentity, storage_path};
 use crate::blocking::{
     BlockingLeafKind, remaining_busy_wait, run_blocking_leaf, run_blocking_leaf_with_clock,
 };
@@ -2030,7 +2032,7 @@ fn trusted_ancestor(stat: &FileStat, uid: u32, leaf: bool) -> Result<(), StoreEr
     Ok(())
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn recording_capacity(bytes: u64, available: u128) -> Result<(), StoreError> {
     if bytes > LEDGER_QUOTA_BYTES - LEDGER_MAINTENANCE_RESERVE_BYTES - LEDGER_MUTATION_RESERVE_BYTES
     {
@@ -2051,9 +2053,9 @@ pub(crate) struct PrivateLedgerDirectory {
 }
 
 // `platform_support::LEDGER_STORAGE` reports which open this build has.
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 const _: () = assert!(crate::platform_support::LEDGER_STORAGE);
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 const _: () = assert!(!crate::platform_support::LEDGER_STORAGE);
 
 #[cfg(unix)]
@@ -2347,18 +2349,159 @@ impl PrivateLedgerDirectory {
     }
 }
 
-/// Windows: no ledger directory can be admitted (see the cache's
-/// `PrivateDirectory`). Opening reports `UnsupportedFilesystem`; required
-/// ledger commands fail with their storage error and optional recording is
-/// skipped visibly. The value is uninhabited.
-#[cfg(not(unix))]
+/// Windows: the ledger directory under docs/windows-private-storage.md,
+/// through `storage::windows_private`, as the cache's `PrivateDirectory`. The
+/// directory is held without `FILE_SHARE_DELETE` while the store is open. Its
+/// one admitted subdirectory is `policy-revisions`.
+#[cfg(windows)]
+pub(crate) struct PrivateLedgerDirectory {
+    pub path: PathBuf,
+    held: super::windows_private::HeldDirectory,
+    identity: DirectoryIdentity,
+    simulated_available_disk_bytes: Option<u64>,
+}
+
+#[cfg(windows)]
+impl PrivateLedgerDirectory {
+    pub fn open(
+        path: PathBuf,
+        create: bool,
+        clock: EntryClock,
+        cx: &Cx,
+    ) -> Result<Self, StoreError> {
+        let path = storage_path(path);
+        let held = super::windows_private::walk(&path, create, || check_work(clock, cx))?;
+        let directory = Self {
+            path,
+            identity: held.identity,
+            held,
+            simulated_available_disk_bytes: None,
+        };
+        if create {
+            directory.admit_space()?;
+        } else {
+            directory.inspect_files()?;
+        }
+        Ok(directory)
+    }
+
+    pub fn set_simulated_available_disk_bytes(&mut self, bytes: Option<u64>) {
+        self.simulated_available_disk_bytes = bytes;
+    }
+
+    pub fn available_disk_bytes(&self) -> Result<u64, StoreError> {
+        if let Some(simulated) = self.simulated_available_disk_bytes {
+            return Ok(simulated);
+        }
+        super::windows_private::available_bytes(&self.held.file)
+    }
+
+    pub fn capacity_report(&self) -> Result<LedgerCapacityReport, StoreError> {
+        let occupied_bytes = self.inspect_files()?;
+        let available_disk_bytes = self.available_disk_bytes()?;
+        let recording_ceiling_bytes = LEDGER_QUOTA_BYTES
+            .saturating_sub(LEDGER_MAINTENANCE_RESERVE_BYTES)
+            .saturating_sub(LEDGER_MUTATION_RESERVE_BYTES);
+        let usable_recording_bytes = recording_ceiling_bytes.saturating_sub(occupied_bytes);
+        let is_recording_admitted = occupied_bytes <= recording_ceiling_bytes
+            && u128::from(available_disk_bytes)
+                >= u128::from(LEDGER_MAINTENANCE_RESERVE_BYTES + LEDGER_MUTATION_RESERVE_BYTES);
+        Ok(LedgerCapacityReport {
+            total_quota_bytes: LEDGER_QUOTA_BYTES,
+            maintenance_reserve_bytes: LEDGER_MAINTENANCE_RESERVE_BYTES,
+            mutation_reserve_bytes: LEDGER_MUTATION_RESERVE_BYTES,
+            recording_ceiling_bytes,
+            occupied_bytes,
+            usable_recording_bytes,
+            available_disk_bytes,
+            is_recording_admitted,
+        })
+    }
+
+    pub fn database_path(&self) -> PathBuf {
+        self.path.join(LEDGER_FILE)
+    }
+
+    fn verify_database_file(
+        &self,
+        file: &File,
+        clock: EntryClock,
+        cx: &Cx,
+    ) -> Result<(), StoreError> {
+        use super::windows_private::{admitted_file, identity, inspect_entry, io_error};
+        self.revalidate(clock, cx)?;
+        let current = match inspect_entry(&self.path, LEDGER_FILE.as_ref()) {
+            Ok(current) => current,
+            Err(error) if io_error(&error) == StoreError::Missing => {
+                return Err(StoreError::StoreReplaced);
+            }
+            Err(error) => return Err(io_error(&error)),
+        };
+        if identity(file)? != identity(&current)? {
+            return Err(StoreError::StoreReplaced);
+        }
+        admitted_file(file)?;
+        admitted_file(&current).map(|_| ())
+    }
+
+    pub fn revalidate(&self, clock: EntryClock, cx: &Cx) -> Result<(), StoreError> {
+        let current = super::windows_private::walk(&self.path, false, || check_work(clock, cx))?;
+        if current.identity != self.identity {
+            return Err(StoreError::StoreReplaced);
+        }
+        Ok(())
+    }
+
+    pub fn inspect_files(&self) -> Result<u64, StoreError> {
+        // As on Unix, the ledger directory has no entry-count cap; the byte
+        // quota bounds it.
+        super::windows_private::inspect_with(
+            &self.held,
+            usize::MAX,
+            LEDGER_QUOTA_BYTES,
+            || Ok(()),
+            Some("policy-revisions"),
+        )
+    }
+
+    pub fn admit_space(&self) -> Result<(), StoreError> {
+        super::windows_private::volume_admitted(&self.held.file, self.held.drive)?;
+        let bytes = self.inspect_files()?;
+        recording_capacity(bytes, u128::from(self.available_disk_bytes()?))
+    }
+
+    pub fn open_database_file(
+        &self,
+        create: bool,
+        clock: EntryClock,
+        cx: &Cx,
+    ) -> Result<File, StoreError> {
+        self.revalidate(clock, cx)?;
+        if create {
+            self.admit_space()?;
+        } else {
+            self.inspect_files()?;
+        }
+        super::windows_private::open_file(&self.held, LEDGER_FILE, create)
+    }
+
+    /// The size of the admitted ledger file `name`, or `None` when absent.
+    fn file_size(&self, name: &str) -> Result<Option<u64>, StoreError> {
+        super::windows_private::entry_size(&self.path, name)
+    }
+}
+
+/// Other targets: no ledger directory can be admitted. Opening reports
+/// `UnsupportedFilesystem`; required ledger commands fail with their storage
+/// error and optional recording is skipped visibly. The value is uninhabited.
+#[cfg(not(any(unix, windows)))]
 #[allow(dead_code)] // Mirrors the Unix surface; uninhabited here.
 pub(crate) struct PrivateLedgerDirectory {
     pub path: PathBuf,
     never: std::convert::Infallible,
 }
 
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 #[allow(dead_code)] // Mirrors the Unix surface; uninhabited here.
 impl PrivateLedgerDirectory {
     pub fn open(_: PathBuf, _: bool, _: EntryClock, _: &Cx) -> Result<Self, StoreError> {
@@ -2571,19 +2714,51 @@ fn initialize(
     Ok(InitStatus::Created)
 }
 
+/// Worst-case additional bytes a maintenance operation needs, given the
+/// current database and WAL/journal sizes.
+#[cfg(any(unix, windows))]
+fn maintenance_estimate(kind: MaintenanceKind, db_and_wal_bytes: u64) -> Result<u64, StoreError> {
+    let min_temp_bytes = 1024 * 1024; // 1 MiB
+    Ok(match kind {
+        MaintenanceKind::Vacuum => db_and_wal_bytes
+            .checked_add(min_temp_bytes)
+            .ok_or(StoreError::Quota)?,
+        MaintenanceKind::Backup => db_and_wal_bytes
+            .checked_add(64 * 1024)
+            .ok_or(StoreError::Quota)?,
+        MaintenanceKind::Migration => db_and_wal_bytes
+            .checked_add(2 * 1024 * 1024)
+            .ok_or(StoreError::Quota)?,
+        MaintenanceKind::Prune | MaintenanceKind::Clear => 2 * 1024 * 1024,
+    })
+}
+
+/// The platform ledger directory: `$XDG_DATA_HOME/sr` or
+/// `~/.local/share/sr`; on Windows `%LOCALAPPDATA%\skillranker\ledger`
+/// (docs/windows-private-storage.md, rule 6), where XDG is not honored.
 pub fn default_ledger_directory() -> Result<PathBuf, StoreError> {
+    #[cfg(windows)]
+    {
+        crate::platform_path::windows_store_dir("ledger")
+            .ok()
+            .flatten()
+            .ok_or(StoreError::UnsafePath)
+    }
+    #[cfg(not(windows))]
     if let Some(xdg) = std::env::var_os("XDG_DATA_HOME") {
         let p = PathBuf::from(xdg);
         if p.is_absolute() {
             return Ok(p.join("sr"));
         }
     }
+    #[cfg(not(windows))]
     if let Some(home) = crate::platform_path::home_dir() {
         let p = home;
         if p.is_absolute() {
             return Ok(p.join(".local").join("share").join("sr"));
         }
     }
+    #[cfg(not(windows))]
     Err(StoreError::UnsafePath)
 }
 
@@ -3082,10 +3257,25 @@ impl LedgerStore {
 
     /// Estimates worst-case additional bytes needed on disk for the given maintenance operation.
     pub fn worst_case_maintenance_bytes(&self, kind: MaintenanceKind) -> Result<u64, StoreError> {
-        #[cfg(not(unix))]
+        #[cfg(not(any(unix, windows)))]
         {
             let _ = kind;
             match self.directory.never {}
+        }
+        #[cfg(windows)]
+        {
+            let mut db_and_wal_bytes = 0_u64;
+            for suffix in ["", "-wal", "-journal"] {
+                if let Some(size) = self
+                    .directory
+                    .file_size(&format!("{LEDGER_FILE}{suffix}"))?
+                {
+                    db_and_wal_bytes = db_and_wal_bytes
+                        .checked_add(size)
+                        .ok_or(StoreError::Quota)?;
+                }
+            }
+            maintenance_estimate(kind, db_and_wal_bytes)
         }
         #[cfg(unix)]
         {
@@ -3110,20 +3300,7 @@ impl LedgerStore {
                     Err(error) => return Err(io_error(error)),
                 }
             }
-            let min_temp_bytes = 1024 * 1024; // 1 MiB
-            let estimated = match kind {
-                MaintenanceKind::Vacuum => db_and_wal_bytes
-                    .checked_add(min_temp_bytes)
-                    .ok_or(StoreError::Quota)?,
-                MaintenanceKind::Backup => db_and_wal_bytes
-                    .checked_add(64 * 1024)
-                    .ok_or(StoreError::Quota)?,
-                MaintenanceKind::Migration => db_and_wal_bytes
-                    .checked_add(2 * 1024 * 1024)
-                    .ok_or(StoreError::Quota)?,
-                MaintenanceKind::Prune | MaintenanceKind::Clear => 2 * 1024 * 1024,
-            };
-            Ok(estimated)
+            maintenance_estimate(kind, db_and_wal_bytes)
         }
     }
 

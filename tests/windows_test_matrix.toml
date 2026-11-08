@@ -165,14 +165,6 @@ issue = "permanent: arbitrary non-UTF-8 filename bytes are a Linux filesystem pr
 note = "nested inside a gated module"
 
 [[gate]]
-file = "src/storage/hook_entries.rs"
-item = "mod tests"
-gate = "cfg(all(test, unix))"
-reason = "private-storage"
-issue = "sr-winpar.4"
-note = "hook invocation counter"
-
-[[gate]]
 file = "tests/allowance_contract.rs"
 item = "*"
 gate = "cfg(any(target_os = \"linux\", target_os = \"macos\"))"
@@ -291,13 +283,6 @@ reason = "subprocess"
 issue = "sr-winpar.11"
 
 [[gate]]
-file = "tests/explicit_judgment_contract.rs"
-item = "*"
-gate = "cfg(unix)"
-reason = "private-storage"
-issue = "sr-winpar.4"
-
-[[gate]]
 file = "tests/export_contract.rs"
 item = "*"
 gate = "cfg(any(target_os = \"linux\", target_os = \"macos\"))"
@@ -305,19 +290,11 @@ reason = "private-storage"
 issue = "sr-winpar.6"
 
 [[gate]]
-file = "tests/feedback_snapshot_coverage.rs"
-item = "*"
-gate = "cfg(unix)"
-reason = "private-storage"
-issue = "sr-winpar.4"
-
-[[gate]]
 file = "tests/hook_advice_contract.rs"
 item = "*"
 gate = "cfg(unix)"
 reason = "hook-suite"
 issue = "sr-winpar.17"
-also = ["sr-winpar.4"]
 
 [[gate]]
 file = "tests/hook_contract.rs"
@@ -325,7 +302,7 @@ item = "*"
 gate = "cfg(unix)"
 reason = "hook-suite"
 issue = "sr-winpar.17"
-also = ["sr-winpar.4", "sr-winpar.5"]
+also = ["sr-winpar.5"]
 
 [[gate]]
 file = "tests/hook_installer_contract.rs"
@@ -336,110 +313,11 @@ issue = "sr-winpar.17"
 also = ["sr-winpar.7"]
 
 [[gate]]
-file = "tests/learning_contract.rs"
-item = "*"
-gate = "cfg(any(target_os = \"linux\", target_os = \"macos\"))"
-reason = "private-storage"
-issue = "sr-winpar.4"
-
-[[gate]]
-file = "tests/ledger_attempt_ownership_contract.rs"
-item = "*"
-gate = "cfg(unix)"
-reason = "private-storage"
-issue = "sr-winpar.4"
-
-[[gate]]
-file = "tests/ledger_attempt_recording.rs"
-item = "*"
-gate = "cfg(unix)"
-reason = "private-storage"
-issue = "sr-winpar.4"
-
-[[gate]]
-file = "tests/ledger_attempt_rows.rs"
-item = "*"
-gate = "cfg(unix)"
-reason = "private-storage"
-issue = "sr-winpar.4"
-
-[[gate]]
-file = "tests/ledger_exposure_lifecycle_contract.rs"
-item = "*"
-gate = "cfg(unix)"
-reason = "private-storage"
-issue = "sr-winpar.4"
-
-[[gate]]
-file = "tests/ledger_fencing_contract.rs"
-item = "*"
-gate = "cfg(unix)"
-reason = "private-storage"
-issue = "sr-winpar.4"
-
-[[gate]]
-file = "tests/ledger_invocation_identity.rs"
-item = "*"
-gate = "cfg(any(target_os = \"linux\", target_os = \"macos\"))"
-reason = "private-storage"
-issue = "sr-winpar.4"
-
-[[gate]]
-file = "tests/ledger_migration_contract.rs"
-item = "*"
-gate = "cfg(unix)"
-reason = "private-storage"
-issue = "sr-winpar.4"
-
-[[gate]]
-file = "tests/ledger_paired_correction_contract.rs"
-item = "*"
-gate = "cfg(unix)"
-reason = "private-storage"
-issue = "sr-winpar.4"
-
-[[gate]]
-file = "tests/ledger_quota_headroom_contract.rs"
-item = "*"
-gate = "cfg(unix)"
-reason = "private-storage"
-issue = "sr-winpar.4"
-
-[[gate]]
-file = "tests/ledger_retention_contract.rs"
-item = "*"
-gate = "cfg(unix)"
-reason = "private-storage"
-issue = "sr-winpar.4"
-
-[[gate]]
-file = "tests/ledger_schema_contract.rs"
-item = "*"
-gate = "cfg(unix)"
-reason = "private-storage"
-issue = "sr-winpar.4"
-
-[[gate]]
-file = "tests/observation_contract.rs"
-item = "*"
-gate = "cfg(unix)"
-reason = "private-storage"
-issue = "sr-winpar.4"
-also = ["sr-winpar.11"]
-
-[[gate]]
-file = "tests/onboarding_contract.rs"
-item = "*"
-gate = "cfg(any(target_os = \"linux\", target_os = \"macos\"))"
-reason = "private-storage"
-issue = "sr-winpar.4"
-
-[[gate]]
 file = "tests/owner_only_refusal_names_the_path.rs"
 item = "*"
 gate = "cfg(unix)"
 reason = "private-storage"
-issue = "sr-winpar.4"
+issue = "sr-winpar.27"
 note = "owner-only refusal diagnostics"
 
 [[gate]]
@@ -454,7 +332,8 @@ file = "tests/p5_gate.rs"
 item = "*"
 gate = "cfg(any(target_os = \"linux\", target_os = \"macos\"))"
 reason = "private-storage"
-issue = "sr-winpar.4"
+issue = "sr-winpar.6"
+note = "--save-case owner-only export"
 
 [[gate]]
 file = "tests/p6_gate.rs"
@@ -462,7 +341,7 @@ item = "*"
 gate = "cfg(any(target_os = \"linux\", target_os = \"macos\"))"
 reason = "hook-suite"
 issue = "sr-winpar.17"
-also = ["sr-winpar.4", "sr-winpar.5"]
+also = ["sr-winpar.5"]
 
 [[gate]]
 file = "tests/p7_gate.rs"
@@ -470,14 +349,6 @@ item = "*"
 gate = "cfg(any(target_os = \"linux\", target_os = \"macos\"))"
 reason = "hook-suite"
 issue = "sr-winpar.17"
-also = ["sr-winpar.4"]
-
-[[gate]]
-file = "tests/p8_gate.rs"
-item = "*"
-gate = "cfg(any(target_os = \"linux\", target_os = \"macos\"))"
-reason = "private-storage"
-issue = "sr-winpar.4"
 
 [[gate]]
 file = "tests/project_signals.rs"
@@ -485,34 +356,6 @@ item = "*"
 gate = "cfg(unix)"
 reason = "platform-twin"
 issue = "permanent: Unix Git paths, modes and non-UTF-8 names; the Windows twin is tests/project_signals_windows.rs"
-
-[[gate]]
-file = "tests/rank_pipeline.rs"
-item = "a_run_past_the_failure_recording_window_preserves_unknown_ledger_outcome"
-gate = "cfg(unix)"
-reason = "private-storage"
-issue = "sr-winpar.4"
-
-[[gate]]
-file = "tests/rank_pipeline.rs"
-item = "a_run_that_overruns_its_deadline_records_its_failure_not_in_flight"
-gate = "cfg(unix)"
-reason = "private-storage"
-issue = "sr-winpar.4"
-
-[[gate]]
-file = "tests/rank_pipeline.rs"
-item = "an_unconfirmed_failure_ledger_write_preserves_timeout_and_unknown_usage"
-gate = "cfg(unix)"
-reason = "private-storage"
-issue = "sr-winpar.4"
-
-[[gate]]
-file = "tests/rank_pipeline.rs"
-item = "successful_rankings_report_unconfirmed_ledger_finalization"
-gate = "cfg(unix)"
-reason = "private-storage"
-issue = "sr-winpar.4"
 
 [[gate]]
 file = "tests/replay_case_completeness.rs"
@@ -540,7 +383,8 @@ file = "tests/rollout_contract.rs"
 item = "*"
 gate = "cfg(any(target_os = \"linux\", target_os = \"macos\"))"
 reason = "private-storage"
-issue = "sr-winpar.4"
+issue = "sr-winpar.5"
+note = "sr budget --apply"
 
 [[gate]]
 file = "tests/roster_cli.rs"
@@ -648,34 +492,6 @@ reason = "private-storage"
 issue = "sr-winpar.6"
 
 [[gate]]
-file = "tests/shadow_spending_contract.rs"
-item = "shadow_with_a_ready_ledger_ranks_and_records"
-gate = "cfg(unix)"
-reason = "private-storage"
-issue = "sr-winpar.4"
-
-[[gate]]
-file = "tests/snooze_contract.rs"
-item = "*"
-gate = "cfg(any(target_os = \"linux\", target_os = \"macos\"))"
-reason = "private-storage"
-issue = "sr-winpar.4"
-
-[[gate]]
-file = "tests/stats_inflight_accounting.rs"
-item = "*"
-gate = "cfg(unix)"
-reason = "private-storage"
-issue = "sr-winpar.4"
-
-[[gate]]
-file = "tests/stats_value_report_contract.rs"
-item = "*"
-gate = "cfg(unix)"
-reason = "private-storage"
-issue = "sr-winpar.4"
-
-[[gate]]
 file = "tests/storage_contract.rs"
 item = "a_response_expires_by_its_boot_clock_age_whatever_the_wall_clock_says"
 gate = "cfg(target_os = \"linux\")"
@@ -715,13 +531,6 @@ issue = "permanent: Linux-only mechanism (tmpfs, /proc, pidfd or statfs magic) w
 note = "nested inside a gated file"
 
 [[gate]]
-file = "tests/trace_continuation.rs"
-item = "*"
-gate = "cfg(unix)"
-reason = "private-storage"
-issue = "sr-winpar.4"
-
-[[gate]]
 file = "tests/rank_discovery_gaps.rs"
 item = "a_fifo_personal_override_is_not_silently_treated_as_absent"
 gate = "cfg(unix)"
@@ -734,22 +543,6 @@ item = "explicit_roster_files_are_bounded_regular_files"
 gate = "cfg(unix)"
 reason = "unix-fixture"
 issue = "permanent: Windows has no FIFO or device special files; its non-regular names (reserved devices, streams) are refused in tests/windows_platform.rs and tests/authorized_read_windows.rs"
-
-[[gate]]
-file = "src/cli.rs"
-item = "expired_cli_completion_exposes_the_unreconciled_prepared_ledger_outcome"
-gate = "cfg(unix)"
-reason = "private-storage"
-issue = "sr-winpar.4"
-note = "initializes a ledger"
-
-[[gate]]
-file = "src/cli.rs"
-item = "timely_pipeline_advice_survives_a_delayed_cli_continuation"
-gate = "cfg(unix)"
-reason = "private-storage"
-issue = "sr-winpar.4"
-note = "initializes a ledger"
 
 [[gate]]
 file = "src/storage/filesystem.rs"
@@ -773,14 +566,6 @@ gate = "cfg(unix)"
 reason = "subprocess"
 issue = "sr-winpar.11"
 note = "a /bin/sh fake cass"
-
-[[gate]]
-file = "tests/rank_acceptance.rs"
-item = "persistence_reports_disabled_only_when_the_user_disabled_it"
-gate = "cfg(unix)"
-reason = "private-storage"
-issue = "sr-winpar.4"
-note = "initializes a ledger"
 
 [[gate]]
 file = "tests/real_rank_coordination.rs"
@@ -810,3 +595,45 @@ gate = "cfg(unix)"
 reason = "platform-twin"
 issue = "permanent: Unix modes and symlinked ancestors; the Windows twins are tests/cache_windows_contract.rs rule_2_*, rule_3_* and rule_6_*"
 
+[[gate]]
+file = "tests/ledger_attempt_recording.rs"
+item = "a_terminated_invocation_drains_and_records_its_turn"
+gate = "cfg(unix)"
+reason = "unix-only"
+issue = "permanent: sends SIGTERM; POSIX signal delivery has no Windows counterpart (the SIGKILL cases run on Windows)"
+
+[[gate]]
+file = "tests/ledger_attempt_recording.rs"
+item = "dropping_an_unfinished_provider_terminates_and_reaps_its_child"
+gate = "cfg(unix)"
+reason = "unix-only"
+issue = "permanent: waitpid/ECHILD reaping evidence is a POSIX process mechanism"
+
+[[gate]]
+file = "tests/ledger_schema_contract.rs"
+item = "ledger_handle_rejects_same_directory_database_replacement"
+gate = "cfg(unix)"
+reason = "platform-twin"
+issue = "permanent: Windows refuses renaming a database SQLite holds open (sharing violation), so the replacement cannot be staged; held-store rename refusal is proven in tests/cache_windows_contract.rs rule_9_*"
+
+[[gate]]
+file = "tests/observation_contract.rs"
+item = "observe_boundary_explicit_inventory_replaces_configured_discovery"
+gate = "cfg(unix)"
+reason = "unix-fixture"
+issue = "permanent: predicts skill IDs by hashing Unix OS-byte path spellings"
+
+[[gate]]
+file = "tests/observation_contract.rs"
+item = "observe_boundary_refuses_fifo_and_device_inputs_without_blocking"
+gate = "cfg(unix)"
+reason = "unix-fixture"
+issue = "permanent: Windows has no FIFO or device special files; its non-regular names (reserved devices, streams) are refused in tests/windows_platform.rs and tests/authorized_read_windows.rs"
+
+[[gate]]
+file = "tests/observation_contract.rs"
+item = "test_observe_cli_cass_and_normalized_same_ids_cannot_move_native_cursor"
+gate = "cfg(unix)"
+reason = "subprocess"
+issue = "sr-winpar.11"
+note = "selects a cass session"

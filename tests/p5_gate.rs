@@ -1,3 +1,5 @@
+// Saves a replay case with `--save-case`, an owner-only export that Windows
+// does not have yet (sr-winpar.6).
 #![cfg(any(target_os = "linux", target_os = "macos"))]
 //! Phase P5 Acceptance Gate: local evidence, faithful replay and bounded
 //! evaluation, integrated at one revision.
@@ -12,11 +14,13 @@
 //! evaluation batch. Every quality gate stays not-established: a working
 //! evaluation command is not a policy meeting relevance or harm thresholds.
 
+#[path = "support/stub_python.rs"]
+mod stub_python;
 mod support;
+use support::PlatformEnv;
 
 use serde_json::{Value, json};
 use std::io::{BufRead, BufReader};
-use std::os::unix::fs::DirBuilderExt;
 use std::path::PathBuf;
 use std::process::{Child, ChildStdout, Command, Output, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -33,10 +37,7 @@ impl Gate {
         // with group-writable ancestors, as an RCH TMPDIR can have.
         let root = support::private_store_dir("p5-gate");
         for dir in ["home", "config", "cache", "data", "workspace"] {
-            std::fs::DirBuilder::new()
-                .mode(0o700)
-                .create(root.join(dir))
-                .unwrap();
+            support::private_dir(root.join(dir));
         }
         for (name, description) in [
             ("alpha", "Runs and repairs failing rust tests."),
@@ -69,10 +70,13 @@ impl Gate {
     fn run(&self, port: u16, args: &[&str]) -> Output {
         Command::new(env!("CARGO_BIN_EXE_sr"))
             .env_clear()
+            .platform_env()
             .env("HOME", self.root.join("home"))
             .env("XDG_CONFIG_HOME", self.root.join("config"))
             .env("XDG_CACHE_HOME", self.root.join("cache"))
             .env("XDG_DATA_HOME", self.root.join("data"))
+            // Windows keeps the ledger and cache under LOCALAPPDATA.
+            .env("LOCALAPPDATA", self.root.join("data"))
             .env("TYPESAFE_API_KEY", "synthetic-p5-gate-canary")
             .env("TYPESAFE_ENDPOINT", format!("https://localhost:{port}"))
             .env("SSL_CERT_FILE", self.root.join("fixture-ca.pem"))
@@ -142,10 +146,9 @@ impl Provider {
         ] {
             std::fs::write(dir.join(name), bytes).unwrap();
         }
-        let mut child = Command::new("/usr/bin/python3")
+        let mut child = stub_python::python_command()
             .arg(dir.join("provider_server.py"))
             .arg(scenario)
-            .env_clear()
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit())

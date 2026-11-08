@@ -4,6 +4,12 @@
 
 ### Added
 
+- Windows has the ledger and the hook invocation counter, in
+  `%LOCALAPPDATA%\skillranker\ledger`, under the same owner-only policy as the
+  cache: `sr ledger`, `observe`, `feedback`, `stats`, `snooze` and recorded
+  shadow trials work there, and shadow hooks rank and record when an
+  initialized ledger can record. The ledger, stats, trace, observation, snooze,
+  learning, onboarding and P8 suites run natively on Windows.
 - Windows keeps the response cache, its coordinator leases and the provider
   breaker state in `%LOCALAPPDATA%\skillranker\cache`, under the owner-only
   policy of `docs/windows-private-storage.md`: owned by the user, a protected DACL

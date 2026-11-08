@@ -229,7 +229,7 @@ impl Workspace {
             .create(workspace.cache())
             .unwrap();
         #[cfg(windows)]
-        support::create_private_dir(&workspace.cache());
+        support::create_private_dir(workspace.cache());
         workspace
     }
     fn workspace(&self) -> PathBuf {

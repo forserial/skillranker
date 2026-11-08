@@ -6,10 +6,11 @@ rule each one mirrors and what it refuses. `.3` (cache), `.4` (ledger and hook
 counter), `.5` (enforced allowance), `.6` (exports, snapshots, replay cases) and
 `.7` (installer backups) implement it; `.2` chose how `sr` reads and sets
 security descriptors under `#![forbid(unsafe_code)]`
-([Mechanism](#mechanism-sr-winpar2)). The response cache implements it
-([Cache](#cache-sr-winpar3)); every other Windows store open still reports
-`UnsupportedFilesystem` until its issue lands
-([platform boundary](platform-boundary.md#windows-stateless-ranking)).
+([Mechanism](#mechanism-sr-winpar2)). The response cache
+([Cache](#cache-sr-winpar3)) and the ledger with its hook counter
+([Ledger](#ledger-sr-winpar4)) implement it; the allowance, exports and
+backups still refuse until their issues land
+([platform boundary](platform-boundary.md#windows)).
 
 The user approved the defaults on 2026-11-07 and, after the observation below,
 the two refinements marked *(refined)*. The approvals are quoted on sr-winpar.1.
@@ -137,9 +138,10 @@ machine.
 The cache, the provider breaker state and the allowance accounting resolve
 `%LOCALAPPDATA%\skillranker\cache` since sr-winpar.3
 (`platform_path::windows_store_dir`, used by `user_cache_root`,
-`CacheLocation::Platform` and `AllowancePaths::for_user`). The others still
-resolve elsewhere until their issues change them: `default_ledger_directory`
-gives `%USERPROFILE%\.local\share\sr`, and `resolve_backup_dir` gives
+`CacheLocation::Platform` and `AllowancePaths::for_user`), and the ledger
+`%LOCALAPPDATA%\skillranker\ledger` since sr-winpar.4
+(`default_ledger_directory`). Installer backups still resolve elsewhere until
+sr-winpar.7: `resolve_backup_dir` gives
 `%USERPROFILE%\.local\state\sr\backups`.
 
 ### 7. Creation
@@ -335,3 +337,33 @@ token or a machine-wide change: FAT32, exFAT and other filesystem names; removab
 remote, optical and RAM-disk drive types; a file that answers the remote-protocol
 query; a `SUBST` drive (the final drive differs from the named one); a store
 owned by Administrators; a NULL DACL; unknown entry types.
+
+## Ledger (sr-winpar.4)
+
+The ledger (`ledger.sqlite3`, its WAL sidecars, migration backups and the
+`policy-revisions` folder) and the hook invocation counters beside it implement
+the rules on Windows with the same primitives as the cache.
+
+- `PrivateLedgerDirectory` walks, creates, revalidates and scans exactly as the
+  cache's `PrivateDirectory` does. Its one admitted subfolder is
+  `policy-revisions`: a plain folder owned by the user whose entries allow only
+  the user and SYSTEM. Entries inherited from the protected ledger folder
+  qualify, so `sr` does not have to create it with an explicit descriptor.
+  As on Unix, the scan has no entry-count cap and the 256 MiB quota bounds it.
+- Migration backups (`VACUUM INTO` inside the ledger folder) inherit the folder's
+  two entries, so they are owner-only without the Unix `chmod`.
+- The hook counter is written only into a folder that passes rules 1–3 for a
+  store folder and only beside an existing ledger. Each record is one append
+  write. Prune and clear stage a file in the same private folder and rename it
+  over the counter.
+- Windows refuses renaming a database SQLite holds open (sharing violation).
+  A replacement staged on Unix while the ledger is open cannot happen there; the
+  identity check before each effect remains.
+- A process killed during a write (`TerminateProcess`) leaves a ledger that
+  reopens cleanly and records the turn as on Unix
+  (`tests/ledger_attempt_recording.rs`, the SIGKILL cases). SIGTERM draining is
+  Unix-only.
+
+Native evidence: the ledger, stats, trace, observation, snooze, learning,
+onboarding, P8 and shadow-spending suites run on Windows (see
+`tests/windows_test_matrix.toml` for the cases that remain Unix-only and why).

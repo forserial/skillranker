@@ -17,21 +17,19 @@
 //! - its `elapsed_ms = 0` is not a real duration and must stay out of the summary,
 //! - its absent provider attempts are not evidence of a cache hit,
 //! - and once the invocation finishes, its row is counted exactly once.
-// Exercises the Unix-only private store; Windows builds refuse it (see docs/platform-boundary.md).
-#![cfg(unix)]
+
+mod support;
 
 use asupersync::Cx;
 use skillranker::runtime::ProcessInvocation;
 use skillranker::storage::ledger::*;
-use std::fs;
-use std::os::unix::fs::DirBuilderExt;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const BASE_MS: u64 = 1_700_000_000_000;
 
 fn temp_private_dir(prefix: &str) -> PathBuf {
-    let dir = PathBuf::from("/tmp").join(format!(
+    let dir = support::tmp_root().join(format!(
         "sr-inflight-{}-{}-{}",
         prefix,
         std::process::id(),
@@ -40,11 +38,7 @@ fn temp_private_dir(prefix: &str) -> PathBuf {
             .unwrap()
             .as_nanos()
     ));
-    fs::DirBuilder::new()
-        .mode(0o700)
-        .recursive(true)
-        .create(&dir)
-        .expect("temp dir create");
+    support::create_private_dir(&dir);
     dir
 }
 

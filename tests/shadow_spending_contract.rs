@@ -3,12 +3,13 @@
 //! recordable ledger would only spend requests. The provider is a real
 //! loopback TLS stub that counts what it serves; data is synthetic.
 //!
-//! Runs on every platform. On Windows no ledger can be opened, so every shadow
-//! turn skips; on Linux and macOS a missing or disabled ledger skips and an
-//! initialized one records. Advisory mode always ranks.
+//! Runs on every platform: a missing or disabled ledger skips and an
+//! initialized one records (on Windows since sr-winpar.4). Advisory mode
+//! always ranks.
 
 #[path = "support/stub_python.rs"]
 mod stub_python;
+mod support;
 
 use serde_json::{Value, json};
 use std::io::{BufRead, BufReader, Write};
@@ -27,10 +28,21 @@ struct Home {
 
 impl Home {
     fn new() -> Self {
-        let root = std::env::temp_dir().join(format!(
-            "sr-shadow-spending-{}-{}",
+        // Unix: the temporary directory with owner-only modes below. Windows:
+        // under %LOCALAPPDATA%\sr-tests, since %TEMP% may let other local
+        // accounts replace its children, which the ledger refuses.
+        #[cfg(unix)]
+        let base = std::env::temp_dir();
+        #[cfg(windows)]
+        let base = support::tmp_root();
+        let root = base.join(format!(
+            "sr-shadow-spending-{}-{}-{}",
             std::process::id(),
-            NEXT.fetch_add(1, Ordering::Relaxed)
+            NEXT.fetch_add(1, Ordering::Relaxed),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
         ));
         for dir in ["home", "config/sr", "cache", "data", "state", "workspace"] {
             std::fs::create_dir_all(root.join(dir)).unwrap();
@@ -69,6 +81,8 @@ impl Home {
             .env("XDG_CONFIG_HOME", self.root.join("config"))
             .env("XDG_CACHE_HOME", self.root.join("cache"))
             .env("XDG_DATA_HOME", self.root.join("data"))
+            // Windows keeps the ledger and cache under LOCALAPPDATA.
+            .env("LOCALAPPDATA", self.root.join("data"))
             .env("XDG_STATE_HOME", self.root.join("state"))
             .env("TYPESAFE_API_KEY", CANARY)
             .env("TYPESAFE_ENDPOINT", format!("https://localhost:{port}"))
@@ -114,9 +128,9 @@ impl Home {
         child.wait_with_output().unwrap()
     }
 
-    #[cfg(unix)]
     fn ranking_events(&self) -> usize {
-        let db = rusqlite::Connection::open(self.root.join("data/sr/ledger.sqlite3")).unwrap();
+        let ledger = support::ledger_under(&self.root.join("data")).join("ledger.sqlite3");
+        let db = rusqlite::Connection::open(ledger).unwrap();
         db.query_row("SELECT COUNT(*) FROM ranking_events", [], |row| {
             row.get::<_, i64>(0)
         })
@@ -246,12 +260,8 @@ fn shadow_without_a_recordable_ledger_sends_no_provider_requests() {
     home.config("[network]\nenabled = true\n");
     let provider = Provider::start(&home);
     let port = provider.port;
-    // No ledger was initialized; on Windows none can be.
-    let reason = if cfg!(windows) {
-        "cannot host the ledger"
-    } else {
-        "no ledger is initialized"
-    };
+    // No ledger was initialized.
+    let reason = "no ledger is initialized";
     // A large payload is still read: the harness must not write into a
     // closed pipe, which would fail this test's own write.
     let large = format!("{PROMPT} {}", "padding ".repeat(64 * 1024));
@@ -316,7 +326,6 @@ fn advisory_mode_ranks_even_when_nothing_can_be_recorded() {
     assert_eq!(provider.finish(), 2);
 }
 
-#[cfg(unix)]
 #[test]
 fn shadow_with_a_ready_ledger_ranks_and_records() {
     let home = Home::new();

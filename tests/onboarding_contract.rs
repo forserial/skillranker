@@ -1,4 +1,3 @@
-#![cfg(any(target_os = "linux", target_os = "macos"))]
 //! The setup journey (sr-roadmap-l1i.7.9, I05) in one isolated home: offline
 //! demo, doctor, the first missing prerequisite at each step (key, network,
 //! roster), a first rank that needs no ledger, an installer that reports the
@@ -6,11 +5,13 @@
 //! configuration, and finally a recorded shadow hook trial. The loopback TLS
 //! Jev fixture stands in for the provider; data is synthetic.
 
+#[path = "support/stub_python.rs"]
+mod stub_python;
 mod support;
+use support::PlatformEnv;
 
 use serde_json::{Value, json};
 use std::io::{BufRead, BufReader, Write};
-use std::os::unix::fs::DirBuilderExt;
 use std::path::PathBuf;
 use std::process::{Child, ChildStdout, Command, Output, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -26,10 +27,7 @@ impl Home {
     fn new() -> Self {
         let root = support::private_store_dir("onboarding");
         for dir in ["home", "config", "cache", "data", "state", "workspace"] {
-            std::fs::DirBuilder::new()
-                .mode(0o700)
-                .create(root.join(dir))
-                .unwrap();
+            support::private_dir(root.join(dir));
         }
         std::fs::write(
             root.join("fixture-ca.pem"),
@@ -74,10 +72,13 @@ impl Home {
         let mut command = Command::new(env!("CARGO_BIN_EXE_sr"));
         command
             .env_clear()
+            .platform_env()
             .env("HOME", self.root.join("home"))
             .env("XDG_CONFIG_HOME", self.root.join("config"))
             .env("XDG_CACHE_HOME", self.root.join("cache"))
             .env("XDG_DATA_HOME", self.root.join("data"))
+            // Windows keeps the ledger and cache under LOCALAPPDATA.
+            .env("LOCALAPPDATA", self.root.join("data"))
             .env("XDG_STATE_HOME", self.root.join("state"))
             .env("TYPESAFE_ENDPOINT", format!("https://localhost:{port}"))
             .env("SSL_CERT_FILE", self.root.join("fixture-ca.pem"))
@@ -155,10 +156,9 @@ impl Provider {
         ] {
             std::fs::write(dir.join(name), bytes).unwrap();
         }
-        let mut child = Command::new("/usr/bin/python3")
+        let mut child = stub_python::python_command()
             .arg(dir.join("provider_server.py"))
             .arg("useful")
-            .env_clear()
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit())

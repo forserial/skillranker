@@ -373,7 +373,22 @@ pub(crate) fn inspect(
     directory: &HeldDirectory,
     max_entries: usize,
     quota_bytes: u64,
+    checkpoint: impl FnMut() -> Result<(), StoreError>,
+) -> Result<u64, StoreError> {
+    inspect_with(directory, max_entries, quota_bytes, checkpoint, None)
+}
+
+/// [`inspect`], also admitting one named subdirectory (the ledger's
+/// `policy-revisions`): a plain directory owned by the user whose entries
+/// allow only the user and SYSTEM, explicit or inherited from the protected
+/// store directory, holding only store files, whose sizes count too. Any
+/// other directory is refused, as on Unix.
+pub(crate) fn inspect_with(
+    directory: &HeldDirectory,
+    max_entries: usize,
+    quota_bytes: u64,
     mut checkpoint: impl FnMut() -> Result<(), StoreError>,
+    nested: Option<&str>,
 ) -> Result<u64, StoreError> {
     checkpoint()?;
     // The path still names the held directory unless a trusted principal
@@ -390,12 +405,19 @@ pub(crate) fn inspect(
         if seen >= max_entries {
             return Err(StoreError::Quota);
         }
-        let file = match inspect_entry(&directory.path, &entry.file_name()) {
+        let name = entry.file_name();
+        let file = match inspect_entry(&directory.path, &name) {
             Ok(file) => file,
             Err(error) if io_error(&error) == StoreError::Missing => continue,
             Err(error) => return Err(io_error(&error)),
         };
-        let size = admitted_file(&file)?;
+        let size = if nested.is_some_and(|nested| name == nested)
+            && file.metadata().is_ok_and(|metadata| metadata.is_dir())
+        {
+            nested_directory(&directory.path.join(&name), &mut checkpoint)?
+        } else {
+            admitted_file(&file)?
+        };
         bytes = bytes
             .checked_add(size)
             .filter(|total| *total <= quota_bytes)
@@ -408,6 +430,70 @@ pub(crate) fn inspect(
 /// A root for unit-test stores: `%LOCALAPPDATA%\sr-tests`. `%TEMP%` may grant
 /// other local accounts the right to replace its children, which rule 3
 /// refuses.
+/// The total size of the store files in a nested private directory.
+fn nested_directory(
+    path: &Path,
+    checkpoint: &mut impl FnMut() -> Result<(), StoreError>,
+) -> Result<u64, StoreError> {
+    let held = open_directory(path).map_err(|error| io_error(&error))?;
+    plain_directory(&held)?;
+    store_file_admitted(&descriptor(&held)?, user()?)?;
+    let mut bytes = 0_u64;
+    for entry in std::fs::read_dir(path).map_err(|error| io_error(&error))? {
+        checkpoint()?;
+        let entry = entry.map_err(|error| io_error(&error))?;
+        let file = match inspect_entry(path, &entry.file_name()) {
+            Ok(file) => file,
+            Err(error) if io_error(&error) == StoreError::Missing => continue,
+            Err(error) => return Err(io_error(&error)),
+        };
+        bytes = bytes
+            .checked_add(admitted_file(&file)?)
+            .ok_or(StoreError::Quota)?;
+    }
+    Ok(bytes)
+}
+
+/// The size of the admitted store file `name` in `directory`, or `None` when
+/// it does not exist.
+pub(crate) fn entry_size(directory: &Path, name: &str) -> Result<Option<u64>, StoreError> {
+    match inspect_entry(directory, name.as_ref()) {
+        Ok(file) => admitted_file(&file).map(Some),
+        Err(error) if io_error(&error) == StoreError::Missing => Ok(None),
+        Err(error) => Err(io_error(&error)),
+    }
+}
+
+/// Admit `path` itself as a private store directory (rules 1-3 for the
+/// directory, without walking its ancestors), for a writer that only needs
+/// to refuse a shared or replaced directory, as the hook counter does.
+pub(crate) fn private_directory(path: &Path) -> Result<File, StoreError> {
+    let held = open_directory(path).map_err(|error| io_error(&error))?;
+    plain_directory(&held)?;
+    store_directory_admitted(&descriptor(&held)?, user()?)?;
+    Ok(held)
+}
+
+/// Open the existing store file `name` in `directory` without following a
+/// link, for reading or appending, and admit it (rules 1, 2 and 4).
+pub(crate) fn open_existing(
+    directory: &Path,
+    name: &str,
+    write: bool,
+    create: bool,
+) -> Result<File, StoreError> {
+    let file = OpenOptions::new()
+        .read(!write)
+        .append(write)
+        .create(create)
+        .share_mode(FILE_SHARE_ALL)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
+        .open(directory.join(name))
+        .map_err(|error| io_error(&error))?;
+    admitted_file(&file)?;
+    Ok(file)
+}
+
 #[cfg(test)]
 pub(crate) fn test_root() -> PathBuf {
     let root =

@@ -1,4 +1,3 @@
-#![cfg(unix)]
 //! Provider-attempt ownership and cost in the ledger (sr-roadmap-l1i.6.7).
 //!
 //! The schema contract already covers the happy path of writing an attempt and
@@ -14,13 +13,13 @@
 //!   quietly zero tokens that were already known;
 //! - `unknown` is a first-class status: an attempt that reached the wire and
 //!   never answered is neither a success nor a clean failure.
+mod support;
+
 use asupersync::Cx;
 use rusqlite::Connection;
 use skillranker::runtime::ProcessInvocation;
 use skillranker::storage::StoreError;
 use skillranker::storage::ledger::*;
-use std::fs;
-use std::os::unix::fs::DirBuilderExt;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -35,7 +34,7 @@ fn temp_ledger_dir(test_name: &str) -> PathBuf {
     // As in the schema contract: RCH's TMPDIR can have ancestors owned by
     // another user, so use Linux's root-owned sticky /tmp rather than relaxing
     // the store's own ancestor checks.
-    let dir = PathBuf::from("/tmp").join(format!(
+    let dir = support::tmp_root().join(format!(
         "sr-ledger-attempt-{}-{}-{}",
         test_name,
         std::process::id(),
@@ -44,11 +43,7 @@ fn temp_ledger_dir(test_name: &str) -> PathBuf {
             .unwrap()
             .as_nanos()
     ));
-    fs::DirBuilder::new()
-        .mode(0o700)
-        .recursive(true)
-        .create(&dir)
-        .expect("temp dir create");
+    support::create_private_dir(&dir);
     dir
 }
 

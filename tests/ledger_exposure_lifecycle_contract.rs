@@ -1,4 +1,3 @@
-#![cfg(unix)]
 //! Contract and verification tests for exposure lifecycle and acknowledgment
 //! (sr-roadmap-l1i.6.8 / Invariant I17).
 //!
@@ -14,13 +13,14 @@
 //! - Record mode and channel explicitly (`shadow`, `advisory-hook`, `cli`, or `tui`).
 //! - Disabled and missing ledger states degrade gracefully without panicking or corrupting state.
 
+mod support;
+
 use asupersync::Cx;
 use rusqlite::Connection;
 use skillranker::runtime::ProcessInvocation;
 use skillranker::storage::StoreError;
 use skillranker::storage::ledger::*;
 use std::fs;
-use std::os::unix::fs::DirBuilderExt;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -31,7 +31,7 @@ fn test_invocation() -> (ProcessInvocation, Cx) {
 }
 
 fn temp_private_dir(prefix: &str) -> PathBuf {
-    let dir = PathBuf::from("/tmp").join(format!(
+    let dir = support::tmp_root().join(format!(
         "sr-test-exposure-{}-{}-{}",
         prefix,
         std::process::id(),
@@ -40,11 +40,7 @@ fn temp_private_dir(prefix: &str) -> PathBuf {
             .unwrap()
             .as_nanos()
     ));
-    fs::DirBuilder::new()
-        .mode(0o700)
-        .recursive(true)
-        .create(&dir)
-        .expect("temp dir create");
+    support::create_private_dir(&dir);
     dir
 }
 
@@ -139,6 +135,8 @@ impl CliDeliveryFixture {
             .env("HOME", self.root.join("home"))
             .env("XDG_CONFIG_HOME", self.root.join("home/.config"))
             .env("XDG_DATA_HOME", self.root.join("data"))
+            // Windows keeps the ledger (and cache) under LOCALAPPDATA.
+            .env("LOCALAPPDATA", self.root.join("data"))
             .env("XDG_CACHE_HOME", self.root.join("cache"))
             .env("TERM", "dumb")
             .current_dir(self.root.join("workspace"))
@@ -166,7 +164,7 @@ impl CliDeliveryFixture {
     }
 
     fn database(&self) -> Connection {
-        Connection::open(self.root.join("data/sr").join(LEDGER_FILE)).unwrap()
+        Connection::open(support::ledger_under(&self.root.join("data")).join(LEDGER_FILE)).unwrap()
     }
 
     fn initialize(&self) {
@@ -761,7 +759,7 @@ fn disabled_or_missing_ledger_degrades_gracefully() {
     assert!(!ack_dis, "disabled ledger must return false");
 
     // Missing ledger directory
-    let non_existent = PathBuf::from("/tmp/does-not-exist-sr-ledger-xyz");
+    let non_existent = support::tmp_root().join("does-not-exist-sr-ledger-xyz");
     let emit_miss = record_emission(
         &inv,
         &cx,

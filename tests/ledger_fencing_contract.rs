@@ -9,8 +9,8 @@
 //! - Live database file is not unlinked or replaced underneath open connections
 //! - Schema generation mismatch fails with IncompatibleSchema
 //! - Incarnation mismatch fails with StoreReplaced
-// Exercises the Unix-only private store; Windows builds refuse it (see docs/platform-boundary.md).
-#![cfg(unix)]
+
+mod support;
 
 use asupersync::Cx;
 use rusqlite::Connection;
@@ -18,14 +18,13 @@ use skillranker::runtime::ProcessInvocation;
 use skillranker::storage::StoreError;
 use skillranker::storage::ledger::*;
 use std::fs;
-use std::os::unix::fs::{DirBuilderExt, MetadataExt};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 fn temp_ledger_dir(test_name: &str) -> PathBuf {
     // RCH's TMPDIR can have ancestors owned by a different user. Exercise
     // storage under Linux's root-owned sticky /tmp with private 0700 permissions.
-    let dir = PathBuf::from("/tmp").join(format!(
+    let dir = support::tmp_root().join(format!(
         "sr-ledger-fence-{}-{}-{}",
         test_name,
         std::process::id(),
@@ -34,11 +33,7 @@ fn temp_ledger_dir(test_name: &str) -> PathBuf {
             .unwrap()
             .as_nanos()
     ));
-    fs::DirBuilder::new()
-        .mode(0o700)
-        .recursive(true)
-        .create(&dir)
-        .expect("temp dir create");
+    support::create_private_dir(&dir);
     dir
 }
 
@@ -162,9 +157,7 @@ fn two_process_clear_fences_stale_rank_writer_and_prevents_history_resurrection(
         .unwrap();
     assert_eq!(event_count, 1);
 
-    let meta_before = fs::metadata(&db_path).unwrap();
-    let ino_before = meta_before.ino();
-    let dev_before = meta_before.dev();
+    let identity_before = file_identity(&db_path);
 
     // Step 2: Process B executes clear()
     let cleared_stamp = store_b
@@ -174,17 +167,12 @@ fn two_process_clear_fences_stale_rank_writer_and_prevents_history_resurrection(
     assert_eq!(cleared_stamp.schema_generation, 1);
     assert_eq!(cleared_stamp.incarnation, stamp_b.incarnation);
 
-    // Verify DB file was not unlinked or replaced (same inode and device)
-    let meta_after = fs::metadata(&db_path).unwrap();
+    // Verify DB file was not unlinked or replaced (same device and inode, or
+    // volume serial and file index on Windows)
     assert_eq!(
-        meta_after.ino(),
-        ino_before,
-        "database inode must be unchanged"
-    );
-    assert_eq!(
-        meta_after.dev(),
-        dev_before,
-        "database device must be unchanged"
+        file_identity(&db_path),
+        identity_before,
+        "database identity must be unchanged"
     );
 
     // Verify all data tables were purged by clear()
@@ -531,4 +519,21 @@ fn concurrent_threads_clear_and_writer_race_safety() {
         )
         .expect("fresh handle at gen 2 succeeds after race");
     assert!(inv_final.shutdown());
+}
+
+/// The file's identity: device and inode on Unix, volume serial number and
+/// file index on Windows.
+fn file_identity(path: &std::path::Path) -> (u64, u64) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let metadata = fs::metadata(path).unwrap();
+        (metadata.dev(), metadata.ino())
+    }
+    #[cfg(windows)]
+    {
+        let file = fs::File::open(path).unwrap();
+        let information = winapi_util::file::information(&file).unwrap();
+        (information.volume_serial_number(), information.file_index())
+    }
 }

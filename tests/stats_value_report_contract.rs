@@ -15,20 +15,18 @@
 //! - Per-skill breakdown (--by-skill): top-1 recommendations, shortlist appearances, loads, judgments.
 //! - Time window filtering (--since 7d, 24h, 30m, ISO timestamp).
 //! - CLI output: JSON and human-readable table outputs.
-// Exercises the Unix-only private store; Windows builds refuse it (see docs/platform-boundary.md).
-#![cfg(unix)]
+
+mod support;
 
 use asupersync::Cx;
 use skillranker::runtime::ProcessInvocation;
 use skillranker::storage::ledger::*;
-use std::fs;
-use std::os::unix::fs::DirBuilderExt;
 use std::path::PathBuf;
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 fn temp_private_dir(prefix: &str) -> PathBuf {
-    let dir = PathBuf::from("/tmp").join(format!(
+    let dir = support::tmp_root().join(format!(
         "sr-stats-{}-{}-{}",
         prefix,
         std::process::id(),
@@ -37,11 +35,7 @@ fn temp_private_dir(prefix: &str) -> PathBuf {
             .unwrap()
             .as_nanos()
     ));
-    fs::DirBuilder::new()
-        .mode(0o700)
-        .recursive(true)
-        .create(&dir)
-        .expect("temp dir create");
+    support::create_private_dir(&dir);
     dir
 }
 

@@ -85,27 +85,26 @@ identity, error-adapter, alias-policy, and native symlink tests were added but n
 executed there. Neither the isolated Cargo invocation nor full/native checks are
 claimed as passed by this document.
 
-## Windows: stateless ranking
+## Windows
 
 Windows builds compile the same library and binary. Ranking, roster
 discovery, Claude transcript and session reads, `doctor`, `capabilities`,
-`demo`, hook installation and the response cache work. The cache's owner-only
-store follows [Windows private storage](windows-private-storage.md). Every
-component that depends on a private store not yet ported fails closed instead
-of being emulated:
+`demo`, hook installation, the response cache and the ledger work. Their
+owner-only stores follow [Windows private storage](windows-private-storage.md).
+Every component that depends on a private store not yet ported fails closed
+instead of being emulated:
 
 | Component | Windows behavior |
 |---|---|
 | Response cache, coordinator leases | Work, in `%LOCALAPPDATA%\skillranker\cache` (sr-winpar.3); a store that fails the policy is refused with its typed error, and optional caching is skipped visibly |
-| Ledger | Store open reports `UnsupportedFilesystem`; commands that require the ledger (`observe`, `feedback`, `stats`, `ledger`, …) fail with their storage error (sr-winpar.4) |
+| Ledger | Works, in `%LOCALAPPDATA%\skillranker\ledger` (sr-winpar.4): `sr ledger`, `observe`, `feedback`, `stats`, `snooze`, recorded shadow trials; a store that fails the policy is refused with its typed error |
 | Provider breaker state | Recorded beside the cache, so cooldowns and half-open probes are shared across processes (sr-winpar.3); an unusable store degrades to process-local protection with a warning |
 | Enforced request allowance | An absent guard means no allowance is configured, as on Unix; an existing guard, accounting store or `sr budget --apply` is refused, which withholds provider requests |
-| Hook invocation counter | Never written (it lives beside a ledger) |
-| Shadow-mode hooks | Skip ranking before any provider request, since nothing could be recorded; one stderr line says why. Advisory mode ranks and publishes |
+| Hook invocation counter | Recorded beside the ledger, as on Unix (sr-winpar.4) |
+| Shadow-mode hooks | As on Unix: rank and record when an initialized ledger can record; otherwise skip before any provider request with one stderr line saying why. Advisory mode ranks and publishes |
 | Owner-only exports, roster snapshots and replay case files | Refused: Windows ACLs are not inspected, so owner-only access cannot be established |
 | cass sessions (`--session`) | Unsupported source mode. The owned-subprocess boundary it needs runs on Windows (see below); the cass adapter is not ported yet (sr-winpar.11) |
 | Hook installer backups, calibration policy files | Written without owner-only protection (sr-winpar.7 for backups) |
-| `sr gaps` without `--input` | Reads no ledger and reports zero events |
 
 `sr capabilities --json` reports this table in its `platform` field, from the
 same flags the refusing code asserts at compile time; see

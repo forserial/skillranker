@@ -405,8 +405,10 @@ fn installing_writes_a_command_git_bash_can_run_and_removing_restores_settings()
         r#"{"model":"keep-me"}"#
     );
     let text = String::from_utf8_lossy(&preview.stdout);
-    assert!(text.contains("Windows builds have no ledger"), "{text}");
-    assert!(!text.contains("sr ledger init"), "{text}");
+    // Windows has a ledger since sr-winpar.4: the preview describes ordinary
+    // recorded shadow mode, not the old "no ledger" refusal.
+    assert!(!text.contains("has no ledger"), "{text}");
+    assert!(text.contains("evaluations recorded"), "{text}");
 
     for _ in 0..2 {
         let apply = f.run(&["install-hook", "claude", "--settings-file", path, "--apply"]);

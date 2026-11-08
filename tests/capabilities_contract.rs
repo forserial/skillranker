@@ -267,16 +267,18 @@ fn windows_reports_every_unqualified_boundary_as_unavailable() {
         assert_eq!(boundary["available"], ported, "{boundary}");
         assert_eq!(boundary["reason"].is_string(), !ported, "{boundary}");
     }
-    // Ported components: Git dirty_paths (sr-winpar.10), and the response
-    // cache, its coordinator leases and provider breaker state (sr-winpar.3).
-    // cass sessions wait on sr-winpar.11, the ledger and hook counter on
-    // sr-winpar.4. A component whose boundary exists but which is not ported
+    // Ported components: Git dirty_paths (sr-winpar.10); the response cache,
+    // its coordinator leases and provider breaker state (sr-winpar.3); the
+    // ledger and hook invocation counter (sr-winpar.4). cass sessions wait on
+    // sr-winpar.11. A component whose boundary exists but which is not ported
     // says so.
     let ported = [
         "git-dirty-paths",
         "response-cache",
         "coordinator-leases",
         "provider-breaker-state",
+        "ledger",
+        "hook-invocation-counter",
     ];
     for component in platform["components"].as_array().unwrap() {
         let expected = ported.contains(&component["name"].as_str().unwrap());

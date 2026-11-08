@@ -67,7 +67,7 @@ impl HookCounter {
 }
 /// `{unix_ms:020} {token:32 hex}\n`.
 const RECORD_LEN: usize = 54;
-#[cfg_attr(not(unix), allow(dead_code))] // Validated by the Unix-only counter.
+#[cfg_attr(not(any(unix, windows)), allow(dead_code))] // Validated by the counter.
 const TOKEN_HEX: usize = 32;
 
 /// Entries counted over a window.
@@ -112,9 +112,9 @@ pub fn record_hook_entry(dir: &Path, database_file: &str, counter: HookCounter, 
 }
 
 // `platform_support::LEDGER_STORAGE` reports which counter this build has.
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 const _: () = assert!(crate::platform_support::LEDGER_STORAGE);
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 const _: () = assert!(!crate::platform_support::LEDGER_STORAGE);
 
 #[cfg(unix)]
@@ -297,14 +297,96 @@ fn replace_entries(dir: &Path, counter: HookCounter, bytes: &[u8]) -> Result<(),
     Ok(())
 }
 
-/// Windows: the counter lives beside a ledger, and no ledger directory can be
-/// admitted on this platform, so there is never a counter to append to.
-#[cfg(not(unix))]
+/// Windows: the same rules through `storage::windows_private`. The directory
+/// must be a private store directory (owned by the user, protected DACL for
+/// the user and SYSTEM); the counter, created there, inherits those two
+/// entries and must be a single-link regular file. Each record is one append
+/// write, which Windows places whole at the end of the file.
+#[cfg(windows)]
+fn try_record(
+    dir: &Path,
+    database_file: &str,
+    counter: HookCounter,
+    now_unix_ms: i64,
+) -> Option<()> {
+    use std::io::Write;
+    super::windows_private::private_directory(dir).ok()?;
+    // Count only where the hook can record rows: beside an existing ledger.
+    if !std::fs::symlink_metadata(dir.join(database_file))
+        .ok()?
+        .is_file()
+    {
+        return None;
+    }
+    let mut file = super::windows_private::open_existing(dir, counter.file(), true, true).ok()?;
+    if file.metadata().ok()?.len() + RECORD_LEN as u64 > HOOK_ENTRIES_MAX_BYTES {
+        return None;
+    }
+    let record = format!(
+        "{:020} {}\n",
+        now_unix_ms.max(0),
+        super::ledger::generate_random_hex(TOKEN_HEX / 2)
+    );
+    debug_assert_eq!(record.len(), RECORD_LEN);
+    file.write_all(record.as_bytes()).ok()
+}
+
+#[cfg(windows)]
+fn read_entries(dir: &Path, counter: HookCounter) -> Result<Option<Vec<u8>>, StoreError> {
+    use std::io::Read;
+    let file = match super::windows_private::open_existing(dir, counter.file(), false, false) {
+        Ok(file) => file,
+        Err(StoreError::Missing) => return Ok(None),
+        Err(error) => return Err(error),
+    };
+    let mut bytes = Vec::new();
+    // Appends stop at the bound; a racing writer adds at most one record more.
+    file.take(HOOK_ENTRIES_MAX_BYTES + RECORD_LEN as u64)
+        .read_to_end(&mut bytes)
+        .map_err(|_| StoreError::Io)?;
+    Ok(Some(bytes))
+}
+
+/// Replace the counter with `bytes`: a staged file, created in the private
+/// directory (so it inherits the user and SYSTEM entries), renamed over the
+/// counter.
+#[cfg(windows)]
+fn replace_entries(dir: &Path, counter: HookCounter, bytes: &[u8]) -> Result<(), StoreError> {
+    use std::io::Write;
+    use std::os::windows::fs::OpenOptionsExt;
+    const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+    super::windows_private::private_directory(dir)?;
+    let staged = dir.join(format!(
+        "{}.{}.tmp",
+        counter.file(),
+        super::ledger::generate_random_hex(8)
+    ));
+    let written = (|| {
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
+            .open(&staged)?;
+        file.write_all(bytes)?;
+        file.sync_all()?;
+        drop(file);
+        std::fs::rename(&staged, dir.join(counter.file()))
+    })();
+    if written.is_err() {
+        let _ = std::fs::remove_file(&staged);
+        return Err(StoreError::Io);
+    }
+    Ok(())
+}
+
+/// Other targets: the counter lives beside a ledger, and no ledger directory
+/// can be admitted there, so there is never a counter to append to.
+#[cfg(not(any(unix, windows)))]
 fn try_record(_: &Path, _: &str, _: HookCounter, _: i64) -> Option<()> {
     None
 }
 
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 fn read_entries(dir: &Path, counter: HookCounter) -> Result<Option<Vec<u8>>, StoreError> {
     match std::fs::symlink_metadata(dir.join(counter.file())) {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
@@ -312,14 +394,15 @@ fn read_entries(dir: &Path, counter: HookCounter) -> Result<Option<Vec<u8>>, Sto
     }
 }
 
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 fn replace_entries(_: &Path, _: HookCounter, _: &[u8]) -> Result<(), StoreError> {
     Err(StoreError::UnsupportedFilesystem)
 }
 
-#[cfg(all(test, unix))]
+#[cfg(all(test, any(unix, windows)))]
 mod tests {
     use super::*;
+    #[cfg(unix)]
     use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -327,15 +410,34 @@ mod tests {
     const LEDGER: &str = "ledger.sqlite3";
     const E: HookCounter = HookCounter::Entries;
 
-    /// An owner-only directory holding a stand-in ledger file.
+    /// An owner-only directory holding a stand-in ledger file: mode 0700 on
+    /// Unix; on Windows a protected user+SYSTEM DACL applied at creation.
     fn ledger_dir() -> PathBuf {
         static NEXT: AtomicU64 = AtomicU64::new(0);
-        let dir = std::env::temp_dir().join(format!(
-            "sr-hook-entries-{}-{}",
+        #[cfg(unix)]
+        let base = std::env::temp_dir();
+        #[cfg(windows)]
+        let base = super::super::windows_private::test_root();
+        let dir = base.join(format!(
+            "sr-hook-entries-{}-{}-{}",
             std::process::id(),
-            NEXT.fetch_add(1, Ordering::Relaxed)
+            NEXT.fetch_add(1, Ordering::Relaxed),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
         ));
+        #[cfg(unix)]
         std::fs::DirBuilder::new().mode(0o700).create(&dir).unwrap();
+        #[cfg(windows)]
+        {
+            let user = super::super::windows_private::user().unwrap();
+            sr_win_sys::windows::create_directory_with(
+                &dir,
+                &super::super::windows_private::directory_sddl(user),
+            )
+            .unwrap();
+        }
         std::fs::write(dir.join(LEDGER), b"").unwrap();
         dir
     }
@@ -351,11 +453,20 @@ mod tests {
             record_hook_entry(&dir, LEDGER, E, at);
         }
         assert_eq!(file_len(&dir), 3 * RECORD_LEN as u64);
-        let mode = std::fs::metadata(dir.join(HOOK_ENTRIES_FILE))
-            .unwrap()
-            .permissions()
-            .mode();
-        assert_eq!(mode & 0o777, 0o600);
+        #[cfg(unix)]
+        {
+            let mode = std::fs::metadata(dir.join(HOOK_ENTRIES_FILE))
+                .unwrap()
+                .permissions()
+                .mode();
+            assert_eq!(mode & 0o777, 0o600);
+        }
+        // Windows: the counter inherits only the user and SYSTEM entries.
+        #[cfg(windows)]
+        {
+            let file = std::fs::File::open(dir.join(HOOK_ENTRIES_FILE)).unwrap();
+            assert!(super::super::windows_private::admitted_file(&file).is_ok());
+        }
         let count = count_hook_entries(&dir, E, 1_500, 3_000).unwrap();
         assert_eq!(count.entries, 2);
         assert_eq!(count.first_entry_unix_ms, Some(1_000));
@@ -377,18 +488,35 @@ mod tests {
         record_hook_entry(&dir, LEDGER, E, 1_000);
         assert_eq!(file_len(&dir), 0);
         // A directory that others can write to.
-        let shared = ledger_dir();
-        std::fs::set_permissions(&shared, std::fs::Permissions::from_mode(0o770)).unwrap();
+        #[cfg(unix)]
+        let shared = {
+            let shared = ledger_dir();
+            std::fs::set_permissions(&shared, std::fs::Permissions::from_mode(0o770)).unwrap();
+            shared
+        };
+        // Windows: an ordinary directory that inherits its parent's entries.
+        #[cfg(windows)]
+        let shared = {
+            let shared = ledger_dir().join("inheriting");
+            std::fs::create_dir(&shared).unwrap();
+            std::fs::write(shared.join(LEDGER), b"").unwrap();
+            shared
+        };
         record_hook_entry(&shared, LEDGER, E, 1_000);
         assert_eq!(file_len(&shared), 0);
-        // A counter that is a symlink is neither followed nor read.
-        let linked = ledger_dir();
-        let target = linked.join("elsewhere");
-        std::fs::write(&target, b"").unwrap();
-        std::os::unix::fs::symlink(&target, linked.join(HOOK_ENTRIES_FILE)).unwrap();
-        record_hook_entry(&linked, LEDGER, E, 1_000);
-        assert_eq!(std::fs::metadata(&target).unwrap().len(), 0);
-        assert!(count_hook_entries(&linked, E, 0, i64::MAX).is_err());
+        // A counter that is a symlink is neither followed nor read. Windows
+        // links need a privilege; the walk's reparse refusals are tested in
+        // tests/cache_windows_contract.rs.
+        #[cfg(unix)]
+        {
+            let linked = ledger_dir();
+            let target = linked.join("elsewhere");
+            std::fs::write(&target, b"").unwrap();
+            std::os::unix::fs::symlink(&target, linked.join(HOOK_ENTRIES_FILE)).unwrap();
+            record_hook_entry(&linked, LEDGER, E, 1_000);
+            assert_eq!(std::fs::metadata(&target).unwrap().len(), 0);
+            assert!(count_hook_entries(&linked, E, 0, i64::MAX).is_err());
+        }
     }
 
     #[test]
@@ -397,6 +525,7 @@ mod tests {
         let record = format!("{:020} {}\n", 5_000, "a".repeat(TOKEN_HEX));
         let records = (HOOK_ENTRIES_MAX_BYTES as usize) / RECORD_LEN;
         std::fs::write(dir.join(HOOK_ENTRIES_FILE), record.repeat(records)).unwrap();
+        #[cfg(unix)]
         std::fs::set_permissions(
             dir.join(HOOK_ENTRIES_FILE),
             std::fs::Permissions::from_mode(0o600),
@@ -439,7 +568,7 @@ mod tests {
             .append(true)
             .open(dir.join(HOOK_ENTRIES_FILE))
             .unwrap();
-        file.write_all(b"torn").unwrap();
+        std::io::Write::write_all(&mut file, b"torn").unwrap();
         assert_eq!(
             count_hook_entries(&dir, E, 0, i64::MAX).unwrap().unreadable,
             1
@@ -448,11 +577,22 @@ mod tests {
         let count = count_hook_entries(&dir, E, 0, i64::MAX).unwrap();
         assert_eq!((count.entries, count.unreadable), (1, 1));
         assert_eq!(count.first_entry_unix_ms, Some(3_000));
-        let mode = std::fs::metadata(dir.join(HOOK_ENTRIES_FILE))
-            .unwrap()
-            .permissions()
-            .mode();
-        assert_eq!(mode & 0o777, 0o600, "the replacement stays owner-only");
+        #[cfg(unix)]
+        {
+            let mode = std::fs::metadata(dir.join(HOOK_ENTRIES_FILE))
+                .unwrap()
+                .permissions()
+                .mode();
+            assert_eq!(mode & 0o777, 0o600, "the replacement stays owner-only");
+        }
+        #[cfg(windows)]
+        {
+            let file = std::fs::File::open(dir.join(HOOK_ENTRIES_FILE)).unwrap();
+            assert!(
+                super::super::windows_private::admitted_file(&file).is_ok(),
+                "the replacement stays owner-only"
+            );
+        }
         assert_eq!(clear_hook_entries(&dir, E).unwrap(), 2);
         assert_eq!(
             count_hook_entries(&dir, E, 0, i64::MAX).unwrap(),

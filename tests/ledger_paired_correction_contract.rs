@@ -1,4 +1,3 @@
-#![cfg(unix)]
 //! Contract and verification tests for deduplicated full historical membership
 //! snapshots and paired correction labels (sr-roadmap-l1i.6.6 / Invariant I15).
 //!
@@ -14,12 +13,12 @@
 //! - Stale revision conflict aborts transaction with zero judgments committed (`RevisionConflict`).
 //! - CLI subcommand `sr feedback` behaves correctly with JSON and human-readable output.
 
+mod support;
+
 use asupersync::Cx;
 use rusqlite::Connection;
 use skillranker::runtime::ProcessInvocation;
 use skillranker::storage::ledger::*;
-use std::fs;
-use std::os::unix::fs::DirBuilderExt;
 use std::path::PathBuf;
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -31,7 +30,7 @@ fn test_invocation() -> (ProcessInvocation, Cx) {
 }
 
 fn temp_private_dir(prefix: &str) -> PathBuf {
-    let dir = PathBuf::from("/tmp").join(format!(
+    let dir = support::tmp_root().join(format!(
         "sr-test-paired-{}-{}-{}",
         prefix,
         std::process::id(),
@@ -40,11 +39,7 @@ fn temp_private_dir(prefix: &str) -> PathBuf {
             .unwrap()
             .as_nanos()
     ));
-    fs::DirBuilder::new()
-        .mode(0o700)
-        .recursive(true)
-        .create(&dir)
-        .expect("temp dir create");
+    support::create_private_dir(&dir);
     dir
 }
 

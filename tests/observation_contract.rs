@@ -1,4 +1,3 @@
-#![cfg(unix)]
 //! Contract and verification tests for load attribution and atomic observation watermarks
 //! (sr-roadmap-l1i.6.9 / Invariants I18, G39).
 //!
@@ -17,6 +16,11 @@
 //! - `sr observe` rejects `--no-ledger` and `--no-persist` with exit code 2 (`invalid-usage`).
 //! - `sr observe` requires SQLite ledger: fails with exit code 9 if missing.
 //! - End-to-end CLI execution with context and transcript.
+
+#[path = "support/links.rs"]
+mod links;
+mod support;
+use support::PlatformEnv;
 
 use asupersync::Cx;
 use rusqlite::Connection;
@@ -40,7 +44,6 @@ use skillranker::storage::{
     record_ranking,
 };
 use std::fs;
-use std::os::unix::fs::DirBuilderExt;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -51,7 +54,7 @@ fn test_invocation() -> (ProcessInvocation, Cx) {
 }
 
 fn temp_private_dir(prefix: &str) -> PathBuf {
-    let dir = PathBuf::from("/tmp").join(format!(
+    let dir = support::tmp_root().join(format!(
         "sr-test-obs-{}-{}-{}",
         prefix,
         std::process::id(),
@@ -60,11 +63,7 @@ fn temp_private_dir(prefix: &str) -> PathBuf {
             .unwrap()
             .as_nanos()
     ));
-    fs::DirBuilder::new()
-        .mode(0o700)
-        .recursive(true)
-        .create(&dir)
-        .expect("temp dir create");
+    support::create_private_dir(&dir);
     dir
 }
 
@@ -77,11 +76,7 @@ impl ObserveBoundaryFixture {
     fn new() -> Self {
         let root = temp_private_dir("observe-boundary");
         for dir in ["workspace/.sr", "home/.config/sr", "ledger"] {
-            fs::DirBuilder::new()
-                .mode(0o700)
-                .recursive(true)
-                .create(root.join(dir))
-                .unwrap();
+            support::create_private_dir(root.join(dir));
         }
         let fixture = Self { root };
         let init = fixture
@@ -104,6 +99,7 @@ impl ObserveBoundaryFixture {
         let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_sr"));
         command
             .env_clear()
+            .platform_env()
             .env("HOME", self.root.join("home"))
             .env("XDG_CONFIG_HOME", self.root.join("home/.config"))
             .current_dir(self.root.join("workspace"));
@@ -615,7 +611,7 @@ fn observe_boundary_unqualified_imports_in_shared_ledger_keep_actual_workspaces_
         serde_json::from_slice(&fs::read(fixture.root.join("workspace/context.json")).unwrap())
             .unwrap();
     let other = fixture.root.join("other-workspace");
-    fs::DirBuilder::new().mode(0o700).create(&other).unwrap();
+    support::private_dir(&other);
     // Both inputs claim the first workspace; only the invocation workspace has
     // authority. The same home skill identity is visible in both workspaces.
     fs::write(other.join("context.json"), context.to_string()).unwrap();
@@ -957,13 +953,16 @@ fn observe_boundary_other_harness_uses_only_configured_inventory() {
 
 #[test]
 fn observe_boundary_refuses_escaping_symlinks_before_storage() {
+    if !links::available() {
+        return;
+    }
     let fixture = ObserveBoundaryFixture::new();
     fs::copy(
         fixture.root.join("workspace/context.json"),
         fixture.root.join("outside.json"),
     )
     .unwrap();
-    std::os::unix::fs::symlink(
+    links::symlink(
         fixture.root.join("outside.json"),
         fixture.root.join("workspace/escape.json"),
     )
@@ -971,7 +970,7 @@ fn observe_boundary_refuses_escaping_symlinks_before_storage() {
     let output = fixture.observe("escape.json", &[]);
     assert_eq!(output.status.code(), Some(7));
     assert_eq!(fixture.counts(), (0, 0));
-    std::os::unix::fs::symlink("context.json", fixture.root.join("workspace/alias.json")).unwrap();
+    links::symlink("context.json", fixture.root.join("workspace/alias.json")).unwrap();
     assert!(fixture.observe("alias.json", &[]).status.success());
     assert_eq!(fixture.counts(), (0, 1));
     let output = fixture.observe("context.json", &[]);
@@ -996,6 +995,8 @@ fn observe_boundary_refuses_oversized_regular_files_before_storage() {
     assert_eq!(fixture.counts(), (0, 1));
 }
 
+// Hashes the declared path's Unix OS bytes to predict the skill ID.
+#[cfg(unix)]
 #[test]
 fn observe_boundary_explicit_inventory_replaces_configured_discovery() {
     use std::os::unix::ffi::OsStrExt;
@@ -1047,6 +1048,8 @@ fn observe_boundary_explicit_inventory_replaces_configured_discovery() {
     assert_eq!(fixture.counts(), (1, 1));
 }
 
+// FIFOs and /dev/null are Unix special files.
+#[cfg(unix)]
 #[test]
 fn observe_boundary_refuses_fifo_and_device_inputs_without_blocking() {
     use std::process::Stdio;
@@ -2301,7 +2304,7 @@ fn native_observe_candidate_journey(split: bool, failed: bool, timing: &str, can
     // Create a native Claude transcript
     let transcript_path = ws_dir.join("native-sess-1.jsonl");
     let lines = [
-        format!("{{\"cwd\":\"{}\",\"sessionId\":\"native-sess-1\"}}", ws_path_str),
+        serde_json::json!({"cwd": ws_path_str, "sessionId": "native-sess-1"}).to_string(),
         "{\"type\":\"user\",\"uuid\":\"msg-u1\",\"sessionId\":\"native-sess-1\",\"message\":{\"role\":\"user\",\"content\":\"Please review code\"}}".to_string(),
         "{\"type\":\"assistant\",\"uuid\":\"msg-a1\",\"sessionId\":\"native-sess-1\",\"parentUuid\":\"msg-u1\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"tool_use\",\"id\":\"call-cr-1\",\"name\":\"code-review\",\"input\":{\"path\":\"src/lib.rs\"}}]}}".to_string(),
         "{\"type\":\"tool_result\",\"uuid\":\"msg-r1\",\"sessionId\":\"native-sess-1\",\"parentUuid\":\"msg-a1\",\"tool_use_id\":\"call-cr-1\",\"content\":\"Review passed\",\"is_error\":false}".to_string(),
@@ -2644,6 +2647,8 @@ fn split_observation_failure_does_not_claim_a_load() {
     native_observe_journey(true, true);
 }
 
+// Selects a cass session, which runs only on Unix (sr-winpar.11).
+#[cfg(unix)]
 #[test]
 fn test_observe_cli_cass_and_normalized_same_ids_cannot_move_native_cursor() {
     let bin = env!("CARGO_BIN_EXE_sr");
@@ -2662,7 +2667,7 @@ fn test_observe_cli_cass_and_normalized_same_ids_cannot_move_native_cursor() {
     // 1. Setup native transcript and run observe to advance native cursor to generation 1
     let transcript_path = ws_dir.join("shared-session.jsonl");
     let lines = [
-        format!("{{\"cwd\":\"{}\",\"sessionId\":\"shared-session\"}}", ws_path_str),
+        serde_json::json!({"cwd": ws_path_str, "sessionId": "shared-session"}).to_string(),
         "{\"type\":\"user\",\"uuid\":\"msg-u1\",\"sessionId\":\"shared-session\",\"text\":\"Hello\"}".to_string(),
     ];
     fs::write(&transcript_path, lines.join("\n") + "\n").expect("write transcript");

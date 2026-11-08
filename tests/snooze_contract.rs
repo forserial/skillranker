@@ -1,4 +1,3 @@
-#![cfg(any(target_os = "linux", target_os = "macos"))]
 //! Trusted, session-scoped advisory snoozes (sr-roadmap-l1i.7.8, I04),
 //! through the real binary against the loopback TLS Jev fixture. Synthetic
 //! skills and sessions only.
@@ -8,11 +7,15 @@
 //! still resolves, and a snooze landing while a ranking is pending withholds
 //! that ranking but not one in a sibling session.
 
+#[path = "support/stub_python.rs"]
+mod stub_python;
 mod support;
+use support::PlatformEnv;
 
 use serde_json::{Value, json};
 use std::io::{BufRead, BufReader};
-use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdout, Command, Output, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -27,10 +30,7 @@ impl Home {
     fn new() -> Self {
         let root = support::private_store_dir("snooze");
         for dir in ["home", "config", "cache", "data", "workspace", "scratch"] {
-            std::fs::DirBuilder::new()
-                .mode(0o700)
-                .create(root.join(dir))
-                .unwrap();
+            support::private_dir(root.join(dir));
         }
         for (name, description) in [
             ("alpha", "Runs and repairs failing rust tests."),
@@ -61,10 +61,13 @@ impl Home {
     fn command(&self, port: u16, config: &Path, args: &[&str]) -> Output {
         Command::new(env!("CARGO_BIN_EXE_sr"))
             .env_clear()
+            .platform_env()
             .env("HOME", self.root.join("home"))
             .env("XDG_CONFIG_HOME", config)
             .env("XDG_CACHE_HOME", self.root.join("cache"))
             .env("XDG_DATA_HOME", self.root.join("data"))
+            // Windows keeps the ledger and cache under LOCALAPPDATA.
+            .env("LOCALAPPDATA", self.root.join("data"))
             .env("XDG_STATE_HOME", self.root.join("home/state"))
             .env("TYPESAFE_API_KEY", "synthetic-snooze-canary")
             .env("TYPESAFE_ENDPOINT", format!("https://localhost:{port}"))
@@ -192,11 +195,10 @@ impl Provider {
         ] {
             std::fs::write(dir.join(name), bytes).unwrap();
         }
-        let mut child = Command::new("/usr/bin/python3")
+        let mut child = stub_python::python_command()
             .arg(dir.join("provider_server.py"))
             .arg(scenario)
             .args(args)
-            .env_clear()
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit())
@@ -279,11 +281,16 @@ fn a_skill_snooze_withholds_only_that_skill_in_its_own_session() {
     );
     assert_eq!(applied["applied"], true, "{applied}");
     assert_eq!(applied["entries_after"], 1);
-    let mode = std::fs::metadata(home.snooze_file())
-        .unwrap()
-        .permissions()
-        .mode();
-    assert_eq!(mode & 0o777, 0o600, "owner-only trusted configuration");
+    // Unix mode; Windows has no owner-only configuration files yet
+    // (policy-files, sr-winpar.6).
+    #[cfg(unix)]
+    {
+        let mode = std::fs::metadata(home.snooze_file())
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o600, "owner-only trusted configuration");
+    }
     // Echoing the event ID is not an exposure of its advice.
     let stats_snoozed = home.json(1, &["stats", "--json"]);
     assert_eq!(
@@ -462,7 +469,8 @@ fn an_uncertain_expiry_stays_muted_and_doctor_shows_it() {
             "schema_version = 1\n\n[[snooze]]\nevent_id = \"{event}\"\nworkspace_root = \"{}\"\n\
              session_id = \"{session}\"\nagent_branch = \"main\"\nskill_id = \"{top}\"\n\
              created_at_unix_ms = {}\nexpires_at_unix_ms = {}\n",
-            workspace.to_str().unwrap(),
+            // A TOML basic string: Windows path separators must be escaped.
+            workspace.to_str().unwrap().replace('\\', "\\\\"),
             now + 3_600_000,
             now + 5_400_000,
         ),

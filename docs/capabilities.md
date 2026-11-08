@@ -54,10 +54,10 @@ Each flag is the `cfg` predicate that selects the refusing implementation, and
 every refusing and enabling implementation asserts it at compile time
 (`const _: () = assert!(...)`). Enabling a component on a new platform without
 updating the flag fails the build. On Windows the owned-subprocess and
-private-storage boundaries are available, and of the storage components the
-response cache, coordinator leases and provider breaker state are ported so
-far; see
-[the platform boundary](platform-boundary.md#windows-stateless-ranking).
+private-storage boundaries are available, and so are every private-storage
+component (response cache, coordinator leases, provider breaker state, ledger
+and hook invocation counter); see
+[the platform boundary](platform-boundary.md#windows).
 
 The registry states what this binary runs. It claims no phase acceptance,
 provider availability, native harness support or installed-version

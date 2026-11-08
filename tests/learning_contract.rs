@@ -1,4 +1,3 @@
-#![cfg(any(target_os = "linux", target_os = "macos"))]
 //! Evidence-gated learning, centered shrunk usefulness priors, threshold
 //! calibration, managed-policy rollback, and composite-risk supermartingale
 //! monitoring contracts (Phase P8: sr-roadmap-l1i.9.1..9.8).
@@ -15,7 +14,8 @@ use skillranker::learning::{
     beta_shrunk_prior_delta, read_managed_policy_from_toml, rollback_managed_policy,
     run_calibration_from_bytes, verify_supermartingale_ville_bound,
 };
-use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 
 fn sample_calibration_artifact() -> CalibrationArtifact {
     let mut training_judgments = Vec::new();
@@ -224,19 +224,12 @@ fn calibration_and_supermartingale() {
     let root = support::private_store_dir("p8-learning");
     let config_dir = root.join("config/sr");
     let state_dir = root.join("state");
-    std::fs::DirBuilder::new()
-        .recursive(true)
-        .mode(0o700)
-        .create(&config_dir)
-        .unwrap();
-    std::fs::DirBuilder::new()
-        .recursive(true)
-        .mode(0o700)
-        .create(&state_dir)
-        .unwrap();
+    support::create_private_dir(&config_dir);
+    support::create_private_dir(&state_dir);
     let config_path = config_dir.join("config.toml");
     let initial_toml = "[network]\nenabled = true\n\n[hook]\nmode = \"advisory\"\n\n[roster]\nexcluded_skills = [\"sk-banned\"]\n";
     std::fs::write(&config_path, initial_toml).unwrap();
+    #[cfg(unix)]
     std::fs::set_permissions(&config_path, std::fs::Permissions::from_mode(0o600)).unwrap();
 
     let applied = apply_calibrated_policy(report.clone(), &config_path, &state_dir).unwrap();

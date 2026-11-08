@@ -1,6 +1,4 @@
 //! Satisfies contract boundary `p4_explain_exclusion_stages` (sr-roadmap-l1i.5.14).
-// Exercises the Unix-only private store; Windows builds refuse it (see docs/platform-boundary.md).
-#![cfg(unix)]
 
 mod support;
 
@@ -22,7 +20,6 @@ use skillranker::privacy::{EffectFlags, NetworkConsent};
 use skillranker::roster::LocalPath;
 use skillranker::runtime::{EntryClock, ProcessInvocation};
 use std::fs;
-use std::os::unix::fs::DirBuilderExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -88,9 +85,9 @@ fn create_test_env() -> (PathBuf, PathBuf) {
 
 fn create_cache_dir() -> PathBuf {
     let id = FIXTURE_COUNTER.fetch_add(1, Ordering::Relaxed);
-    let dir = Path::new("/tmp").join(format!("sr-trace-cache-{}-{}", std::process::id(), id));
+    let dir = support::tmp_root().join(format!("sr-trace-cache-{}-{}", std::process::id(), id));
     if !dir.exists() {
-        std::fs::DirBuilder::new().mode(0o700).create(&dir).unwrap();
+        support::private_dir(&dir);
     }
     dir
 }

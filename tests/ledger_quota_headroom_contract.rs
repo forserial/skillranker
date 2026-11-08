@@ -8,8 +8,9 @@
 //! - Fill recording capacity then successfully migrate/prune within reserve.
 //! - Simulate external full disk and reject before mutation with required-space figure and recovery hint.
 //! - Preserve recoverable copy and never reset protected charges.
-// Exercises the Unix-only private store; Windows builds refuse it (see docs/platform-boundary.md).
-#![cfg(unix)]
+
+mod support;
+use support::OwnerOnly;
 
 use asupersync::Cx;
 use rusqlite::Connection;
@@ -17,14 +18,13 @@ use skillranker::runtime::ProcessInvocation;
 use skillranker::storage::ledger::*;
 use skillranker::storage::*;
 use std::fs;
-use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 fn temp_private_dir(prefix: &str) -> PathBuf {
     // RCH's TMPDIR can have ancestors owned by a different user. Exercise
     // storage under Linux's root-owned sticky /tmp with private 0700 permissions.
-    let dir = PathBuf::from("/tmp").join(format!(
+    let dir = support::tmp_root().join(format!(
         "sr-{}-{}-{}",
         prefix,
         std::process::id(),
@@ -33,11 +33,7 @@ fn temp_private_dir(prefix: &str) -> PathBuf {
             .unwrap()
             .as_nanos()
     ));
-    fs::DirBuilder::new()
-        .mode(0o700)
-        .recursive(true)
-        .create(&dir)
-        .expect("temp dir create");
+    support::create_private_dir(&dir);
     dir
 }
 
@@ -248,7 +244,7 @@ fn filling_recording_capacity_blocks_mutations_and_preserves_history() {
         .write(true)
         .create(true)
         .truncate(true)
-        .mode(0o600)
+        .owner_only()
         .open(&dummy_path)
         .expect("open dummy file");
     dummy_file
@@ -359,7 +355,7 @@ fn maintenance_preflight_and_execution_succeed_within_reserve_at_recording_ceili
         .write(true)
         .create(true)
         .truncate(true)
-        .mode(0o600)
+        .owner_only()
         .open(&dummy_path)
         .expect("open dummy file");
     dummy_file

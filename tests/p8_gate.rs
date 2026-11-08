@@ -1,4 +1,3 @@
-#![cfg(any(target_os = "linux", target_os = "macos"))]
 //! Phase P8 acceptance gate: evidence-gated learning, held-out benefit,
 //! atomic managed-policy rollback, and sequential composite-risk monitoring
 //! verified through the real `sr calibrate` CLI binary.
@@ -7,13 +6,15 @@
 //! in `tests/contract_matrix.toml`.
 
 mod support;
+use support::PlatformEnv;
 
 use serde_json::{Value, json};
 use skillranker::learning::{
     CalibrationArtifact, CalibrationCandidateInput, CalibrationCaseInput, CalibrationSplit,
     FinalizedMonitorUnit, MonitorBatchInput, MonitorRestartStep, PriorJudgmentRecord,
 };
-use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::process::{Command, Output};
 
@@ -25,11 +26,7 @@ impl Home {
     fn new() -> Self {
         let root = support::private_store_dir("p8-gate");
         for dir in ["home", "config", "config/sr", "state", "workspace"] {
-            std::fs::DirBuilder::new()
-                .recursive(true)
-                .mode(0o700)
-                .create(root.join(dir))
-                .unwrap();
+            support::create_private_dir(root.join(dir));
         }
         let config_path = root.join("config/sr/config.toml");
         let skills_root = root.join("workspace");
@@ -41,6 +38,7 @@ impl Home {
             ),
         )
         .unwrap();
+        #[cfg(unix)]
         std::fs::set_permissions(&config_path, std::fs::Permissions::from_mode(0o600)).unwrap();
         Self { root }
     }
@@ -48,9 +46,12 @@ impl Home {
     fn run(&self, args: &[&str]) -> Output {
         Command::new(env!("CARGO_BIN_EXE_sr"))
             .env_clear()
+            .platform_env()
             .env("HOME", self.root.join("home"))
             .env("XDG_CONFIG_HOME", self.root.join("config"))
             .env("XDG_DATA_HOME", self.root.join("state"))
+            // Windows keeps the ledger and cache under LOCALAPPDATA.
+            .env("LOCALAPPDATA", self.root.join("state"))
             .current_dir(self.root.join("workspace"))
             .args(args)
             .output()

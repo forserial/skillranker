@@ -1814,8 +1814,6 @@ fn a_windowed_history_still_ranks_and_says_so() {
     assert_eq!(value["quality"]["task_anchor_known"], true);
 }
 
-// Initializes a ledger, which Windows does not have yet (sr-winpar.4).
-#[cfg(unix)]
 #[test]
 fn persistence_reports_disabled_only_when_the_user_disabled_it() {
     let f = Fixture::new(CONSENT);

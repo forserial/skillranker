@@ -1,16 +1,14 @@
-#![cfg(unix)]
+mod support;
 
 use asupersync::Cx;
 use rusqlite::Connection;
 use skillranker::runtime::ProcessInvocation;
 use skillranker::storage::ledger::*;
-use std::fs::DirBuilder;
-use std::os::unix::fs::DirBuilderExt;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 fn fixture(invocation: &ProcessInvocation, cx: &Cx, complete: bool) -> LedgerStore {
     // Retained under repository policy; no automatic deletion of test trees.
-    let directory = std::path::PathBuf::from("/tmp").join(format!(
+    let directory = support::tmp_root().join(format!(
         "sr-feedback-coverage-{}-{}",
         std::process::id(),
         SystemTime::now()
@@ -18,7 +16,7 @@ fn fixture(invocation: &ProcessInvocation, cx: &Cx, complete: bool) -> LedgerSto
             .unwrap()
             .as_nanos()
     ));
-    DirBuilder::new().mode(0o700).create(&directory).unwrap();
+    support::private_dir(&directory);
     let LedgerOpen::Ready(mut store) = open_ledger(
         invocation,
         cx,

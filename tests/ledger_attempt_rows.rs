@@ -1,4 +1,3 @@
-#![cfg(unix)]
 //! Attempt rows built from real admission provenance (sr-roadmap-l1i.6.7).
 //!
 //! `tests/jev_admission.rs` pins what the admission seam remembers per attempt,
@@ -12,6 +11,8 @@
 //! and inserts the mapped row into a real SQLite ledger, so the schema's own
 //! CHECK constraints are part of the evidence rather than something these
 //! assertions merely hope about.
+mod support;
+
 use asupersync::Cx;
 use rusqlite::Connection;
 use skillranker::jev::client::{TransportError, TransportErrorKind};
@@ -24,8 +25,6 @@ use skillranker::limits::{DurationMillis, MonotonicMillis};
 use skillranker::runtime::{EntryClock, ProcessInvocation};
 use skillranker::storage::StoreError;
 use skillranker::storage::ledger::*;
-use std::fs;
-use std::os::unix::fs::DirBuilderExt;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -64,7 +63,7 @@ fn temp_ledger_dir(test_name: &str) -> PathBuf {
     // As in the schema contract: RCH's TMPDIR can have ancestors owned by another
     // user, so use Linux's root-owned sticky /tmp rather than relaxing the store's
     // own ancestor checks.
-    let dir = PathBuf::from("/tmp").join(format!(
+    let dir = support::tmp_root().join(format!(
         "sr-attempt-row-{}-{}-{}",
         test_name,
         std::process::id(),
@@ -73,11 +72,7 @@ fn temp_ledger_dir(test_name: &str) -> PathBuf {
             .unwrap()
             .as_nanos()
     ));
-    fs::DirBuilder::new()
-        .mode(0o700)
-        .recursive(true)
-        .create(&dir)
-        .expect("temp dir create");
+    support::create_private_dir(&dir);
     dir
 }
 

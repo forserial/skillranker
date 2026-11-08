@@ -1,4 +1,3 @@
-#![cfg(unix)]
 //! Contract and verification tests for versioned explicit judgments without
 //! adoption leakage (sr-roadmap-l1i.6.11 / Invariant I15).
 //!
@@ -11,12 +10,12 @@
 //! - Retention boundary: judgments older than 30 days are pruned while active judgments are preserved.
 //! - Judgments update store `data_generation`, invalidating derived evidence and priors.
 
+mod support;
+
 use asupersync::Cx;
 use rusqlite::Connection;
 use skillranker::runtime::ProcessInvocation;
 use skillranker::storage::ledger::*;
-use std::fs;
-use std::os::unix::fs::DirBuilderExt;
 use std::path::PathBuf;
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -28,7 +27,7 @@ fn test_invocation() -> (ProcessInvocation, Cx) {
 }
 
 fn temp_private_dir(prefix: &str) -> PathBuf {
-    let dir = PathBuf::from("/tmp").join(format!(
+    let dir = support::tmp_root().join(format!(
         "sr-test-judg-{}-{}-{}",
         prefix,
         std::process::id(),
@@ -37,11 +36,7 @@ fn temp_private_dir(prefix: &str) -> PathBuf {
             .unwrap()
             .as_nanos()
     ));
-    fs::DirBuilder::new()
-        .mode(0o700)
-        .recursive(true)
-        .create(&dir)
-        .expect("temp dir create");
+    support::create_private_dir(&dir);
     dir
 }
 
