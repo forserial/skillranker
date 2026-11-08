@@ -20,7 +20,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::fs;
 use std::io::Read;
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 use std::io::Write;
 use std::path::Path;
 
@@ -964,9 +964,9 @@ pub struct PolicyRevisionRecord {
 }
 
 // `platform_support::POLICY_FILES` reports whether policy files get owner-only modes.
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 const _: () = assert!(crate::platform_support::POLICY_FILES);
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 const _: () = assert!(!crate::platform_support::POLICY_FILES);
 
 fn ensure_private_dir(path: &Path) -> Result<(), LearningError> {
@@ -989,8 +989,30 @@ fn ensure_private_dir(path: &Path) -> Result<(), LearningError> {
             )));
         }
     }
-    #[cfg(not(unix))]
-    fs::create_dir_all(path).map_err(|e| LearningError::Storage(e.to_string()))?;
+    // Windows (sr-winpar.23): the same owner-only directory as the ledger's,
+    // walked without following links or junctions, created with the private
+    // descriptor and admitted as a store directory (only the user and SYSTEM);
+    // an existing directory that fails is refused, never repaired.
+    #[cfg(windows)]
+    crate::storage::windows_private::walk(path, true, || Ok(())).map_err(|error| {
+        use crate::storage::StoreError;
+        let reason = match error {
+            StoreError::Missing | StoreError::UnsafePath => {
+                "is a link or junction, or not a plain directory, or a folder above it is"
+            }
+            StoreError::Permissions => {
+                "is not owner-only (owned by you, with access for you and SYSTEM only), or a folder above it can be changed by another account"
+            }
+            StoreError::UnsupportedFilesystem => "is not on a local fixed NTFS or ReFS volume",
+            _ => "could not be inspected",
+        };
+        LearningError::Storage(format!("directory {} {reason}", path.display()))
+    })?;
+    #[cfg(not(any(unix, windows)))]
+    return Err(LearningError::Storage(
+        "owner-only policy files are not supported on this platform".into(),
+    ));
+    #[cfg(any(unix, windows))]
     Ok(())
 }
 
@@ -1020,10 +1042,46 @@ fn write_private_atomic(path: &Path, bytes: &[u8]) -> Result<(), LearningError> 
             .and_then(|()| file.sync_all())
             .map_err(|e| LearningError::Storage(format!("write temp {}: {e}", tmp.display())))?;
     }
-    #[cfg(not(unix))]
-    fs::write(&tmp, bytes).map_err(|e| LearningError::Storage(e.to_string()))?;
+    #[cfg(unix)]
     fs::rename(&tmp, path)
         .map_err(|e| LearningError::Storage(format!("rename to {}: {e}", path.display())))?;
+    // Windows (sr-winpar.23): a new temporary file with the private file
+    // descriptor (never an existing one), flushed, then swapped in with
+    // `MoveFileExW(REPLACE_EXISTING | WRITE_THROUGH)`, as the allowance guard
+    // is. The replaced file's permissions do not carry over.
+    #[cfg(windows)]
+    {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let mut unique = tmp.into_os_string();
+        unique.push(format!("-{nanos}-{}", NEXT.fetch_add(1, Ordering::Relaxed)));
+        let tmp = std::path::PathBuf::from(unique);
+        let name = tmp.file_name().unwrap_or_default();
+        let mut file = crate::storage::windows_private::create_store_file(parent, name)
+            .map_err(|e| LearningError::Storage(format!("open temp {}: {e}", tmp.display())))?;
+        let written = file
+            .write_all(bytes)
+            .and_then(|()| file.sync_all())
+            .map_err(|e| LearningError::Storage(format!("write temp {}: {e}", tmp.display())));
+        drop(file);
+        let replaced = written.and_then(|()| {
+            sr_win_sys::windows::replace_file(&tmp, path)
+                .map_err(|e| LearningError::Storage(format!("rename to {}: {e}", path.display())))
+        });
+        if replaced.is_err() {
+            let _ = fs::remove_file(&tmp);
+        }
+        replaced?;
+    }
+    #[cfg(not(any(unix, windows)))]
+    return Err(LearningError::Storage(
+        "owner-only policy files are not supported on this platform".into(),
+    ));
+    #[cfg(any(unix, windows))]
     Ok(())
 }
 

@@ -241,6 +241,17 @@ fn calibration_and_supermartingale() {
             .exists(),
         "expected owner-only .bak.toml backup in policy-revisions"
     );
+    // Every file the apply wrote is owner-only: 0600 on Unix; on Windows owned
+    // by the user with a protected DACL for the user and SYSTEM (sr-winpar.23).
+    let revisions = state_dir.join("policy-revisions");
+    for written in [
+        config_path.clone(),
+        revisions.join(format!("{}.bak.toml", applied.revision_id)),
+        revisions.join(format!("{}.json", applied.revision_id)),
+        state_dir.join("prior_snapshot.json"),
+    ] {
+        support::assert_owner_only_file(&written);
+    }
     let active_snap = skillranker::learning::load_active_prior_snapshot(&state_dir)
         .unwrap()
         .expect("expected active prior_snapshot.json when w_prior > 0");
@@ -367,4 +378,33 @@ fn calibration_and_supermartingale() {
     assert_eq!(mon.current_epoch, 2);
     assert_eq!(mon.status, "active");
     assert!(mon.remaining_alpha() < 1e-12);
+}
+
+/// A configuration directory other accounts can change is refused before any
+/// write, and is not repaired: 0777 on Unix; on Windows an Everyone Modify
+/// entry (sr-winpar.23).
+#[test]
+fn apply_refuses_a_shared_configuration_directory_before_writing() {
+    let report =
+        run_calibration_from_bytes(&serde_json::to_vec(&sample_calibration_artifact()).unwrap())
+            .unwrap();
+    assert!(report.promotable, "{report:?}");
+    let root = support::private_store_dir("p8-shared-config");
+    let config_dir = root.join("config/sr");
+    let state_dir = root.join("state");
+    support::create_private_dir(&config_dir);
+    support::create_private_dir(&state_dir);
+    let config_path = config_dir.join("config.toml");
+    let initial = "[network]\nenabled = true\n";
+    std::fs::write(&config_path, initial).unwrap();
+    support::restrict_to_owner(&config_path);
+    support::share_with_everyone(&config_dir);
+    let error = apply_calibrated_policy(report, &config_path, &state_dir).unwrap_err();
+    assert!(matches!(error, LearningError::Storage(_)), "{error:?}");
+    assert_eq!(std::fs::read_to_string(&config_path).unwrap(), initial);
+    let names: Vec<_> = std::fs::read_dir(&config_dir)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect();
+    assert_eq!(names, ["config.toml"], "no temporary file was left");
 }

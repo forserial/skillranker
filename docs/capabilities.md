@@ -41,9 +41,9 @@ is its single source:
 `when_unavailable` is one of `refused` (typed error, nothing written),
 `skipped` (the optional effect is left out and the command continues),
 `omitted` (a context signal is reported as omitted), `empty-report` (`gaps`
-reads no ledger and reports zero events) or `written-unprotected` (where
-calibration policy files are not yet ported they are still written, without
-owner-only protection; a known gap, not a refusal).
+reads no ledger and reports zero events) or `written-unprotected` (the file
+would be written without owner-only protection: a known gap, not a refusal; no
+supported platform has one today).
 
 Every entry is listed on every platform; consumers filter on `available`. A
 boundary flag says whether the build has an implementation at all. An available
@@ -54,8 +54,8 @@ Each flag is the `cfg` predicate that selects the refusing implementation, and
 every refusing and enabling implementation asserts it at compile time
 (`const _: () = assert!(...)`). Enabling a component on a new platform without
 updating the flag fails the build. On Windows every boundary is available.
-Every component that depends on them is too, except cass sessions and
-calibration policy files, which are not yet ported; see
+Every component that depends on them is too, except cass sessions, which are
+not yet ported; see
 [the platform boundary](platform-boundary.md#windows).
 
 The registry states what this binary runs. It claims no phase acceptance,

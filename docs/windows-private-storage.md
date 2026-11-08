@@ -10,8 +10,9 @@ security descriptors under `#![forbid(unsafe_code)]`
 ([Cache](#cache-sr-winpar3)) and the ledger with its hook counter
 ([Ledger](#ledger-sr-winpar4)), the enforced allowance
 ([Allowance](#allowance-sr-winpar5)) and owner-only exports
-([Exports](#exports-sr-winpar6)) and installer backups
-([Backups](#backups-sr-winpar7)) implement it
+([Exports](#exports-sr-winpar6)), installer backups
+([Backups](#backups-sr-winpar7)) and calibration policy files
+([Policy files](#policy-files-sr-winpar23)) implement it
 ([platform boundary](platform-boundary.md#windows)).
 
 The user approved the defaults on 2026-11-07 and, after the observation below,
@@ -555,3 +556,40 @@ Native evidence:
   change.
 - `tests/snooze_contract.rs` and `tests/onboarding_contract.rs` apply changes
   through the same backup.
+
+## Policy files (sr-winpar.23)
+
+`sr calibrate --evaluation FILE --apply`, `--rollback REVISION --apply` and
+`--monitor FILE --apply` write the user's `sr\config.toml`, policy revisions
+and their backups (`policy-revisions` in the ledger folder), the active prior
+snapshot and the monitor state. On Unix each directory must be an owner-only
+0700 directory, not a symlink, and each file goes through a 0600 temporary file
+and a rename. On Windows (`learning::ensure_private_dir`, `write_private_atomic`):
+
+- **Directories.** Each directory is walked from the volume root without
+  following links or junctions, with the same rules as a store directory: rule 3
+  for ancestors, rule 5 for the volume, rules 1 and 2 for the directory itself
+  (owned by the user, a protected DACL for the user and SYSTEM only). Missing
+  directories are created with the private descriptor. An existing directory
+  that fails, such as a configuration folder that inherited its parent's
+  entries, is refused with the storage error before anything is written, and is
+  never repaired, as a 0755 one is refused on Unix.
+- **Files.** Each file is written to a new temporary file with the private
+  file descriptor (`.NAME.sr-tmp-PID-NANOS-N`, never an existing name),
+  flushed, and swapped in with `MoveFileExW(REPLACE_EXISTING | WRITE_THROUGH)`,
+  as the allowance guard is. The replaced file's permissions do not carry over.
+  On failure the temporary file is removed and the target is left as it was.
+  Durability carries the limits recorded under
+  [Exports](#exports-sr-winpar6).
+
+Previews (without `--apply`) write nothing on either platform.
+
+Native evidence:
+- `tests/learning_contract.rs`:
+  - apply and rollback through these writers, checking that `config.toml`, the
+    revision, its backup and the prior snapshot are owner-only;
+  - `apply_refuses_a_shared_configuration_directory_before_writing`: a
+    configuration folder granting Everyone Modify is refused before any write,
+    leaving no temporary file.
+- `tests/p8_gate.rs`: the calibration, rollback and monitor chain through the
+  real binary.

@@ -107,7 +107,7 @@ instead of being emulated:
 | Owner-only exports, roster snapshots and replay case files | Work (sr-winpar.6): `sr roster --snapshot` and `sr rank --save-case` publish an owner-only file without replacing any existing or raced-in target, into an existing directory no one else can write; `sr replay` reads only an owner-only regular file |
 | cass sessions (`--session`) | Unsupported source mode. The owned-subprocess boundary it needs runs on Windows (see below); the cass adapter is not ported yet (sr-winpar.11) |
 | Hook installer backups | Owner-only (sr-winpar.7), in `%LOCALAPPDATA%\skillranker\backups`; if the backup cannot be made owner-only, `install-hook`, `uninstall-hook` and `snooze --apply` fail before the settings change |
-| Calibration policy files | Written without owner-only protection (sr-winpar.23) |
+| Calibration policy files | Owner-only (sr-winpar.23): `calibrate ... --apply` writes `config.toml`, policy revisions and backups, prior snapshots and monitor state through private folders and owner-only files, or fails with its storage error before writing |
 
 `sr capabilities --json` reports this table in its `platform` field, from the
 same flags the refusing code asserts at compile time; see
@@ -245,10 +245,9 @@ can run out and report `Budget`, as on any loaded host.
   stdin and at most one chunk, publishes nothing, and ends with the process.
   AGENTS.md's no-detached-workers rule is relaxed for this one leaf, because
   cancelling it would need `unsafe` code the crate forbids.
-- Calibration policy files still wait on their port of
-  [Windows private storage](windows-private-storage.md); the cache, ledger,
-  allowance, export and backup implementations and their limits are recorded
-  there.
+- The cache, ledger, allowance, export, backup and policy-file
+  implementations and their limits are recorded in
+  [Windows private storage](windows-private-storage.md).
 - An export's destination must be on a local fixed NTFS or ReFS volume:
   removable, network and RAM-disk destinations are refused, where Unix exports
   accept any filesystem. Windows has no directory flush from a read-only handle,

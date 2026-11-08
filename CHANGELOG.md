@@ -4,6 +4,12 @@
 
 ### Added
 
+- Windows writes calibration policy files owner-only: `sr calibrate ...
+  --apply` creates its folders privately (refusing an existing folder that is
+  not owner-only, without repairing it) and replaces `config.toml`, policy
+  revisions, prior snapshots and monitor state with new files only the user and
+  SYSTEM can open. `sr capabilities --json` reports `policy-files` available on
+  Windows.
 - Windows writes hook-installer and snooze backups owner-only, in
   `%LOCALAPPDATA%\skillranker\backups`. If a backup cannot be made
   owner-only, `install-hook`, `uninstall-hook` and `snooze --apply` fail with
