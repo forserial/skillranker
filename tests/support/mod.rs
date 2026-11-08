@@ -271,6 +271,25 @@ impl PlatformEnv for std::process::Command {
     }
 }
 
+static NAME_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+/// A name part unique within this run of a test binary, for fixture paths:
+/// process id, wall-clock nanoseconds and a counter. The counter is what
+/// makes it unique: parallel test threads can read the same clock tick, and
+/// two fixtures then shared one directory (observation_contract failed about
+/// one run in five on Windows that way).
+pub fn unique_suffix() -> String {
+    format!(
+        "{}-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos(),
+        NAME_COUNTER.fetch_add(1, Ordering::Relaxed)
+    )
+}
+
 /// A fresh owner-only directory for one store consumer. Each call returns a
 /// unique path under root-owned sticky /tmp (or /var/tmp when /tmp is tmpfs on
 /// Linux; `%LOCALAPPDATA%\sr-tests` on Windows), so parallel tests cannot
