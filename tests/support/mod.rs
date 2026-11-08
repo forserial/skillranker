@@ -128,6 +128,20 @@ pub fn restrict_to_owner(path: impl AsRef<std::path::Path>) {
     let _ = path;
 }
 
+/// Set existing directories to mode 0700 on Unix, as fixtures created with
+/// the process umask need. On Windows a directory created inside a private
+/// directory already inherits entries for the user and SYSTEM only.
+pub fn restrict_dirs_to_owner(dirs: &[&std::path::Path]) {
+    #[cfg(unix)]
+    for dir in dirs {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))
+            .expect("restrict fixture directory to owner");
+    }
+    #[cfg(windows)]
+    let _ = dirs;
+}
+
 /// Make a file or directory writable by every local user: mode 0666 (files)
 /// or 0777 (directories) on Unix; on Windows an Everyone Modify entry, added
 /// with the system's `icacls`.
@@ -174,6 +188,36 @@ pub fn assert_owner_only_file(path: impl AsRef<std::path::Path>) {
         let user = sr_win_sys::windows::token_user_sid().unwrap();
         assert_eq!(descriptor.owner, user, "{}", path.display());
         assert!(descriptor.dacl_protected(), "{descriptor:?}");
+        let aces = descriptor.dacl.as_ref().unwrap();
+        assert!(!aces.is_empty(), "{descriptor:?}");
+        for ace in aces {
+            assert_eq!(ace.kind, sr_win_sys::AceKind::Allowed, "{descriptor:?}");
+            let sid = ace.sid.as_ref().unwrap();
+            assert!(sid == &user || sid.is_local_system(), "{descriptor:?}");
+        }
+    }
+}
+
+/// Assert that `path` is a private file inside a store: mode 0600 on Unix; on
+/// Windows owned by this user with allow entries for this user and SYSTEM
+/// only, explicit or inherited from the private store folder
+/// (docs/windows-private-storage.md rule 2). Standalone files such as exports
+/// meet the stricter [`assert_owner_only_file`].
+pub fn assert_private_store_file(path: impl AsRef<std::path::Path>) {
+    let path = path.as_ref();
+    #[cfg(unix)]
+    assert_owner_only_file(path);
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        let file = std::fs::OpenOptions::new()
+            .access_mode(0x0002_0000 | 0x0080)
+            .custom_flags(sr_win_sys::windows::FILE_FLAG_BACKUP_SEMANTICS)
+            .open(path)
+            .unwrap();
+        let descriptor = sr_win_sys::windows::security_of(&file).unwrap();
+        let user = sr_win_sys::windows::token_user_sid().unwrap();
+        assert_eq!(descriptor.owner, user, "{}", path.display());
         let aces = descriptor.dacl.as_ref().unwrap();
         assert!(!aces.is_empty(), "{descriptor:?}");
         for ace in aces {
@@ -267,6 +311,26 @@ impl PlatformEnv for std::process::Command {
         if let Some(root) = std::env::var_os("SystemRoot") {
             self.env("SystemRoot", root);
         }
+        self
+    }
+}
+
+/// `Command::fixture_env(root)`: [`PlatformEnv::platform_env`], plus on
+/// Windows a `LOCALAPPDATA` inside the fixture (`root\local`), where `sr`
+/// keeps its cache, ledger and installer backups. Without it a cleared
+/// environment has no private location and backups are refused; it also keeps
+/// tests out of the operator's real profile.
+pub trait FixtureEnv {
+    fn fixture_env(&mut self, root: &std::path::Path) -> &mut Self;
+}
+
+impl FixtureEnv for std::process::Command {
+    fn fixture_env(&mut self, root: &std::path::Path) -> &mut Self {
+        self.platform_env();
+        #[cfg(windows)]
+        self.env("LOCALAPPDATA", root.join("local"));
+        #[cfg(not(windows))]
+        let _ = root;
         self
     }
 }

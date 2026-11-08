@@ -1,4 +1,3 @@
-#![cfg(unix)]
 //! P6 Claude shadow hook protocol boundary contract.
 //!
 //! Satisfies contract boundary `p6_shadow_hook_execution` (sr-roadmap-l1i.7.1)
@@ -25,6 +24,8 @@
 //! 4. CLI error preservation:
 //!    - Non-hook CLI errors (e.g. `sr rank --bogus`) retain exit 2.
 
+mod support;
+
 use serde_json::json;
 use skillranker::adapter::{ClaudeUserPromptSubmit, UnknownFieldPolicy};
 use skillranker::context::overlay::{
@@ -33,10 +34,10 @@ use skillranker::context::overlay::{
 use skillranker::output::ContextQuality;
 use std::fs;
 use std::io::Write;
-use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
 use std::path::PathBuf;
 use std::process::{Command, Output, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
+use support::FixtureEnv;
 
 static FIXTURE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -47,29 +48,20 @@ struct HookFixture {
 
 impl HookFixture {
     fn new() -> Self {
-        let root = PathBuf::from("/tmp").join(format!(
-            "sr-hook-contract-{}-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos(),
+        // Owner-only root (Windows: under %LOCALAPPDATA%\sr-tests); the
+        // ledger folder is a private store directory on both platforms.
+        let root = support::tmp_root().join(format!(
+            "sr-hook-contract-{}-{}",
+            support::unique_suffix(),
             FIXTURE_COUNTER.fetch_add(1, Ordering::Relaxed)
         ));
-        fs::DirBuilder::new()
-            .mode(0o700)
-            .recursive(true)
-            .create(&root)
-            .expect("create root");
+        support::private_dir(&root);
         let session_id = "session-12345-hook-contract".to_string();
         let f = Self { root, session_id };
         fs::create_dir_all(f.workspace()).unwrap();
         fs::create_dir_all(f.home().join(".config")).unwrap();
-        fs::create_dir_all(f.ledger_dir()).unwrap();
-
-        for dir in [&f.root, &f.home(), &f.workspace(), &f.ledger_dir()] {
-            let _ = fs::set_permissions(dir, fs::Permissions::from_mode(0o700));
-        }
+        support::private_dir(f.ledger_dir());
+        support::restrict_dirs_to_owner(&[&f.home(), &f.workspace()]);
 
         // One valid skill
         let skill = f.home().join(".claude/skills/test-repair");
@@ -111,6 +103,7 @@ impl HookFixture {
     fn run_hook(&self, stdin_bytes: &[u8], args: &[&str]) -> Output {
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_sr"));
         cmd.env_clear()
+            .fixture_env(&self.root)
             .env("HOME", self.home())
             .env("XDG_CONFIG_HOME", self.home().join(".config"))
             .current_dir(self.workspace())
@@ -134,6 +127,7 @@ impl HookFixture {
     fn run_cli(&self, args: &[&str]) -> Output {
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_sr"));
         cmd.env_clear()
+            .fixture_env(&self.root)
             .env("HOME", self.home())
             .env("XDG_CONFIG_HOME", self.home().join(".config"))
             .current_dir(self.workspace())
@@ -147,6 +141,7 @@ impl HookFixture {
     fn run_held_open_hook(&self, args: &[&str], environment: &[(&str, &str)]) -> Output {
         let mut child = Command::new(env!("CARGO_BIN_EXE_sr"))
             .env_clear()
+            .fixture_env(&self.root)
             .env("HOME", self.home())
             .env("XDG_CONFIG_HOME", self.home().join(".config"))
             .envs(environment.iter().copied())
@@ -854,13 +849,13 @@ fn hook_invocations_are_counted_at_entry_even_when_no_row_is_recorded() {
         assert_eq!(out.status.code(), Some(0));
     }
     assert_eq!(entries(), 3, "every hook that could record was counted");
-    let mode = fs::metadata(&entries_path).unwrap().permissions().mode();
-    assert_eq!(mode & 0o777, 0o600);
+    support::assert_private_store_file(&entries_path);
 
     // A counter the hook cannot append to changes nothing the hook does. Under root (RCH
     // workers run tests as root) mode 0o400 does not stop a write, so the unwritable counter
-    // cannot be built there; probe for that rather than guess from the uid.
-    fs::set_permissions(&entries_path, fs::Permissions::from_mode(0o400)).unwrap();
+    // cannot be built there; probe for that rather than guess from the uid. Windows uses the
+    // read-only attribute, which refuses appends.
+    set_counter_writable(&entries_path, false);
     let unwritable = fs::OpenOptions::new()
         .append(true)
         .open(&entries_path)
@@ -872,7 +867,7 @@ fn hook_invocations_are_counted_at_entry_even_when_no_row_is_recorded() {
     } else {
         eprintln!("skipping the unwritable-counter case: this user can write a 0o400 file");
     }
-    fs::set_permissions(&entries_path, fs::Permissions::from_mode(0o600)).unwrap();
+    set_counter_writable(&entries_path, true);
 
     // Stats leaves out the last minute, since an invocation that entered then
     // may still be running. Move everything recorded so far two minutes back.
@@ -1358,4 +1353,22 @@ fn valid_hook_cli_deadline_overrides_environment_before_held_open_stdin() {
     );
     assert_stdin_deadline(&out, started.elapsed());
     assert_eq!(hook_counter_bytes(&fixture).len(), before + 54);
+}
+
+/// Make the hook counter appendable or not: mode 0600 or 0400 on Unix; the
+/// read-only attribute on Windows.
+fn set_counter_writable(path: &std::path::Path, writable: bool) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = if writable { 0o600 } else { 0o400 };
+        fs::set_permissions(path, fs::Permissions::from_mode(mode)).unwrap();
+    }
+    #[cfg(windows)]
+    {
+        let mut permissions = fs::metadata(path).unwrap().permissions();
+        #[allow(clippy::permissions_set_readonly_false)] // Windows: clears the attribute only.
+        permissions.set_readonly(!writable);
+        fs::set_permissions(path, permissions).unwrap();
+    }
 }

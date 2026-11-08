@@ -1,4 +1,3 @@
-#![cfg(unix)]
 //! P6 Claude hook safe advice rendering contract.
 //!
 //! Satisfies contract requirements for bead `sr-roadmap-l1i.7.2`:
@@ -11,16 +10,18 @@
 //! - Suppresses output when effective mode at publication boundary is Shadow.
 //! - Handles short writes / broken pipes without recording emission.
 
+mod support;
+
 use serde_json::json;
 use skillranker::limits::HOOK_ADDITIONAL_CONTEXT_SCALARS;
 use skillranker::output::OutputDocument;
 use skillranker::output::hook::{HOOK_EVENT_NAME, HookRenderError, render_claude_hook_advice};
 use std::fs;
 use std::io::Write;
-use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
+use support::FixtureEnv;
 
 static FIXTURE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -104,28 +105,20 @@ struct AdviceFixture {
 
 impl AdviceFixture {
     fn new() -> Self {
-        let root = PathBuf::from("/tmp").join(format!(
-            "sr-advice-contract-{}-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos(),
+        // Owner-only root (Windows: under %LOCALAPPDATA%\sr-tests); the
+        // ledger folder is a private store directory on both platforms.
+        let root = support::tmp_root().join(format!(
+            "sr-advice-contract-{}-{}",
+            support::unique_suffix(),
             FIXTURE_COUNTER.fetch_add(1, Ordering::Relaxed)
         ));
-        fs::DirBuilder::new()
-            .recursive(true)
-            .create(&root)
-            .expect("create root");
+        support::private_dir(&root);
         let session_id = "session-test-advice".to_string();
         let f = Self { root, session_id };
         fs::create_dir_all(f.workspace()).unwrap();
         fs::create_dir_all(f.home().join(".config")).unwrap();
-        fs::create_dir_all(f.ledger_dir()).unwrap();
-
-        for dir in [&f.root, &f.home(), &f.workspace(), &f.ledger_dir()] {
-            let _ = fs::set_permissions(dir, fs::Permissions::from_mode(0o700));
-        }
+        support::private_dir(f.ledger_dir());
+        support::restrict_dirs_to_owner(&[&f.home(), &f.workspace()]);
 
         // Create a test skill
         let skill = f.home().join(".claude/skills/cargo-test");
@@ -164,6 +157,7 @@ impl AdviceFixture {
     fn run_hook(&self, stdin_bytes: &[u8], args: &[&str]) -> std::process::Output {
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_sr"));
         cmd.env_clear()
+            .fixture_env(&self.root)
             .env("HOME", self.home())
             .env("XDG_CONFIG_HOME", self.home().join(".config"))
             .current_dir(self.workspace())

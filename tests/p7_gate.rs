@@ -1,4 +1,3 @@
-#![cfg(any(target_os = "linux", target_os = "macos"))]
 //! Phase P7 acceptance chain: evidence-backed advisory rollout and outage-safe
 //! rollback integrated at one revision.
 //!
@@ -14,15 +13,17 @@
 //! 6. Local return to shadow (`[hook]\nmode = "shadow"`) verified under provider
 //!    outage (`always-503`), plus full `sr stats --json` reconciliation.
 
+#[path = "support/stub_python.rs"]
+mod stub_python;
 mod support;
 
 use serde_json::{Value, json};
 use skillranker::limits::HOOK_ADDITIONAL_CONTEXT_SCALARS;
 use std::io::{BufRead, BufReader, Write};
-use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
 use std::path::PathBuf;
 use std::process::{Child, ChildStdout, Command, Output, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
+use support::PlatformEnv;
 
 static NEXT: AtomicU64 = AtomicU64::new(0);
 const CANARY: &str = "synthetic-p7-gate-canary-key";
@@ -44,11 +45,7 @@ impl Home {
             "state",
             "workspace",
         ] {
-            std::fs::DirBuilder::new()
-                .recursive(true)
-                .mode(0o700)
-                .create(root.join(dir))
-                .unwrap();
+            support::create_private_dir(root.join(dir));
         }
         let skill = root.join("workspace/.claude/skills/rust-repair");
         std::fs::create_dir_all(&skill).unwrap();
@@ -67,25 +64,24 @@ impl Home {
 
     fn write_trusted_config(&self, body: &str) {
         let dir = self.root.join("config/sr");
-        std::fs::DirBuilder::new()
-            .recursive(true)
-            .mode(0o700)
-            .create(&dir)
-            .unwrap();
+        support::create_private_dir(&dir);
         let path = dir.join("config.toml");
         std::fs::write(&path, body).unwrap();
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        support::restrict_to_owner(&path);
     }
 
     fn command(&self, port: u16, args: &[&str]) -> Command {
         let mut command = Command::new(env!("CARGO_BIN_EXE_sr"));
         command
             .env_clear()
+            .platform_env()
             .env("HOME", self.root.join("home"))
             .env("XDG_CONFIG_HOME", self.root.join("config"))
             .env("XDG_CACHE_HOME", self.root.join("cache"))
             .env("XDG_DATA_HOME", self.root.join("data"))
             .env("XDG_STATE_HOME", self.root.join("state"))
+            // Windows keeps the ledger, cache and backups under LOCALAPPDATA.
+            .env("LOCALAPPDATA", self.root.join("data"))
             .env("TYPESAFE_API_KEY", CANARY)
             .env("TYPESAFE_ENDPOINT", format!("https://localhost:{port}"))
             .env("SSL_CERT_FILE", self.root.join("fixture-ca.pem"))
@@ -153,7 +149,10 @@ impl Home {
     }
 
     fn events(&self) -> Vec<(String, String, String)> {
-        let db = rusqlite::Connection::open(self.root.join("data/sr/ledger.sqlite3")).unwrap();
+        let db = rusqlite::Connection::open(
+            support::ledger_under(&self.root.join("data")).join("ledger.sqlite3"),
+        )
+        .unwrap();
         let mut statement = db
             .prepare(
                 "SELECT event_id, decision, reason FROM ranking_events ORDER BY created_at_unix_ms",
@@ -167,7 +166,10 @@ impl Home {
     }
 
     fn top_skill_id(&self, event_id: &str) -> String {
-        let db = rusqlite::Connection::open(self.root.join("data/sr/ledger.sqlite3")).unwrap();
+        let db = rusqlite::Connection::open(
+            support::ledger_under(&self.root.join("data")).join("ledger.sqlite3"),
+        )
+        .unwrap();
         db.query_row(
             "SELECT skill_id FROM ranking_candidates WHERE event_id = ?1 AND rank_position = 1",
             [event_id],
@@ -224,10 +226,9 @@ impl Provider {
         ] {
             std::fs::write(dir.join(name), bytes).unwrap();
         }
-        let mut child = Command::new("/usr/bin/python3")
+        let mut child = stub_python::python_command()
             .arg(dir.join("provider_server.py"))
             .arg(scenario)
-            .env_clear()
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit())

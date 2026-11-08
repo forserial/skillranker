@@ -1,4 +1,3 @@
-#![cfg(unix)]
 //! P6 Claude hook installer and rollback contract.
 //!
 //! Satisfies contract requirements for bead `sr-roadmap-l1i.7.3`:
@@ -14,13 +13,17 @@
 //! - Displays conflicts for modified entries rather than broad removal.
 //! - Clamps internal deadlines exceeding the installed outer budget.
 
+mod support;
+
 use serde_json::json;
 use std::fs;
 use std::io::Write;
+#[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::process::{Command, Output, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
+use support::FixtureEnv;
 
 static FIXTURE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -41,6 +44,7 @@ fn cloudflare_installer_prerequisites_name_the_selected_token_and_account() {
         let mut command = Command::new(env!("CARGO_BIN_EXE_sr"));
         command
             .env_clear()
+            .fixture_env(&f.root)
             .env("HOME", f.home())
             .env("XDG_CONFIG_HOME", f.home().join(".config"))
             .env("XDG_STATE_HOME", f.home().join(".local/state"))
@@ -76,35 +80,25 @@ struct InstallerFixture {
 
 impl InstallerFixture {
     fn new() -> Self {
-        let root = PathBuf::from("/tmp").join(format!(
-            "sr-installer-contract-{}-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos(),
+        // Owner-only root (Windows: under %LOCALAPPDATA%\sr-tests).
+        let root = support::tmp_root().join(format!(
+            "sr-installer-contract-{}-{}",
+            support::unique_suffix(),
             FIXTURE_COUNTER.fetch_add(1, Ordering::Relaxed)
         ));
-        fs::DirBuilder::new()
-            .recursive(true)
-            .create(&root)
-            .expect("create root");
+        support::private_dir(&root);
 
         let f = Self { root };
         fs::create_dir_all(f.home()).unwrap();
         fs::create_dir_all(f.claude_dir()).unwrap();
         fs::create_dir_all(f.config_dir()).unwrap();
         fs::create_dir_all(f.workspace()).unwrap();
-
-        for dir in [
-            &f.root,
+        support::restrict_dirs_to_owner(&[
             &f.home(),
             &f.claude_dir(),
             &f.config_dir(),
             &f.workspace(),
-        ] {
-            let _ = fs::set_permissions(dir, fs::Permissions::from_mode(0o700));
-        }
+        ]);
 
         f
     }
@@ -129,13 +123,20 @@ impl InstallerFixture {
         self.root.join("workspace")
     }
 
+    /// Where settings backups land: `$XDG_STATE_HOME/sr/backups` on Unix;
+    /// on Windows `%LOCALAPPDATA%\skillranker\backups`, with the fixture's
+    /// own `LOCALAPPDATA` (`FixtureEnv`).
     fn state_dir(&self) -> PathBuf {
-        self.home().join(".local/state/sr/backups")
+        #[cfg(unix)]
+        return self.home().join(".local/state/sr/backups");
+        #[cfg(windows)]
+        return self.root.join("local").join("skillranker").join("backups");
     }
 
     fn run_sr(&self, args: &[&str]) -> Output {
         Command::new(env!("CARGO_BIN_EXE_sr"))
             .env_clear()
+            .fixture_env(&self.root)
             .env("HOME", self.home())
             .env("XDG_CONFIG_HOME", self.home().join(".config"))
             .env("XDG_STATE_HOME", self.home().join(".local/state"))
@@ -208,8 +209,7 @@ fn apply_install_creates_settings_and_backup() {
         .filter_map(Result::ok)
         .collect();
     assert_eq!(backups.len(), 1);
-    let backup_meta = backups[0].metadata().unwrap();
-    assert_eq!(backup_meta.permissions().mode() & 0o777, 0o600);
+    support::assert_owner_only_file(backups[0].path());
 }
 
 #[test]
@@ -230,6 +230,7 @@ fn install_refuses_timeout_not_above_internal_deadline() {
     // A raised effective internal deadline raises the required outer timeout.
     let out = Command::new(env!("CARGO_BIN_EXE_sr"))
         .env_clear()
+        .fixture_env(&fixture.root)
         .env("HOME", fixture.home())
         .env("XDG_CONFIG_HOME", fixture.home().join(".config"))
         .env("XDG_STATE_HOME", fixture.home().join(".local/state"))
@@ -252,6 +253,7 @@ fn install_refuses_timeout_not_above_internal_deadline() {
     // One second more covers the deadline plus the startup reserve.
     let out = Command::new(env!("CARGO_BIN_EXE_sr"))
         .env_clear()
+        .fixture_env(&fixture.root)
         .env("HOME", fixture.home())
         .env("XDG_CONFIG_HOME", fixture.home().join(".config"))
         .env("XDG_STATE_HOME", fixture.home().join(".local/state"))
@@ -289,6 +291,7 @@ fn hook_clamp_budget_comes_from_the_installed_entry() {
     });
     let mut child = Command::new(env!("CARGO_BIN_EXE_sr"))
         .env_clear()
+        .fixture_env(&fixture.root)
         .env("HOME", fixture.home())
         .env("XDG_CONFIG_HOME", fixture.home().join(".config"))
         .env("XDG_STATE_HOME", fixture.home().join(".local/state"))
@@ -517,6 +520,7 @@ fn refuses_malformed_settings_without_overwriting() {
     assert_eq!(content, broken_json);
 }
 
+#[cfg(unix)]
 #[test]
 fn reports_enterprise_read_only_restrictions() {
     if nix::unistd::geteuid().is_root() {
@@ -571,6 +575,7 @@ fn internal_deadline_exceeding_installed_budget_is_clamped() {
     // Pass timeout-ms 10000 (exceeding installed 3000ms budget)
     let mut child = Command::new(env!("CARGO_BIN_EXE_sr"))
         .env_clear()
+        .fixture_env(&fixture.root)
         .env("HOME", fixture.home())
         .env("XDG_CONFIG_HOME", fixture.home().join(".config"))
         .current_dir(fixture.workspace())
@@ -661,6 +666,7 @@ fn a_harness_timeout_that_cannot_bound_the_deadline_is_refused_with_its_numbers(
     assert_eq!(skillranker::installer::minimum_hook_timeout_secs(1), 2);
 }
 
+#[cfg(unix)]
 /// A refused backup leaves the settings byte-identical and says why
 /// (sr-winpar.7: permission steps are errors, not best effort).
 fn assert_backup_refused(fixture: &InstallerFixture, out: &Output, original: &[u8]) {
@@ -674,6 +680,7 @@ fn assert_backup_refused(fixture: &InstallerFixture, out: &Output, original: &[u
     assert_eq!(fs::read(fixture.settings_path()).unwrap(), original);
 }
 
+#[cfg(unix)]
 #[test]
 fn a_backups_directory_that_is_not_owner_only_is_refused_not_repaired() {
     let fixture = InstallerFixture::new();
@@ -691,6 +698,7 @@ fn a_backups_directory_that_is_not_owner_only_is_refused_not_repaired() {
     assert_eq!(fs::read_dir(fixture.state_dir()).unwrap().count(), 0);
 }
 
+#[cfg(unix)]
 #[test]
 fn a_symlinked_backups_directory_is_refused() {
     let fixture = InstallerFixture::new();
@@ -706,6 +714,7 @@ fn a_symlinked_backups_directory_is_refused() {
     assert_eq!(fs::read_dir(&elsewhere).unwrap().count(), 0);
 }
 
+#[cfg(unix)]
 #[test]
 fn without_a_state_or_home_directory_there_is_no_fallback() {
     let fixture = InstallerFixture::new();
@@ -724,6 +733,7 @@ fn without_a_state_or_home_directory_there_is_no_fallback() {
     // A relative XDG_STATE_HOME is not a location either.
     let out = Command::new(env!("CARGO_BIN_EXE_sr"))
         .env_clear()
+        .fixture_env(&fixture.root)
         .env("HOME", fixture.home())
         .env("XDG_CONFIG_HOME", fixture.home().join(".config"))
         .env("XDG_STATE_HOME", "relative/state")

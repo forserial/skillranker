@@ -248,46 +248,11 @@ reason = "platform-twin"
 issue = "permanent: Unix modes, umask and symlinks; the Windows twins are tests/export_windows_contract.rs"
 
 [[gate]]
-file = "tests/hook_advice_contract.rs"
-item = "*"
-gate = "cfg(unix)"
-reason = "hook-suite"
-issue = "sr-winpar.17"
-
-[[gate]]
-file = "tests/hook_contract.rs"
-item = "*"
-gate = "cfg(unix)"
-reason = "hook-suite"
-issue = "sr-winpar.17"
-
-[[gate]]
-file = "tests/hook_installer_contract.rs"
-item = "*"
-gate = "cfg(unix)"
-reason = "hook-suite"
-issue = "sr-winpar.17"
-
-[[gate]]
 file = "tests/p3_gate.rs"
 item = "*"
 gate = "cfg(unix)"
 reason = "subprocess"
 issue = "sr-winpar.11"
-
-[[gate]]
-file = "tests/p6_gate.rs"
-item = "*"
-gate = "cfg(any(target_os = \"linux\", target_os = \"macos\"))"
-reason = "hook-suite"
-issue = "sr-winpar.17"
-
-[[gate]]
-file = "tests/p7_gate.rs"
-item = "*"
-gate = "cfg(any(target_os = \"linux\", target_os = \"macos\"))"
-reason = "hook-suite"
-issue = "sr-winpar.17"
 
 [[gate]]
 file = "tests/project_signals.rs"
@@ -491,3 +456,31 @@ item = "a_store_directory_with_the_wrong_mode_is_named_with_the_mode_it_must_hav
 gate = "cfg(unix)"
 reason = "platform-twin"
 issue = "permanent: Unix modes and chmod; the Windows twins in the same file are a_store_folder_with_a_foreign_entry_is_named_with_the_entry_and_the_icacls_that_removes_it, an_inherited_store_folder_is_named_with_the_icacls_that_makes_it_private and a_store_folder_owned_by_another_principal_is_named_without_a_command"
+
+[[gate]]
+file = "tests/hook_installer_contract.rs"
+item = "reports_enterprise_read_only_restrictions"
+gate = "cfg(unix)"
+reason = "unix-only"
+issue = "permanent: Unix modes 0400/0500 and a root check; Windows has no equivalent read-only directory refusal for its settings folder"
+
+[[gate]]
+file = "tests/hook_installer_contract.rs"
+item = "a_backups_directory_that_is_not_owner_only_is_refused_not_repaired"
+gate = "cfg(unix)"
+reason = "platform-twin"
+issue = "permanent: Unix mode 0755; the Windows twin is tests/installer_backup_windows_contract.rs a_backups_folder_with_a_foreign_entry_is_refused_and_not_repaired"
+
+[[gate]]
+file = "tests/hook_installer_contract.rs"
+item = "a_symlinked_backups_directory_is_refused"
+gate = "cfg(unix)"
+reason = "platform-twin"
+issue = "permanent: Unix symlink; the Windows twin is tests/installer_backup_windows_contract.rs a_junction_in_the_backup_path_is_refused"
+
+[[gate]]
+file = "tests/hook_installer_contract.rs"
+item = "without_a_state_or_home_directory_there_is_no_fallback"
+gate = "cfg(unix)"
+reason = "platform-twin"
+issue = "permanent: Unix XDG_STATE_HOME and HOME; the Windows twin is tests/installer_backup_windows_contract.rs without_local_app_data_the_change_is_refused"

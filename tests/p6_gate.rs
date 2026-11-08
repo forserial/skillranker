@@ -1,4 +1,3 @@
-#![cfg(any(target_os = "linux", target_os = "macos"))]
 //! Phase P6 acceptance chain: a recorded, bounded Claude shadow integration,
 //! integrated at one revision.
 //!
@@ -16,14 +15,16 @@
 //! Real-harness conformance (7.11) and measured latency (7.12) are separate
 //! evidence: this chain uses the fixture, not Claude Code.
 
+#[path = "support/stub_python.rs"]
+mod stub_python;
 mod support;
 
 use serde_json::{Value, json};
 use std::io::{BufRead, BufReader, Write};
-use std::os::unix::fs::DirBuilderExt;
 use std::path::PathBuf;
 use std::process::{Child, ChildStdout, Command, Output, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
+use support::PlatformEnv;
 
 static NEXT: AtomicU64 = AtomicU64::new(0);
 const CANARY: &str = "synthetic-p6-gate-canary-key";
@@ -37,10 +38,7 @@ impl Home {
     fn new() -> Self {
         let root = support::private_store_dir("p6-gate");
         for dir in ["home", "config", "cache", "data", "state", "workspace"] {
-            std::fs::DirBuilder::new()
-                .mode(0o700)
-                .create(root.join(dir))
-                .unwrap();
+            support::private_dir(root.join(dir));
         }
         let skill = root.join("workspace/.claude/skills/rust-repair");
         std::fs::create_dir_all(&skill).unwrap();
@@ -61,11 +59,14 @@ impl Home {
         let mut command = Command::new(env!("CARGO_BIN_EXE_sr"));
         command
             .env_clear()
+            .platform_env()
             .env("HOME", self.root.join("home"))
             .env("XDG_CONFIG_HOME", self.root.join("config"))
             .env("XDG_CACHE_HOME", self.root.join("cache"))
             .env("XDG_DATA_HOME", self.root.join("data"))
             .env("XDG_STATE_HOME", self.root.join("state"))
+            // Windows keeps the ledger, cache and backups under LOCALAPPDATA.
+            .env("LOCALAPPDATA", self.root.join("data"))
             .env("TYPESAFE_API_KEY", CANARY)
             .env("TYPESAFE_ENDPOINT", format!("https://localhost:{port}"))
             .env("SSL_CERT_FILE", self.root.join("fixture-ca.pem"))
@@ -131,7 +132,10 @@ impl Home {
     }
 
     fn events(&self) -> Vec<(String, String, String)> {
-        let db = rusqlite::Connection::open(self.root.join("data/sr/ledger.sqlite3")).unwrap();
+        let db = rusqlite::Connection::open(
+            support::ledger_under(&self.root.join("data")).join("ledger.sqlite3"),
+        )
+        .unwrap();
         let mut statement = db
             .prepare(
                 "SELECT event_id, decision, reason FROM ranking_events ORDER BY created_at_unix_ms",
@@ -193,10 +197,9 @@ impl Provider {
         ] {
             std::fs::write(dir.join(name), bytes).unwrap();
         }
-        let mut child = Command::new("/usr/bin/python3")
+        let mut child = stub_python::python_command()
             .arg(dir.join("provider_server.py"))
             .arg(scenario)
-            .env_clear()
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit())
