@@ -4,6 +4,11 @@
 
 ### Added
 
+- Windows names the folder and the access entry that cause an owner-only
+  store refusal, with the `icacls` command that fixes it when you can run it
+  yourself. Example: "...\ledger grants Everyone (S-1-1-0) read and execute ...
+  Fix with: icacls "...\ledger" /remove:g *S-1-1-0". Unix already named the
+  mode and the `chmod`.
 - Windows writes calibration policy files owner-only: `sr calibrate ...
   --apply` creates its folders privately (refusing an existing folder that is
   not owner-only, without repairing it) and replaces `config.toml`, policy

@@ -264,8 +264,16 @@ fn trusted_ancestor(stat: &FileStat, uid: u32, leaf: bool) -> Result<(), StoreEr
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PermissionRefusal {
     pub path: PathBuf,
+    /// The Unix mode found; 0 on Windows, which has no modes.
     pub actual_mode: u32,
     pub required: RequiredMode,
+    /// Windows: what the folder's security descriptor holds that breaks the
+    /// rule, such as "grants Everyone (S-1-1-0) modify". `None` on Unix, where
+    /// the mode says it.
+    pub found: Option<String>,
+    /// Windows: the `icacls` command that fixes it, when the user can apply it
+    /// themselves; `None` when it needs an owner or administrator.
+    pub command: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -278,6 +286,13 @@ pub enum RequiredMode {
     NotSharedWritable,
     /// Owned by neither this user nor root.
     OwnedByAnotherUser,
+    /// Windows, the store folder (docs/windows-private-storage.md rules 1 and
+    /// 2): owned by you, with a protected access list for you and SYSTEM only.
+    PrivateStoreFolder,
+    /// Windows, a folder above the store (rule 3): owned by you, SYSTEM,
+    /// Administrators or TrustedInstaller, and no one else may rename or
+    /// delete what it contains.
+    NotReplaceableByOthers,
 }
 
 impl PermissionRefusal {
@@ -305,6 +320,23 @@ impl PermissionRefusal {
                  by you or by root",
                 self.path.display()
             ),
+            RequiredMode::PrivateStoreFolder => format!(
+                "{} {}; the store folder must be owned by you, with access for you and SYSTEM \
+                 only, not inherited",
+                self.path.display(),
+                self.found
+                    .as_deref()
+                    .unwrap_or("does not satisfy the private-folder rule")
+            ),
+            RequiredMode::NotReplaceableByOthers => format!(
+                "{} {}; every folder above the store must be owned by you, SYSTEM, \
+                 Administrators or TrustedInstaller, and no one else may rename or delete what it \
+                 contains",
+                self.path.display(),
+                self.found
+                    .as_deref()
+                    .unwrap_or("does not satisfy the ancestor rule")
+            ),
         }
     }
 
@@ -315,7 +347,21 @@ impl PermissionRefusal {
             RequiredMode::OwnerOnlyFile => Some(format!("chmod 600 {}", self.path.display())),
             RequiredMode::NotSharedWritable => Some(format!("chmod go-w {}", self.path.display())),
             RequiredMode::OwnedByAnotherUser => None,
+            RequiredMode::PrivateStoreFolder | RequiredMode::NotReplaceableByOthers => {
+                self.command.clone()
+            }
         }
+    }
+}
+
+#[cfg(unix)]
+fn unix_refusal(path: PathBuf, actual_mode: u32, required: RequiredMode) -> PermissionRefusal {
+    PermissionRefusal {
+        path,
+        actual_mode,
+        required,
+        found: None,
+        command: None,
     }
 }
 
@@ -345,51 +391,27 @@ pub fn diagnose_owner_only(path: &Path) -> Option<PermissionRefusal> {
         let leaf = index == last;
         if meta.is_file() {
             if owner != uid {
-                return Some(PermissionRefusal {
-                    path: walked,
-                    actual_mode: mode,
-                    required: RequiredMode::OwnedByAnotherUser,
-                });
+                return Some(unix_refusal(walked, mode, RequiredMode::OwnedByAnotherUser));
             }
             if mode != 0o600 {
-                return Some(PermissionRefusal {
-                    path: walked,
-                    actual_mode: mode,
-                    required: RequiredMode::OwnerOnlyFile,
-                });
+                return Some(unix_refusal(walked, mode, RequiredMode::OwnerOnlyFile));
             }
             continue;
         }
         if leaf {
             if owner != uid {
-                return Some(PermissionRefusal {
-                    path: walked,
-                    actual_mode: mode,
-                    required: RequiredMode::OwnedByAnotherUser,
-                });
+                return Some(unix_refusal(walked, mode, RequiredMode::OwnedByAnotherUser));
             }
             if mode != 0o700 {
-                return Some(PermissionRefusal {
-                    path: walked,
-                    actual_mode: mode,
-                    required: RequiredMode::OwnerOnlyDirectory,
-                });
+                return Some(unix_refusal(walked, mode, RequiredMode::OwnerOnlyDirectory));
             }
         } else {
             if owner != 0 && owner != uid {
-                return Some(PermissionRefusal {
-                    path: walked,
-                    actual_mode: mode,
-                    required: RequiredMode::OwnedByAnotherUser,
-                });
+                return Some(unix_refusal(walked, mode, RequiredMode::OwnedByAnotherUser));
             }
             let sticky_root = owner == 0 && mode & 0o1000 != 0;
             if mode & 0o022 != 0 && !sticky_root {
-                return Some(PermissionRefusal {
-                    path: walked,
-                    actual_mode: mode,
-                    required: RequiredMode::NotSharedWritable,
-                });
+                return Some(unix_refusal(walked, mode, RequiredMode::NotSharedWritable));
             }
         }
     }
@@ -767,9 +789,28 @@ impl PrivateDirectory {
     }
 }
 
+/// Windows (sr-winpar.27): the first folder that fails
+/// docs/windows-private-storage.md, by path, after the refusal; see
+/// `windows_private::diagnose`. Diagnosis only, as on Unix.
+#[cfg(windows)]
+pub fn diagnose_owner_only(path: &Path) -> Option<PermissionRefusal> {
+    let finding = super::windows_private::diagnose(path)?;
+    Some(PermissionRefusal {
+        path: finding.path,
+        actual_mode: 0,
+        required: if finding.store {
+            RequiredMode::PrivateStoreFolder
+        } else {
+            RequiredMode::NotReplaceableByOthers
+        },
+        found: Some(finding.found),
+        command: finding.command,
+    })
+}
+
 /// No owner-only chain is checked on this platform, so there is nothing to
 /// point at; `None` is the documented "not this" answer.
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 pub fn diagnose_owner_only(_: &Path) -> Option<PermissionRefusal> {
     None
 }

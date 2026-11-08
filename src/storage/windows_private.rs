@@ -396,6 +396,170 @@ pub(crate) fn admitted_file(file: &File) -> Result<u64, StoreError> {
     Ok(metadata.len())
 }
 
+/// What a store refusal was about, found by [`diagnose`]: the first folder
+/// that fails its rule, what it holds, and the `icacls` command that fixes it
+/// when the user can apply it themselves.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct Finding {
+    pub(crate) path: PathBuf,
+    /// The store folder itself (rules 1 and 2), rather than a folder above it
+    /// (rule 3).
+    pub(crate) store: bool,
+    pub(crate) found: String,
+    pub(crate) command: Option<String>,
+}
+
+/// A principal as a person reads it: the well-known name and the SID, or the
+/// SID alone. `icacls` accepts the SID as `*S-1-...`.
+fn principal(sid: &Sid) -> String {
+    let name = match sid.to_string().as_str() {
+        "S-1-1-0" => Some("Everyone"),
+        "S-1-5-11" => Some("Authenticated Users"),
+        "S-1-5-32-545" => Some("Users"),
+        "S-1-5-32-546" => Some("Guests"),
+        "S-1-5-32-544" => Some("Administrators"),
+        "S-1-5-18" => Some("SYSTEM"),
+        "S-1-5-4" => Some("INTERACTIVE"),
+        "S-1-3-0" => Some("CREATOR OWNER"),
+        _ => None,
+    };
+    match name {
+        Some(name) => format!("{name} ({sid})"),
+        None => sid.to_string(),
+    }
+}
+
+/// The rights in `mask`, named the way the Windows security dialog names them
+/// where they match exactly, otherwise as the mask.
+fn rights(mask: u32) -> String {
+    match mask {
+        0x1000_0000 | 0x001F_01FF => "full control".to_owned(),
+        0x0013_01BF => "modify".to_owned(),
+        0x0012_00A9 => "read and execute".to_owned(),
+        0x0012_0089 => "read".to_owned(),
+        _ => format!("access mask {mask:#010x}"),
+    }
+}
+
+/// Explain a refusal of `path` as a store directory: walk it by path from the
+/// volume root, the way [`walk`] does, and report the first folder that fails
+/// rule 3 (ancestors) or rules 1 and 2 (the store folder). Diagnosis only: it
+/// opens folders to read their descriptors and changes nothing. `None` means
+/// the chain passes these rules (or a folder is missing or not plain), so the
+/// refusal came from somewhere else, as on Unix.
+pub(crate) fn diagnose(path: &Path) -> Option<Finding> {
+    let (drive, names) = parse(path).ok()?;
+    let user = user().ok()?;
+    let mut current = PathBuf::from(format!("{}:\\", char::from(drive)));
+    let mut chain = vec![(current.clone(), false)];
+    for (index, name) in names.iter().enumerate() {
+        current.push(name);
+        chain.push((current.clone(), index + 1 == names.len()));
+    }
+    let quoted = |path: &Path| format!("\"{}\"", path.display());
+    for (path, store) in chain {
+        let file = open_directory(&path).ok()?;
+        plain_directory(&file).ok()?;
+        let descriptor = descriptor(&file).ok()?;
+        let finding = |found: String, command: Option<String>| {
+            Some(Finding {
+                path: path.clone(),
+                store,
+                found,
+                command,
+            })
+        };
+        if store {
+            if &descriptor.owner != user {
+                return finding(
+                    format!("is owned by {}", principal(&descriptor.owner)),
+                    None,
+                );
+            }
+            let private_grant = format!(
+                "icacls {} /inheritance:r /grant:r *{user}:(OI)(CI)F *S-1-5-18:(OI)(CI)F",
+                quoted(&path)
+            );
+            let Some(aces) = &descriptor.dacl else {
+                return finding(
+                    "has no access list, which gives everyone full control".to_owned(),
+                    Some(private_grant),
+                );
+            };
+            if !descriptor.dacl_protected() {
+                return finding(
+                    "inherits access entries from the folder above it".to_owned(),
+                    Some(private_grant),
+                );
+            }
+            for ace in aces {
+                let ours = ace.kind == AceKind::Allowed
+                    && ace
+                        .sid
+                        .as_ref()
+                        .is_some_and(|sid| sid == user || sid.is_local_system());
+                if ours {
+                    continue;
+                }
+                return match (&ace.kind, &ace.sid) {
+                    (AceKind::Allowed, Some(sid)) => finding(
+                        format!("grants {} {}", principal(sid), rights(ace.mask)),
+                        Some(format!("icacls {} /remove:g *{sid}", quoted(&path))),
+                    ),
+                    (AceKind::Denied, Some(sid)) => finding(
+                        format!("has a deny entry for {}", principal(sid)),
+                        Some(format!("icacls {} /remove:d *{sid}", quoted(&path))),
+                    ),
+                    _ => finding("has an access entry sr cannot read safely".to_owned(), None),
+                };
+            }
+            return None;
+        }
+        if !trusted_owner(&descriptor.owner, user) {
+            return finding(
+                format!("is owned by {}", principal(&descriptor.owner)),
+                None,
+            );
+        }
+        let Some(aces) = &descriptor.dacl else {
+            return finding(
+                "has no access list, which gives everyone full control".to_owned(),
+                None,
+            );
+        };
+        for ace in aces.iter().filter(|ace| ace.applies_to_object()) {
+            match (&ace.kind, &ace.sid) {
+                (AceKind::Denied, _) => {}
+                (AceKind::Allowed, Some(sid))
+                    if ace.mask & REPLACE_CAPABLE != 0
+                        && !trusted_owner(sid, user)
+                        && !sid.is_capability() =>
+                {
+                    let inherited = ace.is_inherited();
+                    return finding(
+                        format!(
+                            "lets {} rename or delete what it contains ({}){}",
+                            principal(sid),
+                            rights(ace.mask),
+                            if inherited {
+                                ", an entry inherited from a folder above it"
+                            } else {
+                                ""
+                            }
+                        ),
+                        (!inherited).then(|| format!("icacls {} /remove:g *{sid}", quoted(&path))),
+                    );
+                }
+                (AceKind::Allowed, Some(_)) => {}
+                _ => {
+                    return finding("has an access entry sr cannot read safely".to_owned(), None);
+                }
+            }
+        }
+    }
+    None
+}
+
 /// Rules 1 and 2 for a single owner-only file outside a store, such as a
 /// captured replay case: owned by the user, with allow entries for the user
 /// and SYSTEM only. Links are the caller's check, as `O_NOFOLLOW` is on Unix.

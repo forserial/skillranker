@@ -611,3 +611,27 @@ Native evidence:
     leaving no temporary file.
 - `tests/p8_gate.rs`: the calibration, rollback and monitor chain through the
   real binary.
+
+## Refusal diagnosis (sr-winpar.27)
+
+When a ledger store is refused with `StoreError::Permissions`, the error names
+the first folder that breaks these rules, what its access list holds, and the
+command that fixes it, as the Unix message names a mode and a `chmod`. The
+diagnosis (`windows_private::diagnose`, reached through
+`storage::diagnose_owner_only`) walks the same path by name after the refusal
+and changes nothing.
+
+| Found | Message says | Fix with |
+|---|---|---|
+| Store folder owned by someone else | "is owned by SYSTEM (S-1-5-18)" | none: needs that owner or an administrator |
+| Store folder inheriting its parent's entries | "inherits access entries from the folder above it" | `icacls "<folder>" /inheritance:r /grant:r *<your SID>:(OI)(CI)F *S-1-5-18:(OI)(CI)F` |
+| Store folder with another principal's entry | "grants Everyone (S-1-1-0) read and execute" | `icacls "<folder>" /remove:g *<SID>` (`/remove:d` for a deny entry) |
+| Folder above granting rename or delete | "lets Everyone (S-1-1-0) rename or delete what it contains (modify)" | `icacls "<folder>" /remove:g *<SID>`, or none when the entry is inherited from a folder further up |
+| Folder above with an untrusted owner | "is owned by ..." | none |
+
+Well-known principals are named (Everyone, Authenticated Users, Users,
+Administrators, SYSTEM); others appear as their SID, which `icacls` accepts as
+`*S-1-...`. A command is offered only when the user can apply it themselves.
+`tests/owner_only_refusal_names_the_path.rs` checks each row and then runs the
+suggested command exactly as printed, confirming that `sr ledger init`
+succeeds afterwards.
