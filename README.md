@@ -185,10 +185,12 @@ command and integration availability in your build.
 
 On **Windows**, download `skillranker-vVERSION-x86_64-pc-windows-msvc.zip` and
 its `.sha256` from the release, verify the checksum, and put `sr.exe` on your
-`PATH`. Windows ranks statelessly: the response cache, ledger-backed commands
-(`observe`, `feedback`, `stats`, `ledger`), enforced request allowances, private
-exports, replay case files and cass sessions report that they are unavailable on
-this platform. For the full feature set, use the Linux build under WSL.
+`PATH`. Windows keeps the response cache, ledger and request allowance under
+`%LOCALAPPDATA%\skillranker` in folders only you and SYSTEM can open, and writes
+exports, replay cases, settings backups and policy files owner-only. cass
+sessions (`--session`) are not available on Windows; see the
+[platform boundary](docs/platform-boundary.md#windows) for the remaining
+differences.
 
 ### Installer
 

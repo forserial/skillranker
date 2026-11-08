@@ -93,8 +93,8 @@ discovery, Claude transcript and session reads, `doctor`, `capabilities`,
 request allowance, owner-only exports (roster snapshots and saved replay cases)
 and replay case reads work. Their owner-only stores and files follow
 [Windows private storage](windows-private-storage.md).
-Every component that depends on a private store not yet ported fails closed
-instead of being emulated:
+A component not yet ported fails closed instead of being emulated; today that
+is only cass sessions:
 
 | Component | Windows behavior |
 |---|---|
@@ -248,6 +248,9 @@ can run out and report `Budget`, as on any loaded host.
 - The cache, ledger, allowance, export, backup and policy-file
   implementations and their limits are recorded in
   [Windows private storage](windows-private-storage.md).
+- The snooze configuration file (`sr\snoozes.toml`) is written with the
+  permissions its folder gives it, not owner-only; its backups are owner-only
+  (sr-winpar.30).
 - An export's destination must be on a local fixed NTFS or ReFS volume:
   removable, network and RAM-disk destinations are refused, where Unix exports
   accept any filesystem. Windows has no directory flush from a read-only handle,

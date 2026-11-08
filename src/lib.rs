@@ -37,7 +37,8 @@ pub mod runtime;
 pub mod scoring;
 pub mod snooze;
 pub mod sqlite_engine;
-// Compiled everywhere; on platforms without an audited private-directory
-// admission (Windows), every store open reports `UnsupportedFilesystem`.
+// Compiled everywhere. Unix and Windows (`storage::windows_private`) admit
+// private store directories; on other platforms every store open reports
+// `UnsupportedFilesystem`.
 pub mod storage;
 pub mod subprocess;

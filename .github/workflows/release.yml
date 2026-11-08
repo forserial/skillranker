@@ -1,9 +1,9 @@
 # Build `sr` release archives for Linux, macOS and Windows and attach them to a
 # GitHub Release.
 #
-# The Windows build ranks statelessly: its stores report an unqualified
-# filesystem, so caching, the ledger and enforced allowances are unavailable
-# there (see docs/platform-boundary.md).
+# The Windows build keeps its cache, ledger and allowance in owner-only
+# folders under %LOCALAPPDATA%\skillranker; its remaining differences are listed
+# in docs/platform-boundary.md#windows.
 #
 # Trigger: push a tag like `v0.1.0` (must match Cargo.toml's version), or run
 # manually from the Actions tab with an existing tag name.
