@@ -281,6 +281,68 @@ unaffected.)
 
 That run did not exercise `rank`, the hook or real links.
 
+#### Parity acceptance gate (sr-winpar.22) at `6be669a`
+
+All items below ran at source revision `6be669a1d8e90483ed692d8638ef44c9af6b88d0`
+on 2026-11-08 (tree clean apart from an untracked `mise.toml`). The earlier
+subsections are history from before the ports.
+
+Host and build: Windows 11 Pro 10.0.26300.9818, NTFS, `x86_64-pc-windows-msvc`,
+`rustc 1.100.0-nightly (908501772 2026-08-30)`, `cargo 1.100.0-nightly
+(e8cb624d5 2026-08-22)`, Developer Mode on, not elevated. Release `sr.exe`
+from `cargo build --release --locked --bin sr`: SHA-256
+`f8f739bb484d79f2d729373dc4a0c7cf976da8f5cc2aa204c128d0ae5540d684`. SQLite:
+the ledger opens only when the linked engine matches the qualified identity
+exactly, and `sr ledger init` and `status` succeeded, so the linked engine is
+3.53.2, source ID
+`2026-06-03 19:12:13 d6e03d8c777cfa2d35e3b60d8ec3e0187f3e9f99d8e2ee9cac695fd6fcdf1a24`
+(rusqlite 0.40.2, bundled).
+
+| Gate item | Result |
+|---|---|
+| Windows `cargo fmt --check`, `cargo check --locked --all-targets`, `cargo clippy --locked --all-targets -- -D warnings` | Pass |
+| Windows `cargo test --locked --no-fail-fast` (169 binaries), with `SKILLRANKER_TEST_CASS_EXE` naming the qualified cass 0.10.0 | 1,777 passed, 0 failed, 10 ignored; every real-cass case ran |
+| Windows `python scripts/validate_public_contracts.py`, `python tests/platform_boundary_contract.py` | Pass |
+| `tests/windows_test_matrix.rs` (every remaining gate listed with a reason) | Pass; no gate waits on a Windows port, the rest are permanent with their reasons |
+| Linux (WSL2 `openclaw`, Ubuntu 24.04.4, kernel 6.18.58.1, same toolchain) fmt, check, clippy, both Python checks | Pass |
+| Linux `cargo test --locked --no-fail-fast`, first run | 1,831 passed, 2 failed, 11 ignored; the guest clock stepped 46.8 s during the run. The two (`hook_contract` `an_idle_notification_turn_is_skipped_unless_trusted_config_ranks_it`, `shadow_hook_unique_events_across_turns_and_unix_timestamps`) pass alone 3 of 3, and the whole `hook_contract` suite passes 3 of 3 with no step |
+| Linux full run, repeated | 1,832 passed, 1 failed, 11 ignored, 13.3 s of steps: `stale_leader_superseded_cannot_overwrite_newer_cache_or_complete_lease`, the wall-clock lease test sr-winpar.18 explains. The `hook_contract` pair passed |
+| `ubs --diff` / `ubs --staged` | **Not run: `ubs` is installed neither on Windows nor in the WSL distro.** Named blocker, not a pass |
+
+The Linux failures move between runs and track WSL2's stepped wall clock
+(sr-winpar.18). That cause is proven for the lease test. For the two hook tests it
+is consistent with every observation here but not separately proven.
+
+Native Windows behavior, release `sr.exe`, isolated `XDG_CONFIG_HOME` and
+`LOCALAPPDATA` under `%LOCALAPPDATA%\sr-tests\sr-gate-22`, default skill roots
+(the 53 linked personal skills), the maintainer's TypeSafe key read from the
+user environment and never printed, and an enforced allowance of 24 attempts
+per hour (`sr budget --max-attempts 24 --window 1h --apply`). 8 of the 24 were
+used.
+
+| Behavior | Observed |
+|---|---|
+| `capabilities --json` | All four boundaries and all twelve components available, `cass-sessions` included |
+| `ledger init`, `ledger status` | `created`, then `ready`, schema 1 |
+| Live `sr rank --transcript FILE --harness claude_code` | `ranked`, suggests `beads`; `jev-1.14.0` for both stages; 2 requests; 46 of 53 skills eligible, shortlist 8 |
+| Same rank again | Exact cache hit, 0 requests, 560 ms wall clock |
+| `rank --save-case FILE`, then `replay FILE` | Owner-only case file (the user and SYSTEM only); replay exit 0, non-actionable |
+| Recorded shadow trial (`hook claude`, default shadow mode) | Exit 0, empty stdout, 2 requests; the ledger records one `shadow` evaluation |
+| `observe` on the real transcript | Refused, `ambiguous-branch`: it forks, and observation will not guess a lineage (as on Unix) |
+| `observe` on a linear transcript with one `Skill` load | One attempted load recorded; the second run records none (watermark advanced) |
+| `feedback EVENT --skill ID --verdict useful` | `single-judgment`; `stats` then shows one useful judgment |
+| `stats` | Channels `cli`, `shadow`, `advisory-hook`; 4 then 8 provider attempts, all completed, no unknown usage |
+| Budget enforcement | With the window capped at the 6 already charged, `sr rank` exits 4 `request-budget` with 0 requests and 0 HTTP attempts |
+| `roster --snapshot FILE` | Owner-only file; a second export to the same target is refused (exit 9) |
+| Git `dirty_paths` | A scratch repository with one modified tracked file: the request's `project_signals.dirty_paths` is `["lib.rs"]` |
+| cass (`rank --session`) | Through the real cass 0.10.0 Windows release (see the [cass adapter](cass-adapter.md)): `explicit`, `alpha`, harness `claude_code`, 0 requests |
+| Installer backups | `install-hook --apply` and `uninstall-hook --apply` on a settings file with unrelated keys: owner-only backups, unrelated keys kept |
+| Real Claude Code turns (2.1.296, `claude -p --settings FILE`, advisory hook) | Two turns, 2 requests each; the hook evaluated each one and abstained, which the ledger records under `advisory-hook`, so nothing was injected and the model answered `SKILLRANKER: no` |
+
+Not shown at this revision: injected advice reaching a model turn. Both live
+turns abstained; the injection itself is the sr-winpar.20 evidence at
+`aaf2948` (see [latency measurements](latency-measurements.md)), and the
+Windows hook suites cover publication. The latency targets remain unmet.
 #### Native Windows (MSVC)
 
 Windows 11 Pro 10.0.26300, NTFS, `x86_64-pc-windows-msvc`,
