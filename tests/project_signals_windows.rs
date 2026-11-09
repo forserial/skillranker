@@ -4,6 +4,8 @@
 //! owned-subprocess boundary with `-C <workspace>`, never a planted or `PATH`
 //! copy. The Windows twin of tests/project_signals.rs.
 
+#[path = "support/links.rs"]
+mod links;
 use skillranker::context::signals::{DIRTY_PATH_LIMIT, Omission, ProjectSignals, collect};
 use skillranker::runtime::ProcessInvocation;
 use std::path::{Path, PathBuf};
@@ -250,5 +252,38 @@ fn a_git_exe_planted_in_the_workspace_is_never_trusted() {
 
     // The trusted roots ignore it and find Git for Windows.
     let result = collect_at(&dir, &trusted_roots());
+    assert_eq!(result.git_omission, None, "{result:?}");
+}
+
+/// sr-cd14: a link in a trusted root counts for presence when it reaches a
+/// regular `.exe`, as rustup's symlinked `cargo.exe` does; Git is executed only
+/// from an image inside a trusted root, so a linked Git elsewhere is present
+/// but never run, and a later root's Git for Windows is used instead.
+#[test]
+fn a_linked_tool_is_present_but_a_linked_git_outside_the_roots_never_runs() {
+    if !links::available() {
+        return;
+    }
+    let _serial = serial();
+    let dir = repository();
+    let root = temp();
+    let store = temp();
+    let system32 = PathBuf::from(std::env::var_os("SystemRoot").unwrap()).join("System32");
+    // Any .exe would do: run as Git, findstr would fail the version probe.
+    for name in ["cargo-real.exe", "git-real.exe"] {
+        std::fs::copy(system32.join("findstr.exe"), store.join(name)).unwrap();
+    }
+    links::symlink(store.join("cargo-real.exe"), root.join("cargo.exe")).unwrap();
+    links::symlink(store.join("git-real.exe"), root.join("git.exe")).unwrap();
+
+    let result = collect_at(&dir, std::slice::from_ref(&root));
+    assert!(result.tools_on_path.contains(&"cargo"), "{result:?}");
+    assert!(result.tools_on_path.contains(&"git"), "{result:?}");
+    // Unavailable, not UnsupportedGit: the linked image was never started.
+    assert_eq!(result.git_omission, Some(Omission::Unavailable));
+
+    let mut roots = vec![root];
+    roots.extend(trusted_roots());
+    let result = collect_at(&dir, &roots);
     assert_eq!(result.git_omission, None, "{result:?}");
 }

@@ -142,10 +142,99 @@ fn visibility_label(visibility: &Visibility) -> &'static str {
     }
 }
 
-/// Trusted executable roots for project-signal tool detection: fixed system
-/// directories, never the process PATH or anything the workspace supplies.
+/// Trusted executable roots for project-signal tool detection, in order:
+/// fixed machine-wide directories, then the user's own per-user install
+/// folders (sr-cd14, the user's decision). Never the process PATH, versioned
+/// install directories or anything the workspace supplies. Per-user folders
+/// that do not exist, or that lie inside the workspace (sr run from the home
+/// directory), are left out rather than failing the inventory. Machine-wide
+/// roots come first, so a per-user Git runs only when no machine-wide Git
+/// exists.
+fn trusted_tool_roots(home: Option<&Path>, workspace: &Path) -> Vec<PathBuf> {
+    let mut roots = machine_tool_roots();
+    let workspace = workspace.canonicalize().ok();
+    for root in user_tool_roots(&UserToolEnv::from_process(home)) {
+        let inside_workspace = root
+            .canonicalize()
+            .ok()
+            .zip(workspace.as_ref())
+            .is_some_and(|(root, workspace)| root.starts_with(workspace));
+        if root.is_dir() && !inside_workspace && !roots.contains(&root) {
+            roots.push(root);
+        }
+    }
+    roots
+}
+
+/// Where per-user tool folders are found: the home directory and the
+/// environment variables their installers use. Absolute values only.
+#[derive(Clone, Debug, Default)]
+struct UserToolEnv {
+    home: Option<PathBuf>,
+    cargo_home: Option<PathBuf>,
+    #[cfg_attr(not(windows), allow(dead_code))]
+    scoop: Option<PathBuf>,
+    #[cfg_attr(not(windows), allow(dead_code))]
+    local_app_data: Option<PathBuf>,
+}
+
+impl UserToolEnv {
+    fn from_process(home: Option<&Path>) -> Self {
+        let absolute = |name: &str| {
+            std::env::var_os(name)
+                .map(PathBuf::from)
+                .filter(|path| path.is_absolute())
+        };
+        Self {
+            home: home
+                .filter(|home| home.is_absolute())
+                .map(Path::to_path_buf),
+            cargo_home: absolute("CARGO_HOME"),
+            scoop: absolute("SCOOP"),
+            local_app_data: absolute("LOCALAPPDATA"),
+        }
+    }
+}
+
+/// Per-user install folders, in order: rustup's cargo bin (`CARGO_HOME`, else
+/// `~/.cargo`), on Windows Scoop's shims (`SCOOP`, else `~\scoop`), then
+/// `~/.local/bin`, on Windows WinGet's links, then `~/go/bin` and elan's
+/// `~/.elan/bin`.
+fn user_tool_roots(env: &UserToolEnv) -> Vec<PathBuf> {
+    let mut roots = Vec::new();
+    let home = env.home.as_deref();
+    if let Some(cargo) = env
+        .cargo_home
+        .clone()
+        .or_else(|| home.map(|home| home.join(".cargo")))
+    {
+        roots.push(cargo.join("bin"));
+    }
+    #[cfg(windows)]
+    if let Some(scoop) = env
+        .scoop
+        .clone()
+        .or_else(|| home.map(|home| home.join("scoop")))
+    {
+        roots.push(scoop.join("shims"));
+    }
+    if let Some(home) = home {
+        roots.push(home.join(".local").join("bin"));
+    }
+    #[cfg(windows)]
+    if let Some(local) = &env.local_app_data {
+        roots.push(local.join("Microsoft").join("WinGet").join("Links"));
+    }
+    if let Some(home) = home {
+        roots.push(home.join("go").join("bin"));
+        roots.push(home.join(".elan").join("bin"));
+    }
+    roots
+}
+
+/// Fixed machine-wide directories.
 #[cfg(unix)]
-fn trusted_tool_roots() -> Vec<PathBuf> {
+fn machine_tool_roots() -> Vec<PathBuf> {
     ["/usr/local/bin", "/usr/bin", "/bin"]
         .iter()
         .map(PathBuf::from)
@@ -158,7 +247,7 @@ fn trusted_tool_roots() -> Vec<PathBuf> {
 /// Object. Never `PATH`, the user's profile, versioned directories, or anything
 /// the workspace supplies; directories that do not exist are left out.
 #[cfg(windows)]
-fn trusted_tool_roots() -> Vec<PathBuf> {
+fn machine_tool_roots() -> Vec<PathBuf> {
     const UNDER_PROGRAM_FILES: [&str; 7] = [
         r"Git\ucrt64\bin",
         r"Git\mingw64\bin",
@@ -182,20 +271,110 @@ fn trusted_tool_roots() -> Vec<PathBuf> {
 }
 
 #[cfg(not(any(unix, windows)))]
-fn trusted_tool_roots() -> Vec<PathBuf> {
+fn machine_tool_roots() -> Vec<PathBuf> {
     Vec::new()
+}
+
+#[cfg(test)]
+mod user_tool_root_tests {
+    use super::{UserToolEnv, trusted_tool_roots, user_tool_roots};
+    use std::path::{Path, PathBuf};
+
+    fn absolute(path: &str) -> PathBuf {
+        if cfg!(windows) {
+            PathBuf::from(format!(r"C:\{}", path.replace('/', r"\")))
+        } else {
+            PathBuf::from(format!("/{path}"))
+        }
+    }
+
+    #[test]
+    fn per_user_roots_follow_their_installers_conventions() {
+        let home = absolute("home/u");
+        let defaults = user_tool_roots(&UserToolEnv {
+            home: Some(home.clone()),
+            ..UserToolEnv::default()
+        });
+        let mut expected = vec![home.join(".cargo").join("bin")];
+        #[cfg(windows)]
+        expected.push(home.join("scoop").join("shims"));
+        expected.push(home.join(".local").join("bin"));
+        expected.push(home.join("go").join("bin"));
+        expected.push(home.join(".elan").join("bin"));
+        assert_eq!(defaults, expected);
+
+        let overridden = user_tool_roots(&UserToolEnv {
+            home: Some(home.clone()),
+            cargo_home: Some(absolute("opt/cargo")),
+            scoop: Some(absolute("opt/scoop")),
+            local_app_data: Some(absolute("home/u/AppData/Local")),
+        });
+        assert_eq!(overridden[0], absolute("opt/cargo").join("bin"));
+        #[cfg(windows)]
+        {
+            assert_eq!(overridden[1], absolute("opt/scoop").join("shims"));
+            assert!(
+                overridden.contains(
+                    &absolute("home/u/AppData/Local")
+                        .join("Microsoft")
+                        .join("WinGet")
+                        .join("Links")
+                )
+            );
+        }
+        #[cfg(not(windows))]
+        assert!(
+            !overridden
+                .iter()
+                .any(|root| root.starts_with(absolute("opt/scoop")))
+        );
+
+        assert!(user_tool_roots(&UserToolEnv::default()).is_empty());
+    }
+
+    #[test]
+    fn missing_and_workspace_per_user_roots_are_left_out() {
+        let home = std::env::temp_dir().join(format!(
+            "sr-user-tool-roots-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(home.join(".local").join("bin")).unwrap();
+        let elsewhere = home.join("elsewhere");
+        std::fs::create_dir_all(&elsewhere).unwrap();
+        let roots = trusted_tool_roots(Some(&home), &elsewhere);
+        let local_bin = home.join(".local").join("bin");
+        assert!(roots.contains(&local_bin), "{roots:?}");
+        // ~/go/bin does not exist here: absent, not a failure.
+        assert!(!roots.contains(&home.join("go").join("bin")));
+        // Run from the home directory: its per-user folders are workspace
+        // content, so none of them is trusted.
+        let roots = trusted_tool_roots(Some(&home), &home);
+        assert!(
+            !roots.iter().any(|root| root.starts_with(&home)),
+            "{roots:?}"
+        );
+        assert!(
+            trusted_tool_roots(Some(Path::new("relative")), &home)
+                .iter()
+                .all(|root| root.is_absolute())
+        );
+    }
 }
 
 #[cfg(all(test, windows))]
 mod tool_root_tests {
-    use super::trusted_tool_roots;
+    use super::machine_tool_roots;
     use std::path::PathBuf;
 
     #[test]
-    fn windows_tool_roots_are_existing_program_files_directories_only() {
+    fn windows_machine_tool_roots_are_existing_program_files_directories_only() {
         let base = PathBuf::from(std::env::var_os("ProgramFiles").unwrap());
         let profile = std::env::var_os("USERPROFILE").map(PathBuf::from);
-        let roots = trusted_tool_roots();
+        let roots = machine_tool_roots();
         for root in &roots {
             assert!(
                 root.is_dir() && root.starts_with(&base),
@@ -1854,7 +2033,7 @@ async fn rank_once(
                 directive.kind == crate::context::anchor::AnchorDirectiveKind::Require
             })
         });
-    let tool_roots = trusted_tool_roots();
+    let tool_roots = trusted_tool_roots(args.home.as_deref(), &args.workspace);
     let (roster, captured_signals) = if needs_explicit {
         (roster_source.load_concurrent(cx, clock).await?, None)
     } else {
@@ -2551,9 +2730,10 @@ async fn rank_once(
 
     // 9. Render context payload for Jev
     // Optional local project signals: filename markers, allowlisted tools in
-    // fixed root-owned system directories (never PATH or repository-supplied
-    // roots) and bounded repository-relative dirty paths from the safe Git
-    // helper. Rendering redacts them and the profile may omit them.
+    // fixed machine-wide and per-user install directories (never PATH or
+    // repository-supplied roots) and bounded repository-relative dirty paths
+    // from the safe Git helper. Rendering redacts them and the profile may
+    // omit them.
     let signals = match captured_signals {
         Some(signals) => signals,
         None => crate::context::signals::collect(cx, clock, &args.workspace, &tool_roots).await,

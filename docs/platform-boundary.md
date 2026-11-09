@@ -188,17 +188,32 @@ scripts, relative paths and other directories.
 
 ### Git dirty_paths and the tool inventory
 
-Project signals find tools only in fixed trusted roots, never `PATH`, the user's
-profile or the workspace. On Windows (the user's choice for sr-winpar.10) these are
-unversioned machine-wide install directories under `%ProgramFiles%`, in this order:
-`Git\ucrt64\bin`, `Git\mingw64\bin`, `Git\clangarm64\bin` (Git for Windows' real
-`git.exe`), `Git\cmd` (its 44 KB launcher, which starts the real image inside the
-same Job Object), `nodejs`, `Go\bin` and `CMake\bin`. Directories that do not exist
-are left out; `ProgramFiles` comes from the user's environment, never from the
-repository. A tool counts only as a regular `<tool>.exe` that is not a reparse
-point and whose canonical path is outside the workspace, so `npm.cmd` and
-versioned or per-user installs (Rust under `.cargo`, Python, Java) are not
-reported.
+Project signals find tools only in fixed trusted roots, never `PATH`, versioned
+install directories or the workspace. Machine-wide roots come first. On Windows
+(the user's choice for sr-winpar.10) these are under `%ProgramFiles%`, in this
+order: `Git\ucrt64\bin`, `Git\mingw64\bin`, `Git\clangarm64\bin` (Git for
+Windows' real `git.exe`), `Git\cmd` (its 44 KB launcher, which starts the real
+image inside the same Job Object), `nodejs`, `Go\bin` and `CMake\bin`. On Unix
+they are `/usr/local/bin`, `/usr/bin` and `/bin`.
+
+Per-user install folders follow (sr-cd14, the user's decision, on every
+platform): rustup's `%CARGO_HOME%\bin` or `~\.cargo\bin`, on Windows Scoop's
+`%SCOOP%\shims` or `~\scoop\shims`, then `~\.local\bin`, on Windows WinGet's
+`%LOCALAPPDATA%\Microsoft\WinGet\Links`, then `~\go\bin` and elan's
+`~\.elan\bin`. The locations come from the home directory and those
+environment variables, never from the repository. A per-user folder that does
+not exist, or that lies inside the workspace (when `sr` runs from the home
+directory), is left out, as is any root that does not exist.
+
+A tool counts as present when its file in a root (`<tool>.exe` on Windows, an
+executable `<tool>` on Unix) resolves to a regular executable outside the
+workspace. Links count, because rustup and Scoop install that way; `npm.cmd`,
+Store app aliases and versioned installs (Python, Java under Scoop) are not
+reported. The same list is trusted for execution, which is only ever Git, with
+one more rule: Git runs only from a resolved image inside a trusted root. A
+linked `git` that leads elsewhere is reported as present but never run, and
+the search moves on to later roots. Because machine-wide roots come first, a
+per-user Git runs only when no machine-wide Git exists.
 
 Git runs through the owned-subprocess boundary with the Unix protections
 (`--no-optional-locks`, `core.fsmonitor=false`, `core.untrackedCache=false`,

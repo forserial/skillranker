@@ -232,3 +232,39 @@ fn actual_git_finishes_while_an_owned_filesystem_leaf_waits() {
     assert_eq!(signals.dirty_paths.unwrap().paths[0].as_str(), "Cargo.toml");
     assert!(invocation.shutdown());
 }
+
+/// sr-cd14: a link in a trusted root counts for presence when it reaches a
+/// regular executable, as rustup's and Scoop's installs do; Git is executed
+/// only from an image inside a trusted root, so a linked Git elsewhere is
+/// present but never run, and a later root's Git is used instead.
+#[test]
+fn a_linked_tool_is_present_but_a_linked_git_outside_the_roots_never_runs() {
+    use std::os::unix::fs::{PermissionsExt, symlink};
+    let dir = temp();
+    git(&dir, &["init", "-q"]);
+    let root = temp();
+    let store = temp();
+    let marker = store.join("ran");
+    for name in ["cargo-real", "git-real"] {
+        let path = store.join(name);
+        std::fs::write(
+            &path,
+            format!("#!/bin/sh\nprintf ran > '{}'\nexit 97\n", marker.display()),
+        )
+        .unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    symlink(store.join("cargo-real"), root.join("cargo")).unwrap();
+    symlink(store.join("git-real"), root.join("git")).unwrap();
+
+    let result = collect_at(&dir, std::slice::from_ref(&root));
+    assert!(result.tools_on_path.contains(&"cargo"), "{result:?}");
+    assert!(result.tools_on_path.contains(&"git"), "{result:?}");
+    assert_eq!(result.git_omission, Some(Omission::Unavailable));
+    assert!(!marker.exists(), "an untrusted linked image ran");
+
+    let system = git_path().parent().unwrap().to_path_buf();
+    let result = collect_at(&dir, &[root, system]);
+    assert_eq!(result.git_omission, None, "{result:?}");
+    assert!(!marker.exists(), "an untrusted linked image ran");
+}

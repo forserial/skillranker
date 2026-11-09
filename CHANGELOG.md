@@ -4,6 +4,12 @@
 
 ### Added
 
+- The project-signal tool inventory also looks in per-user install folders
+  (sr-cd14): rustup's cargo bin, Scoop shims and WinGet links on Windows,
+  `~/.local/bin`, `~/go/bin` and `~/.elan/bin`, after the machine-wide roots. A
+  link there counts when it reaches a regular executable. Git still runs only
+  from an image inside a trusted root, and a per-user Git only when no
+  machine-wide Git exists.
 - Windows: `sr rank --session` and `sr observe --session` read cass sessions
   through a qualified `cass.exe` at `%USERPROFILE%\.local\bin\cass.exe`, with
   cass's Windows database default under `%APPDATA%` (sr-winpar.11). Verified

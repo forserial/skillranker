@@ -193,7 +193,9 @@ fn tool_file(tool: &str) -> std::borrow::Cow<'_, str> {
 /// Fixed bounded filename metadata and trusted executable presence. PATH roots
 /// are ordered and explicitly supplied by the caller; the process environment
 /// and repository cannot expand them. Canonical targets inside the workspace
-/// are never trusted merely because a PATH symlink points there.
+/// are never trusted merely because a PATH symlink points there. A tool is
+/// present when its file in a root resolves to a regular executable outside
+/// the workspace; Git runs only from an image inside a trusted root.
 pub async fn collect(
     cx: &Cx,
     parent: &EntryClock,
@@ -271,6 +273,7 @@ async fn gather(
     }
     let mut git = None;
     for &tool in TOOLS {
+        let mut present = false;
         for root in &roots {
             live(cx, parent, stage)?;
             let candidate = root.join(tool_file(tool).as_ref());
@@ -280,14 +283,22 @@ async fn gather(
             if canonical.starts_with(&workspace) || !executable(&canonical) {
                 continue;
             }
-            let Ok(trusted) = TrustedExecutable::resolve(&canonical, &roots) else {
-                continue;
-            };
-            result.tools_on_path.push(tool);
-            if tool == "git" {
-                git = Some(trusted);
+            // Presence is only a name: a link in a trusted root counts when
+            // it reaches a regular executable outside the workspace, as
+            // rustup's and Scoop's installs do (sr-cd14).
+            present = true;
+            if tool != "git" {
+                break;
             }
-            break;
+            // Git is executed, so its resolved image must itself lie inside a
+            // trusted root; otherwise keep looking in later roots.
+            if let Ok(trusted) = TrustedExecutable::resolve(&canonical, &roots) {
+                git = Some(trusted);
+                break;
+            }
+        }
+        if present {
+            result.tools_on_path.push(tool);
         }
     }
     result.inventory_partial = false;
