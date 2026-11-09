@@ -113,7 +113,109 @@ fn assert_withheld(roster: &ResolvedRoster, name: &str) {
 }
 
 #[test]
-fn unrelated_symlink_preserves_three_skills_ids_and_option_authority() {
+fn linked_skill_folder_resolves_under_its_link_name_and_revalidates() {
+    if !links::available() {
+        return;
+    }
+    // sr-winpar.32: a link directly in a skills root is a skill folder.
+    let workspace = tree();
+    let home = tree();
+    let store = tree();
+    skill(&home, "alpha", "# alpha\n\nUseful skill");
+    fs::create_dir_all(store.join("first")).unwrap();
+    fs::write(store.join("first/SKILL.md"), "# First\n\nLinked skill").unwrap();
+    fs::create_dir_all(store.join("second")).unwrap();
+    fs::write(store.join("second/SKILL.md"), "# Second\n\nOther skill").unwrap();
+    let link = home.join(".claude/skills/linked");
+    symlink(store.join("first"), &link).unwrap();
+    let plan = claude_code_plan(&workspace, Some(&home), verified()).unwrap();
+    let (clock, runtime, cx) = invocation();
+    let roster = resolve_claude_plan(&plan, &BTreeMap::new(), &cx, &clock).unwrap();
+    assert_advice(&roster, &["alpha", "linked"]);
+    assert!(
+        !roster
+            .source_diagnostics()
+            .iter()
+            .any(|d| matches!(d, Diagnostic::SymlinkedDirectorySkipped(_)))
+    );
+    let ids: Vec<_> = roster.advisory().map(|s| s.binding.id.clone()).collect();
+    let captured = revalidation::capture(&roster, &ids, &clock).unwrap();
+    assert!(
+        revalidation::revalidate_claude(
+            &captured,
+            &workspace,
+            Some(&home),
+            verified(),
+            &BTreeMap::new(),
+            &cx,
+            &clock
+        )
+        .is_ok()
+    );
+    // Retargeting the link changes the skill's content: publication refuses.
+    fs::rename(&link, home.join("retained-first-link")).unwrap();
+    symlink(store.join("second"), &link).unwrap();
+    assert_eq!(
+        revalidation::revalidate_claude(
+            &captured,
+            &workspace,
+            Some(&home),
+            verified(),
+            &BTreeMap::new(),
+            &cx,
+            &clock
+        )
+        .unwrap_err(),
+        RevalidationError::Changed
+    );
+    assert!(runtime.shutdown());
+}
+
+#[test]
+fn linked_folders_are_one_hop_and_never_descended() {
+    if !links::available() {
+        return;
+    }
+    let workspace = tree();
+    let home = tree();
+    let store = tree();
+    skill(&home, "alpha", "# alpha\n\nUseful skill");
+    // A linked folder without a skill file is not descended: its nested
+    // skill-shaped folders are not skills of this root.
+    fs::create_dir_all(store.join("tree/inner")).unwrap();
+    fs::write(store.join("tree/inner/SKILL.md"), "# Inner\n\nbody").unwrap();
+    symlink(store.join("tree"), home.join(".claude/skills/library")).unwrap();
+    // A link below the root's top level is still skipped.
+    fs::create_dir_all(store.join("nested")).unwrap();
+    fs::write(store.join("nested/SKILL.md"), "# Nested\n\nbody").unwrap();
+    fs::create_dir_all(home.join(".claude/skills/container")).unwrap();
+    symlink(
+        store.join("nested"),
+        home.join(".claude/skills/container/nested"),
+    )
+    .unwrap();
+    let plan = claude_code_plan(&workspace, Some(&home), verified()).unwrap();
+    let discovery = plan.discover();
+    let found: Vec<_> = discovery
+        .candidates()
+        .iter()
+        .map(|c| c.relative().to_path_buf())
+        .collect();
+    assert_eq!(found, vec![Path::new("alpha").join("SKILL.md")]);
+    assert_eq!(
+        discovery
+            .diagnostics()
+            .iter()
+            .filter(|d| matches!(d, Diagnostic::SymlinkedDirectorySkipped(_)))
+            .count(),
+        1
+    );
+    let roster = resolve(&plan);
+    assert_advice(&roster, &["alpha"]);
+}
+
+#[test]
+fn unrelated_dangling_link_preserves_three_skills_ids_and_option_authority() {
     if !links::available() {
         return;
     }
@@ -129,7 +231,8 @@ fn unrelated_symlink_preserves_three_skills_ids_and_option_authority() {
     let ids: BTreeSet<_> = control.advisory().map(|s| s.binding.id.clone()).collect();
     fs::write(outside.join("SKILL.md"), "# Not authorized\n\nbody").unwrap();
     let link = home.join(".claude/skills/linked-private-name");
-    symlink(&outside, &link).unwrap();
+    // A link reaching nothing is skipped and reported, never guessed at.
+    symlink(outside.join("missing"), &link).unwrap();
     let partial = resolve(&plan);
     assert!(partial.is_partial());
     assert_advice(&partial, &["alpha", "beta", "gamma"]);
@@ -175,7 +278,8 @@ fn skipped_directory_and_dangling_skill_link_withhold_only_their_names() {
         skill(&workspace, name, "# Project skill\n\nbody");
     }
     fs::create_dir_all(home.join(".claude/skills/broken")).unwrap();
-    symlink(&outside, home.join(".claude/skills/linked")).unwrap();
+    // A dangling linked folder cannot prove its name absent.
+    symlink(outside.join("gone"), home.join(".claude/skills/linked")).unwrap();
     symlink(
         outside.join("missing.md"),
         home.join(".claude/skills/broken/SKILL.md"),
@@ -411,7 +515,7 @@ fn same_diagnostic_count_cannot_hide_a_new_competitor_at_publication() {
     skill(&workspace, "helpful", "# Helpful\n\nbody");
     fs::create_dir_all(home.join(".claude/skills")).unwrap();
     let link = home.join(".claude/skills/unrelated");
-    symlink(&outside, &link).unwrap();
+    symlink(outside.join("missing"), &link).unwrap();
     let plan = claude_code_plan(&workspace, Some(&home), verified()).unwrap();
     let (clock, runtime, cx) = invocation();
     let initial = resolve_claude_plan(&plan, &BTreeMap::new(), &cx, &clock).unwrap();

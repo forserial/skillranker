@@ -66,9 +66,11 @@ has no captured binding, or it matches the physical identity of the binding
 already read and parsed at that **source and declared path**. An unseen file is
 not admitted by this check, even if it aliases a file observed elsewhere.
 
-These probes use the pinned authorized root descriptors and never descend
-symlinked skill directories. Unknown/unreadable slots, directory links, dangling
-file links, and changed or unobserved files withhold only their invocation names.
+These probes use the pinned authorized root descriptors. A slot that is a link
+directly in the root is followed one hop, exactly as discovery follows a linked
+skill folder; no deeper link is followed. Unknown/unreadable slots, dangling
+directory links, dangling file links, and changed or unobserved files withhold
+only their invocation names.
 An entirely unreadable supported root still withholds every name because none of
 its slots can be proved absent. A valid file symlink already admitted by the
 authorized reader can retain its binding; a skipped link does not acquire one.

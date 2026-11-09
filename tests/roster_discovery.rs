@@ -364,7 +364,7 @@ fn deep_trees_stop_at_the_depth_bound() {
 }
 
 #[test]
-fn symlinked_directories_are_skipped_and_symlinked_skill_files_are_flagged() {
+fn top_level_linked_folders_are_followed_and_symlinked_skill_files_are_flagged() {
     if !links::available() {
         return;
     }
@@ -372,7 +372,12 @@ fn symlinked_directories_are_skipped_and_symlinked_skill_files_are_flagged() {
     let outside = temp_tree("links-outside");
     write(&tree.join("real/SKILL.md"), "real");
     write(&outside.join("target/SKILL.md"), "outside");
+    write(&outside.join("nested/SKILL.md"), "nested");
+    // A link directly in the root is a skill folder (sr-winpar.32)...
     symlink(outside.join("target"), tree.join("linked-dir")).expect("dir link");
+    // ...but a link deeper in the tree is still skipped.
+    fs::create_dir_all(tree.join("container")).expect("container");
+    symlink(outside.join("nested"), tree.join("container/deeper")).expect("nested link");
     fs::create_dir_all(tree.join("linked")).expect("link parent");
     symlink(tree.join("real/SKILL.md"), tree.join("linked/SKILL.md")).expect("file link");
 
@@ -386,8 +391,26 @@ fn symlinked_directories_are_skipped_and_symlinked_skill_files_are_flagged() {
     assert!(found.contains(&"real/SKILL.md".to_owned()));
     assert!(found.contains(&"linked/SKILL.md".to_owned()), "{found:?}");
     assert!(
-        !found.iter().any(|path| path.starts_with("linked-dir")),
-        "symlinked directories are not descended: {found:?}"
+        found.contains(&"linked-dir/SKILL.md".to_owned()),
+        "{found:?}"
+    );
+    assert!(
+        !found.iter().any(|path| path.starts_with("container")),
+        "nested links are not followed: {found:?}"
+    );
+    let through_link = discovery
+        .candidates()
+        .iter()
+        .find(|candidate| candidate.relative() == Path::new("linked-dir/SKILL.md"))
+        .expect("linked folder candidate");
+    assert!(
+        !through_link.via_symlink(),
+        "the skill file itself is regular"
+    );
+    assert_eq!(
+        through_link.path().as_path(),
+        tree.join("linked-dir").join("SKILL.md"),
+        "named by the link, as the harness loads it"
     );
     assert!(discovery.is_partial());
     assert!(

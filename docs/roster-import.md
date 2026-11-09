@@ -61,10 +61,12 @@ refused with `UnsupportedHarness`. For each record:
    as discovery derives them, so an imported record and a discovered record for
    one file have equal IDs.
 4. Two records resolving to one ID are a `DuplicateDefinition`.
-5. A symlinked skill directory is refused, as discovery refuses to descend
-   one. The file is then read through `AuthorizedRoots`, so a symlinked
-   `SKILL.md` may resolve only into an authorized root. FIFOs, devices and
-   oversized files are refused.
+5. The skill directory must be one discovery would list: a directory, or a
+   link directly in the root that reaches one (a linked skill folder,
+   sr-winpar.32). A dangling link is `Missing`; a link to a file is
+   `UnsupportedLayout`. The file is then read through `AuthorizedRoots`, so a
+   symlinked `SKILL.md` may resolve only into an authorized root. FIFOs,
+   devices and oversized files are refused.
 6. The digest of the bytes read must equal any `content_hash` claim. After
    collision resolution, the effective restrictions (frontmatter, trusted
    overrides and same-file folding) must equal any eligibility claim. A

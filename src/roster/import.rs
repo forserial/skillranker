@@ -380,19 +380,32 @@ pub fn import_authorized(
     for item in planned {
         budget(cx, clock)?;
         let index = item.index;
-        // Discovery never descends a symlinked directory; neither does import.
-        // Containment does not rest on this check: a directory swapped for a
-        // link afterwards still resolves only inside authorized roots.
+        // The skill directory must be one discovery would list: a directory,
+        // or a link directly in the root that reaches one (a linked skill
+        // folder, followed one hop). Containment does not rest on this check:
+        // the read below applies the same rule and holds what it opened.
         let directory = item.relative.split('/').next().unwrap_or_default();
+        let root_dir = opened[item.root].1;
+        let linked_folder = || match root_dir.open_linked_folder(std::ffi::OsStr::new(directory)) {
+            Ok(_) => Ok(()),
+            Err(ReadError::NotFound) => Err(record(index, RecordProblem::Missing)),
+            Err(ReadError::NotADirectory | ReadError::SymlinkLoop) => {
+                Err(record(index, RecordProblem::UnsupportedLayout))
+            }
+            Err(_) => Err(record(index, RecordProblem::Unreadable)),
+        };
         #[cfg(unix)]
-        match fstatat(
-            opened[item.root].1.as_fd(),
-            directory,
-            AtFlags::AT_SYMLINK_NOFOLLOW,
-        ) {
+        match fstatat(root_dir.as_fd(), directory, AtFlags::AT_SYMLINK_NOFOLLOW) {
             Ok(stat)
                 if SFlag::from_bits_truncate(stat.st_mode & SFlag::S_IFMT.bits())
                     == SFlag::S_IFDIR => {}
+            Ok(stat)
+                if SFlag::from_bits_truncate(stat.st_mode & SFlag::S_IFMT.bits())
+                    == SFlag::S_IFLNK
+                    && root_dir.follows_linked_folders() =>
+            {
+                linked_folder()?;
+            }
             Ok(_) => return Err(record(index, RecordProblem::UnsupportedLayout)),
             Err(nix::errno::Errno::ENOENT) => return Err(record(index, RecordProblem::Missing)),
             Err(_) => return Err(record(index, RecordProblem::Unreadable)),
@@ -403,10 +416,16 @@ pub fn import_authorized(
             if !valid_component(std::ffi::OsStr::new(directory)) {
                 return Err(record(index, RecordProblem::UnsupportedLayout));
             }
-            let path = opened[item.root].1.windows_handle().path().join(directory);
+            let path = root_dir.windows_handle().path().join(directory);
             match open_windows(&path, false, true) {
                 Ok(file) => match stat_windows(&file) {
                     Ok(stat) if stat.kind() == FileKind::Directory => {}
+                    Ok(stat)
+                        if stat.kind() == FileKind::Symlink
+                            && root_dir.follows_linked_folders() =>
+                    {
+                        linked_folder()?;
+                    }
                     Ok(_) => return Err(record(index, RecordProblem::UnsupportedLayout)),
                     Err(_) => return Err(record(index, RecordProblem::Unreadable)),
                 },

@@ -104,28 +104,42 @@ fn prove_with_limit(
 /// True only for an absent slot with no snapshot binding, or the exact file
 /// already read and parsed at this source/path. Finding an unobserved file is
 /// NOT permission to admit it or promote another root's definition of its name.
-/// Directory symlinks are never followed. A dangling SKILL.md link is not an
+/// A slot directory that is a link is followed one hop only when the root
+/// admits linked folders, as discovery does; otherwise, or when the link is
+/// dangling, it never proves absence. A dangling SKILL.md link is not an
 /// absence: lstat it first, and follow file links only for an existing binding.
 #[allow(clippy::unnecessary_cast)] // dev_t/ino_t widths differ on macOS.
 #[cfg(unix)]
 fn slot_matches(root: &AuthorizedRoot, name: &str, expected: Option<FileIdentity>) -> bool {
+    use std::os::fd::AsFd;
     let directory_stat = match fstatat(root.as_fd(), name, AtFlags::AT_SYMLINK_NOFOLLOW) {
         Ok(stat) => stat,
         Err(Errno::ENOENT) => return expected.is_none(),
         Err(_) => return false,
     };
     let kind = SFlag::from_bits_truncate(directory_stat.st_mode) & SFlag::S_IFMT;
-    if kind == SFlag::S_IFLNK {
-        return false;
-    }
-    if kind != SFlag::S_IFDIR {
+    let linked;
+    let plain;
+    let directory = if kind == SFlag::S_IFLNK {
+        if !root.follows_linked_folders() {
+            return false;
+        }
+        let Ok(folder) = root.open_linked_folder(std::ffi::OsStr::new(name)) else {
+            return false;
+        };
+        linked = folder;
+        linked.as_fd()
+    } else if kind != SFlag::S_IFDIR {
         return expected.is_none();
-    }
-    let flags = OFlag::O_RDONLY | OFlag::O_DIRECTORY | OFlag::O_NOFOLLOW | OFlag::O_CLOEXEC;
-    let Ok(directory) = openat(root.as_fd(), name, flags, Mode::empty()) else {
-        return false;
+    } else {
+        let flags = OFlag::O_RDONLY | OFlag::O_DIRECTORY | OFlag::O_NOFOLLOW | OFlag::O_CLOEXEC;
+        let Ok(opened) = openat(root.as_fd(), name, flags, Mode::empty()) else {
+            return false;
+        };
+        plain = opened;
+        plain.as_fd()
     };
-    let stat = match fstatat(&directory, CLAUDE_SKILL_FILE, AtFlags::AT_SYMLINK_NOFOLLOW) {
+    let stat = match fstatat(directory, CLAUDE_SKILL_FILE, AtFlags::AT_SYMLINK_NOFOLLOW) {
         Ok(stat) => stat,
         Err(Errno::ENOENT) => return expected.is_none(),
         Err(_) => return false,
@@ -134,7 +148,7 @@ fn slot_matches(root: &AuthorizedRoot, name: &str, expected: Option<FileIdentity
         return false;
     };
     let stat = if (SFlag::from_bits_truncate(stat.st_mode) & SFlag::S_IFMT) == SFlag::S_IFLNK {
-        let Ok(target) = fstatat(&directory, CLAUDE_SKILL_FILE, AtFlags::empty()) else {
+        let Ok(target) = fstatat(directory, CLAUDE_SKILL_FILE, AtFlags::empty()) else {
             return false;
         };
         target
@@ -147,8 +161,8 @@ fn slot_matches(root: &AuthorizedRoot, name: &str, expected: Option<FileIdentity
 
 /// Windows form of the same proof. The slot directory is held open without
 /// `FILE_SHARE_DELETE` while its skill file is inspected, and both are opened
-/// without following a final link; only an existing file binding follows a
-/// link, as on Unix.
+/// without following a final link; a linked slot folder is followed one hop
+/// under the Unix rule, and only an existing file binding follows a file link.
 #[cfg(windows)]
 fn slot_matches(root: &AuthorizedRoot, name: &str, expected: Option<FileIdentity>) -> bool {
     use crate::authorized_read::{FileKind, open_windows, stat_windows, valid_component};
@@ -157,7 +171,7 @@ fn slot_matches(root: &AuthorizedRoot, name: &str, expected: Option<FileIdentity
     if !valid_component(OsStr::new(name)) {
         return false;
     }
-    let directory_path = root.windows_handle().path().join(name);
+    let mut directory_path = root.windows_handle().path().join(name);
     let directory = match open_windows(&directory_path, false, true) {
         Ok(directory) => directory,
         Err(error) if error.kind() == ErrorKind::NotFound => return expected.is_none(),
@@ -166,7 +180,15 @@ fn slot_matches(root: &AuthorizedRoot, name: &str, expected: Option<FileIdentity
     let Ok(directory_stat) = stat_windows(&directory) else {
         return false;
     };
+    let mut linked = None;
     match directory_stat.kind() {
+        FileKind::Symlink if root.follows_linked_folders() => {
+            let Ok(folder) = root.open_linked_folder(OsStr::new(name)) else {
+                return false;
+            };
+            directory_path = folder.windows_handle().path().to_path_buf();
+            linked = Some(folder);
+        }
         FileKind::Symlink => return false,
         FileKind::Directory => {}
         _ => return expected.is_none(),
@@ -192,6 +214,7 @@ fn slot_matches(root: &AuthorizedRoot, name: &str, expected: Option<FileIdentity
         stat = target;
     }
     drop(directory);
+    drop(linked);
     stat.kind() == FileKind::Regular && stat.identity() == expected
 }
 
@@ -263,6 +286,19 @@ mod tests {
             Err(error) => panic!("create directory link: {error}"),
         }
         assert!(!slot_matches(&root, "linked", None));
+        // A root that admits linked folders follows the slot link one hop: an
+        // empty target proves absence, and a skill file there is only
+        // accounted for as the exact file already read.
+        let linked_root = root.try_clone().unwrap().with_linked_folders();
+        assert!(slot_matches(&linked_root, "linked", None));
+        fs::write(outside.join(CLAUDE_SKILL_FILE), "# Linked\n\nbody").unwrap();
+        assert!(!slot_matches(&linked_root, "linked", None));
+        let read = AuthorizedRoots::single(linked_root.try_clone().unwrap())
+            .read_bounded(0, Path::new("linked/SKILL.md"), SKILL_FILE_BYTES)
+            .unwrap();
+        assert!(slot_matches(&linked_root, "linked", Some(read.identity())));
+        symlink_dir(outside.join("missing"), path.join("dangling")).unwrap();
+        assert!(!slot_matches(&linked_root, "dangling", None));
         fs::create_dir(path.join("broken")).unwrap();
         symlink_file(outside.join("missing"), path.join("broken/SKILL.md")).unwrap();
         assert!(!slot_matches(&root, "broken", None));

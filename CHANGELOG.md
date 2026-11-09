@@ -106,6 +106,15 @@
 
 ### Fixed
 
+- Skills installed as links are found. A link directly in a skills folder that
+  reaches a directory (what a skills manager creates for each skill, and what
+  Claude Code loads) is now that folder's skill, named after the link and
+  followed one hop wherever it points (sr-winpar.32). Previously every such
+  link was skipped, so a personal folder of 53 linked skills gave an empty
+  roster. Links below the top level, dangling links and links to files are
+  still skipped and reported as `symlinked-directory-skipped`; a linked
+  folder is never descended. Discovery, the name proof, revalidation and
+  `--roster` import apply the same rule.
 - Roster discovery no longer walks version-control metadata (`.git`, `.hg`,
   `.svn`). A skills folder kept under git spent the 10,000-entry discovery
   budget inside `.git`, which made the roster partial and slow; with 303 skills

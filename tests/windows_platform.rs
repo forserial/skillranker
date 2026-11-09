@@ -171,22 +171,41 @@ fn userprofile_supplies_personal_skills_only_when_home_is_unset() {
 }
 
 #[test]
-fn junctioned_and_symlinked_skill_folders_are_skipped_and_reported() {
+fn junctioned_and_symlinked_skill_folders_are_followed_one_hop() {
     let f = Fixture::new();
-    let outside = f.root.join("outside");
+    // The folders the links reach live under %TEMP%: a sandbox that labels
+    // its own writable folders can refuse to traverse a link it made there
+    // to a target in the same labelled folder. sr's rule does not depend on
+    // where the target lies (sr-winpar.32).
+    let outside = std::env::temp_dir().join(format!(
+        "sr-windows-links-{}-{}",
+        std::process::id(),
+        SEQUENCE.fetch_add(1, Ordering::Relaxed)
+    ));
     skill(&outside.join("junctioned"), "junctioned");
     skill(&outside.join("symlinked"), "symlinked");
+    skill(&outside.join("nested"), "nested");
     skill(&f.skills().join("real-skill"), "real-skill");
-    let junction = Command::new("cmd")
-        .args(["/C", "mklink", "/J"])
-        .arg(f.skills().join("junctioned"))
-        .arg(outside.join("junctioned"))
-        .output()
-        .unwrap();
-    assert!(junction.status.success(), "{junction:?}");
-    let mut expected = 1;
+    let junction = |link: &Path, target: &Path| {
+        let output = Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(link)
+            .arg(target)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+    };
+    junction(&f.skills().join("junctioned"), &outside.join("junctioned"));
+    // Reaching nothing, or sitting below the top level: skipped and reported.
+    junction(&f.skills().join("dangling"), &outside.join("missing"));
+    fs::create_dir_all(f.skills().join("container")).unwrap();
+    junction(
+        &f.skills().join("container").join("nested"),
+        &outside.join("nested"),
+    );
+    let mut expected = vec!["junctioned", "real-skill"];
     match symlink_dir(outside.join("symlinked"), f.skills().join("symlinked")) {
-        Ok(()) => expected += 1,
+        Ok(()) => expected.push("symlinked"),
         Err(error) if error.raw_os_error() == Some(ERROR_PRIVILEGE_NOT_HELD) => {
             eprintln!("symbolic link case skipped: needs Developer Mode or elevation");
         }
@@ -194,12 +213,9 @@ fn junctioned_and_symlinked_skill_folders_are_skipped_and_reported() {
     }
 
     let roster = f.roster();
-    assert_eq!(names(&roster), ["real-skill"]);
+    assert_eq!(names(&roster), expected);
     assert_eq!(roster["partial"], true);
-    assert_eq!(
-        roster["source_causes"]["symlinked-directory-skipped"],
-        expected
-    );
+    assert_eq!(roster["source_causes"]["symlinked-directory-skipped"], 2);
 }
 
 #[test]

@@ -148,7 +148,7 @@ impl PlannedRoot {
         match AuthorizedRoot::open_absolute(path) {
             Ok(root) => Ok(Some(Self {
                 spec,
-                root: Some(root),
+                root: Some(root.with_linked_folders()),
                 declared,
             })),
             Err(ReadError::NotFound) => Ok(None),
@@ -532,19 +532,33 @@ impl Discovery {
         for planned in planned_roots {
             checkpoint()?;
             if let Some(root) = planned.root.as_ref() {
-                queue.push_back((planned, root, PathBuf::new(), 0usize));
+                queue.push_back((planned, root, PathBuf::new(), 0usize, false));
             } else {
                 self.note(Diagnostic::RootUnreadable(planned.spec.source.clone()));
             }
         }
-        while let Some((planned, root, relative, depth)) = queue.pop_front() {
+        while let Some((planned, root, relative, depth, linked)) = queue.pop_front() {
             checkpoint()?;
             let flags = OFlag::O_RDONLY | OFlag::O_DIRECTORY | OFlag::O_NOFOLLOW | OFlag::O_CLOEXEC;
-            // A fresh stream relative to the pinned root avoids shared dup()
-            // positions and stale directory indexes across repeated scans.
-            let mut directory = openat(root.as_fd(), ".", flags, Mode::empty());
+            let mut directory = if linked {
+                // A link directly in the root, followed one hop to the folder
+                // it reaches. A dangling link, or one reaching a file, is a
+                // skipped link as before.
+                root.open_linked_folder(relative.as_os_str())
+                    .map_err(|error| match error {
+                        ReadError::NotFound | ReadError::NotADirectory | ReadError::SymlinkLoop => {
+                            Errno::ENOTDIR
+                        }
+                        _ => Errno::EIO,
+                    })
+                    .and_then(|folder| folder.as_fd().try_clone_to_owned().map_err(|_| Errno::EIO))
+            } else {
+                // A fresh stream relative to the pinned root avoids shared dup()
+                // positions and stale directory indexes across repeated scans.
+                openat(root.as_fd(), ".", flags, Mode::empty())
+            };
             checkpoint()?;
-            for component in relative.components() {
+            for component in relative.components().filter(|_| !linked) {
                 checkpoint()?;
                 directory = directory.and_then(|parent| {
                     openat(&parent, component.as_os_str(), flags, Mode::empty())
@@ -642,9 +656,16 @@ impl Discovery {
                         );
                     }
                     Type::Directory if !is_vcs_metadata(name) => {
-                        subdirectories.push(name.to_owned());
+                        subdirectories.push((name.to_owned(), false));
                     }
                     Type::Directory => {}
+                    Type::Symlink
+                        if relative.as_os_str().is_empty()
+                            && root.follows_linked_folders()
+                            && !is_vcs_metadata(name) =>
+                    {
+                        subdirectories.push((name.to_owned(), true));
+                    }
                     Type::Symlink => {
                         self.note(Diagnostic::SymlinkedDirectorySkipped(
                             planned.spec.source.clone(),
@@ -657,15 +678,17 @@ impl Discovery {
                     return Ok(());
                 }
             }
-            if holds_skill_file && !relative.as_os_str().is_empty() {
+            // A linked folder is a skill folder only: it is never descended,
+            // so a link to a large tree cannot spend the walk's budget.
+            if linked || (holds_skill_file && !relative.as_os_str().is_empty()) {
                 continue;
             }
-            for name in subdirectories {
+            for (name, linked) in subdirectories {
                 if depth + 1 > limits.depth {
                     self.note(Diagnostic::DepthLimitReached(planned.spec.source.clone()));
                     continue;
                 }
-                queue.push_back((planned, root, relative.join(name), depth + 1));
+                queue.push_back((planned, root, relative.join(name), depth + 1, linked));
             }
         }
         checkpoint()?;
@@ -772,9 +795,10 @@ fn is_vcs_metadata(name: &OsStr) -> bool {
 /// directory is reached by path from its pinned root, with every directory on
 /// that path held open without `FILE_SHARE_DELETE` while it is listed: none
 /// can be renamed or replaced (for example by a junction) mid-listing. Links
-/// (symbolic links and junctions) are classified, never descended, exactly as
-/// the Unix walk skips symlinked directories. Budgets, ordering, checkpoints
-/// and diagnostics match the Unix walk.
+/// (symbolic links and junctions) follow the Unix rule: one directly in the
+/// root is a linked skill folder, held by the folder it reaches and never
+/// descended; any other is classified and skipped. Budgets, ordering,
+/// checkpoints and diagnostics match the Unix walk.
 #[cfg(windows)]
 impl Discovery {
     fn walk_roots<E>(
@@ -789,18 +813,33 @@ impl Discovery {
         for planned in planned_roots {
             checkpoint()?;
             if let Some(root) = planned.root.as_ref() {
-                queue.push_back((planned, root, PathBuf::new(), 0usize));
+                queue.push_back((planned, root, PathBuf::new(), 0usize, false));
             } else {
                 self.note(Diagnostic::RootUnreadable(planned.spec.source.clone()));
             }
         }
-        while let Some((planned, root, relative, depth)) = queue.pop_front() {
+        while let Some((planned, root, relative, depth, linked)) = queue.pop_front() {
             checkpoint()?;
             // Hold the chain from the pinned root to this directory.
             let mut path = root.windows_handle().path().to_path_buf();
             let mut held = Vec::new();
+            let mut linked_folder = None;
             let mut outcome = Ok(());
-            for component in relative.components() {
+            if linked {
+                // A link directly in the root, followed one hop and held by
+                // the final path of the folder it reaches.
+                match root.open_linked_folder(relative.as_os_str()) {
+                    Ok(folder) => {
+                        path = folder.windows_handle().path().to_path_buf();
+                        linked_folder = Some(folder);
+                    }
+                    Err(
+                        ReadError::NotFound | ReadError::NotADirectory | ReadError::SymlinkLoop,
+                    ) => outcome = Err(true),
+                    Err(_) => outcome = Err(false),
+                }
+            }
+            for component in relative.components().filter(|_| !linked) {
                 checkpoint()?;
                 path.push(component.as_os_str());
                 let opened = open_windows(&path, false, true)
@@ -878,12 +917,18 @@ impl Discovery {
                         kind.is_symlink(),
                         limits,
                     );
+                } else if kind.is_symlink()
+                    && relative.as_os_str().is_empty()
+                    && root.follows_linked_folders()
+                    && !is_vcs_metadata(&name)
+                {
+                    subdirectories.push((name, true));
                 } else if kind.is_symlink() {
                     self.note(Diagnostic::SymlinkedDirectorySkipped(
                         planned.spec.source.clone(),
                     ));
                 } else if kind.is_dir() && !is_vcs_metadata(&name) {
-                    subdirectories.push(name);
+                    subdirectories.push((name, false));
                 }
                 checkpoint()?;
                 if self.stopped {
@@ -891,19 +936,20 @@ impl Discovery {
                 }
             }
             drop(held);
-            if holds_skill_file && !relative.as_os_str().is_empty() {
+            drop(linked_folder);
+            if linked || (holds_skill_file && !relative.as_os_str().is_empty()) {
                 continue;
             }
             // Directory enumeration order is filesystem-defined on Windows;
             // sort so the queue, and so which entries a budget admits, is
             // deterministic across runs.
             subdirectories.sort();
-            for name in subdirectories {
+            for (name, linked) in subdirectories {
                 if depth + 1 > limits.depth {
                     self.note(Diagnostic::DepthLimitReached(planned.spec.source.clone()));
                     continue;
                 }
-                queue.push_back((planned, root, relative.join(name), depth + 1));
+                queue.push_back((planned, root, relative.join(name), depth + 1, linked));
             }
         }
         checkpoint()?;
@@ -1115,7 +1161,7 @@ fn append_configured_roots(
         match opened {
             Ok(root) => plan.push_root(PlannedRoot {
                 spec,
-                root: Some(root),
+                root: Some(root.with_linked_folders()),
                 declared,
             }),
             Err(ReadError::NotFound) => plan.note_missing(source),

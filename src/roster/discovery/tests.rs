@@ -225,15 +225,17 @@ fn candidate_metadata_uses_the_open_directory_not_a_replaced_parent_path() {
         FileIdentity::new(expected.dev(), expected.ino())
     );
     assert_eq!(candidate.size(), expected.len());
-    // Metadata discovery grants no new read authority to the replacement link.
+    // The replacement link is a linked folder of this root (sr-winpar.32),
+    // but what it reaches is not the file discovery observed: the read's
+    // identity differs, and resolution refuses it as a changed file.
     let roots = crate::authorized_read::AuthorizedRoots::single(
         planned.root().unwrap().try_clone().unwrap(),
     );
-    assert!(
-        roots
-            .read_bounded(0, candidate.relative(), crate::limits::SKILL_FILE_BYTES)
-            .is_err()
-    );
+    let read = roots
+        .read_bounded(0, candidate.relative(), crate::limits::SKILL_FILE_BYTES)
+        .unwrap();
+    assert_eq!(read.bytes(), b"outside-canary");
+    assert_ne!(read.identity(), candidate.identity());
 }
 
 #[test]

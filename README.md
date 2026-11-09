@@ -723,7 +723,10 @@ may reduce message/character budgets, select `minimal`, or remove tool content;
 they cannot widen a trusted user's disclosure settings. Exclusions and skill
 roots merge as unions. Project roots must remain relative to the workspace;
 only trusted user configuration can authorize absolute roots. Readers also check
-symlink containment when opening files.
+symlink containment when opening files. A link directly in a skills folder,
+such as a skills manager creates for each installed skill, is that folder's
+skill: `sr` follows it one hop, wherever it points, and names the skill after
+the link. Deeper links must stay inside the authorized roots.
 
 Credentials and provider account identifiers are environment-only and kept outside serializable configuration.
 The v1 endpoint override is environment-only; model overrides use trusted user

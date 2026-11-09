@@ -26,7 +26,7 @@ of implying a complete inventory of what Claude can load.
 | Configured root unreadable or not a directory | `RootUnreadable` | Yes |
 | Documented source this build does not enumerate | `SourceNotEnumerated` | Yes |
 | Directory unreadable mid-walk | `DirectoryUnreadable` | Yes |
-| Symlinked directory | `SymlinkedDirectorySkipped` | Yes |
+| Link below the top level, or a top-level link that is dangling or reaches a file | `SymlinkedDirectorySkipped` | Yes |
 | Depth bound reached | `DepthLimitReached` | Yes |
 | Entry or byte ceiling reached | `EntryLimitReached` / `ByteLimitReached` | Yes |
 
@@ -58,8 +58,19 @@ configured roots continue to require an explicit inventory.
 
 Every directory is listed through its own descriptor, and children are opened
 relative to it with `O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC`. Symlinked
-directories are not descended: a link that replaces a directory mid-walk is
-refused rather than followed, which also means cycles cannot occur. Entry types
+directories below the top level are not descended: a link that replaces a
+directory mid-walk is refused rather than followed, which also means cycles
+cannot occur.
+
+A link **directly in a root** that reaches a directory is a *linked skill
+folder* (sr-winpar.32): skills managers install each skill as such a link, and
+Claude loads `<root>/<name>/SKILL.md` through it. Discovery follows it one hop
+through the root's `open_linked_folder`, holding the directory it reaches,
+wherever that lies; the link's name is the skill's name and its path
+(`<root>/<name>/SKILL.md`) is the candidate's path. A linked folder is a skill
+folder only: its own subdirectories are never descended, so a link to a large
+tree cannot spend the walk's budget. A dangling top-level link, or one reaching
+a file, is skipped as before. Entry types
 come from `readdir` where the filesystem supplies them and from
 `fstatat(AT_SYMLINK_NOFOLLOW)` where it does not.
 
@@ -87,7 +98,7 @@ Claude's documented precedence is enterprise > personal > project, so user
 
 A symlinked *skill file* is a candidate, flagged `via_symlink`, because the
 authorized read still decides whether its target lies inside an authorized root.
-A symlinked *directory* is skipped, as above.
+A symlinked *directory* is followed only directly in a root, as above.
 
 Visibility is whatever the adapter declared: a generic configured root with no
 load contract stays `Unverified`, and discovery never upgrades it.
@@ -107,8 +118,9 @@ load contract stays `Unverified`, and discovery never upgrades it.
 roots only with no cross-harness union and no ancestor traversal; personal (user)
 before project precedence; unenumerated sources forcing partial; missing (normal) versus
 unreadable (partial) roots; entry, byte and depth ceilings, each with a
-generous-bound success twin; symlinked directory skipped while a symlinked skill
-file is flagged and shares its target's inode; only the declared file name
+generous-bound success twin; a top-level linked folder followed and named by its
+link while a deeper link is skipped, and a symlinked skill file flagged and
+sharing its target's inode; only the declared file name
 matching, with a second declared name finding a disjoint set and invalid names
 rejected; generic roots keeping `Unverified` visibility; and diagnostics
 containing no path or content canary.

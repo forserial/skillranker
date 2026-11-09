@@ -182,7 +182,44 @@ fn a_skill_reached_through_two_names_is_one_candidate() {
 }
 
 #[test]
-fn one_unrelated_directory_link_never_turns_three_skills_into_empty_roster() {
+fn a_linked_skill_folder_is_a_skill_named_by_its_link() {
+    if !links::available() {
+        return;
+    }
+    // sr-winpar.32: a skills manager installs each skill as a link directly in
+    // the skills root, and the harness loads it there. The link's name is the
+    // invocation name; the folder it reaches may lie anywhere.
+    let fixture = Fixture::new();
+    fixture.skill("home", "alpha", "");
+    fixture.skill("outside", "store-name", "");
+    symlink(
+        fixture.root.join("outside/.claude/skills/store-name"),
+        fixture.root.join("home/.claude/skills/linked-skill"),
+    )
+    .unwrap();
+    fixture.assert_cache_miss(2);
+    let listing = fixture.listing();
+    assert!(
+        listing["source_causes"]
+            .get("symlinked-directory-skipped")
+            .is_none(),
+        "{listing}"
+    );
+    let names: BTreeSet<_> = listing["records"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|record| record["invocation_name"].as_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(
+        names,
+        BTreeSet::from(["alpha".to_owned(), "linked-skill".to_owned()])
+    );
+    fixture.assert_explicit("linked-skill");
+}
+
+#[test]
+fn one_unrelated_dangling_link_never_turns_three_skills_into_empty_roster() {
     if !links::available() {
         return;
     }
@@ -205,7 +242,8 @@ fn one_unrelated_directory_link_never_turns_three_skills_into_empty_roster() {
         "# Must not be admitted\n\nprivate-skill-body-canary\n",
     )
     .unwrap();
-    symlink(fixture.root.join("outside"), &link).unwrap();
+    // A link reaching nothing is skipped and reported, never guessed at.
+    symlink(fixture.root.join("outside/missing"), &link).unwrap();
     let ranked = fixture.assert_cache_miss(3);
     assert!(!ranked.to_string().contains("private-symlink-canary"));
     assert!(!ranked.to_string().contains("private-skill-body-canary"));

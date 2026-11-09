@@ -144,6 +144,9 @@ pub struct AuthorizedRoot {
     directory: Descriptor,
     absolute: PathBuf,
     identity: FileIdentity,
+    /// A link directly in this root that reaches a directory is followed one
+    /// hop, as a skill folder (sr-winpar.32). Off for every other root.
+    linked_folders: bool,
 }
 
 impl AuthorizedRoot {
@@ -162,6 +165,40 @@ impl AuthorizedRoot {
             directory,
             absolute: path.to_path_buf(),
             identity: sys::identity(&stat),
+            linked_folders: false,
+        })
+    }
+
+    /// Treat a link directly in this root as a folder of the root: when it
+    /// reaches a directory, reads below `root/<link>/` follow it one hop and
+    /// hold the target directory, wherever it lies. Skill roots use this
+    /// because a harness loads `<root>/<name>/SKILL.md` through such a link.
+    /// Links deeper in the tree, and a link that is the final component, keep
+    /// the ordinary containment rules.
+    #[must_use]
+    pub fn with_linked_folders(mut self) -> Self {
+        self.linked_folders = true;
+        self
+    }
+
+    pub const fn follows_linked_folders(&self) -> bool {
+        self.linked_folders
+    }
+
+    /// Open the directory a link directly in this root reaches, as its own
+    /// root named by the link's path (`root/<name>`). The target is held, not
+    /// re-resolved: a later retarget of the link cannot redirect reads below
+    /// the returned root. Fails when the link is dangling or reaches a file.
+    pub fn open_linked_folder(&self, name: &OsStr) -> Result<Self, ReadError> {
+        if split_components(Path::new(name))?.len() != 1 {
+            return Err(ReadError::InvalidRelativePath);
+        }
+        let (directory, stat) = sys::open_linked_dir(&self.directory, name)?;
+        Ok(Self {
+            directory,
+            absolute: self.absolute.join(name),
+            identity: sys::identity(&stat),
+            linked_folders: false,
         })
     }
 
@@ -186,6 +223,7 @@ impl AuthorizedRoot {
             identity: sys::identity(&resolved.stat),
             directory: resolved.descriptor,
             absolute: resolved.absolute,
+            linked_folders: false,
         })
     }
 
@@ -197,6 +235,7 @@ impl AuthorizedRoot {
                 .map_err(|_| ReadError::RootUnavailable)?,
             absolute: self.absolute.clone(),
             identity: self.identity,
+            linked_folders: self.linked_folders,
         })
     }
 
@@ -490,6 +529,21 @@ impl<'a> Walk<'a> {
                     self.stack.push(descriptor);
                     self.names.push(name);
                 }
+                // A link directly in a root that admits linked folders is that
+                // root's folder: hold the directory it reaches, one hop.
+                Ok(Opened::Link)
+                    if !last
+                        && self.names.is_empty()
+                        && self.roots.roots[self.root].linked_folders =>
+                {
+                    self.hops += 1;
+                    if self.hops > MAX_SYMLINK_HOPS {
+                        return Err(ReadError::SymlinkLoop);
+                    }
+                    let (descriptor, _) = sys::open_linked_dir(self.top()?, name.as_os_str())?;
+                    self.stack.push(descriptor);
+                    self.names.push(name);
+                }
                 Ok(Opened::Link) => {
                     let target = self.follow(name.as_os_str())?;
                     for component in target.into_iter().rev() {
@@ -706,6 +760,21 @@ mod sys {
                 }
             }
         }
+    }
+
+    /// Follow `name` (a link) to the directory it reaches and hold that
+    /// directory's descriptor. The kernel resolves the whole link chain once.
+    pub(super) fn open_linked_dir(
+        directory: &OwnedFd,
+        name: &OsStr,
+    ) -> Result<(OwnedFd, FileStat), ReadError> {
+        let flags = OFlag::O_RDONLY | OFlag::O_DIRECTORY | OFlag::O_CLOEXEC;
+        let descriptor = openat(directory, name, flags, Mode::empty()).map_err(map_errno)?;
+        let stat = fstat(&descriptor).map_err(map_errno)?;
+        if kind(&stat) != FileKind::Directory {
+            return Err(ReadError::NotADirectory);
+        }
+        Ok((descriptor, stat))
     }
 
     pub(super) fn read_link(directory: &OwnedFd, name: &OsStr) -> Result<OsString, ReadError> {
@@ -927,6 +996,41 @@ mod sys {
             return Ok(Opened::Object(Descriptor { file: held, path }, held_stat));
         }
         Ok(Opened::Object(Descriptor { file, path }, stat))
+    }
+
+    /// Follow `name` (a symbolic link or junction) to the directory it reaches
+    /// and hold that directory by its own final path, not through the link:
+    /// later children are opened by path, so a held link could be retargeted
+    /// between opens. The final path is opened without following a reparse
+    /// point, held without `FILE_SHARE_DELETE`, and must be the very directory
+    /// the link reached (volume serial and file index).
+    pub(super) fn open_linked_dir(
+        directory: &Descriptor,
+        name: &OsStr,
+    ) -> Result<(Descriptor, Stat), ReadError> {
+        if !valid_component(name) {
+            return Err(ReadError::InvalidRelativePath);
+        }
+        let link = directory.path.join(name);
+        let followed = open(&link, true, true).map_err(|error| map_io(&error))?;
+        let reached = stat(&followed)?;
+        if reached.kind != FileKind::Directory {
+            return Err(ReadError::NotADirectory);
+        }
+        let target = std::fs::canonicalize(&link).map_err(|error| map_io(&error))?;
+        let held = open(&target, false, true).map_err(|error| map_io(&error))?;
+        let held_stat = stat(&held)?;
+        drop(followed);
+        if held_stat.kind != FileKind::Directory || held_stat.identity != reached.identity {
+            return Err(ReadError::Io);
+        }
+        Ok((
+            Descriptor {
+                file: held,
+                path: target,
+            },
+            held_stat,
+        ))
     }
 
     /// Read a link target. Junction and symlink targets are often stored in

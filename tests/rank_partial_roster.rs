@@ -203,7 +203,10 @@ impl Fixture {
                 // Move the empty directory aside: deletion is not needed.
                 fs::rename(slot.parent().unwrap(), self.root.join("retained-empty-dir")).unwrap();
                 fs::write(self.root.join("outside/SKILL.md"), CANARY).unwrap();
-                symlink(self.root.join("outside"), slot.parent().unwrap()).unwrap();
+                // A link directly in the root that reaches a folder is a
+                // linked skill folder (sr-winpar.32); a dangling one is the
+                // unobservable slot this fixture needs.
+                symlink(self.root.join("outside/missing"), slot.parent().unwrap()).unwrap();
             }
             "oversized" => {
                 fs::write(&slot, CANARY).unwrap();

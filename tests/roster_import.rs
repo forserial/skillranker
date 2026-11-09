@@ -202,9 +202,17 @@ fn escaped_and_unauthorized_paths_are_refused() {
     let escape = f.project_root().join("evil");
     fs::create_dir_all(&escape).unwrap();
     symlink(outside.join("evil/SKILL.md"), escape.join("SKILL.md")).unwrap();
+    // A link directly in a root is a skill folder, as discovery lists it
+    // (sr-winpar.32); one that reaches nothing, or a file, is not.
     symlink(
         f.user_root().join("deploy"),
         f.project_root().join("linked"),
+    )
+    .unwrap();
+    symlink(outside.join("gone"), f.project_root().join("dangling")).unwrap();
+    symlink(
+        outside.join("evil/SKILL.md"),
+        f.project_root().join("file-link"),
     )
     .unwrap();
     // Windows has no FIFOs; the other non-regular and escaping cases remain.
@@ -239,7 +247,8 @@ fn escaped_and_unauthorized_paths_are_refused() {
     #[cfg_attr(not(unix), allow(unused_mut))]
     let mut cases = vec![
         ("evil/SKILL.md", RecordProblem::EscapesAuthorizedRoots),
-        ("linked/SKILL.md", RecordProblem::UnsupportedLayout),
+        ("dangling/SKILL.md", RecordProblem::Missing),
+        ("file-link/SKILL.md", RecordProblem::UnsupportedLayout),
         ("ghost/SKILL.md", RecordProblem::Missing),
         ("deep/nested/SKILL.md", RecordProblem::UnsupportedLayout),
         ("review/README.md", RecordProblem::UnsupportedLayout),
@@ -257,6 +266,13 @@ fn escaped_and_unauthorized_paths_are_refused() {
         .import(&files(json!([record(PROJECT, "alias/SKILL.md")])))
         .unwrap();
     assert_eq!(resolved_kind(&roster, "alias"), Some(InvocationKind::Agent));
+    let roster = f
+        .import(&files(json!([record(PROJECT, "linked/SKILL.md")])))
+        .unwrap();
+    assert_eq!(
+        resolved_kind(&roster, "linked"),
+        Some(InvocationKind::Agent)
+    );
 }
 
 #[test]

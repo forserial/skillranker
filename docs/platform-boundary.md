@@ -288,7 +288,7 @@ Windows 11 Pro 10.0.26300, NTFS, `x86_64-pc-windows-msvc`,
 | `cargo test --locked` (158 binaries) | 965 passed, 0 failed, 1 ignored, with the link-memory settings above |
 | `sr --version`, `capabilities --json`, `demo --case useful --json` | Exit 0 |
 | `sr roster --json` | Exit 0; finds project and user skills |
-| `mklink /D` and `mklink /J` skill folders, in or out of the root | Skipped, reported as `symlinked-directory-skipped` |
+| `mklink /D` and `mklink /J` skill folders, in or out of the root | Skipped, reported as `symlinked-directory-skipped` (at the time; since sr-winpar.32 a link directly in the root is followed one hop) |
 | `CON`, `nul.txt`, `COM1`, `trail.`, `space ` skill folders | Refused, reported as `entry-unreadable` |
 | `x.md:stream`, `t.jsonl.`, `t.jsonl `, `CON`, `nul.txt` as `--transcript` | Exit 7; the valid twin reaches its cache miss (exit 11) |
 | `x.md:stream`, `CON`, `x.md.` as `--roster` | Exit 5 |

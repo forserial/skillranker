@@ -41,6 +41,27 @@ report it that way with `O_DIRECTORY`), the type is confirmed with
   re-anchors to that root's descriptor. Anything else is
   `EscapesAuthorizedRoots`.
 
+### Linked folders (skill roots only)
+
+A root opened with `with_linked_folders()` treats a link **directly in the
+root** as one of its own folders (sr-winpar.32): a read of `root/<link>/...`
+follows that link one hop, wherever it points, and holds the directory it
+reaches. Skill-discovery roots use this, because a harness loads
+`<root>/<name>/SKILL.md` through such a link and a skills manager installs
+skills that way. Every other root, and every other link, keeps the rules above:
+a link below the top level, or a link that is the final component, must still
+resolve inside an authorized root. A top-level link that is dangling or reaches
+a file is `NotFound` or `NotADirectory`.
+
+On Unix the hop is one `openat` without `O_NOFOLLOW` plus `O_DIRECTORY`, so the
+kernel resolves the link chain once and the descriptor is the target. On Windows
+the link is opened following reparse points, its final path is opened again
+without following one and held without `FILE_SHARE_DELETE`, and the two must be
+the same directory (volume serial and file index); later children are opened by
+that final path, so retargeting the link cannot redirect them.
+`open_linked_folder` returns the held folder as its own root, named by the
+link's path. The hop counts toward `MAX_SYMLINK_HOPS`.
+
 Cycles terminate by bound rather than by bookkeeping: at most
 `MAX_SYMLINK_HOPS` (16) hops and `MAX_RESOLUTION_STEPS` (512) component openings
 per request, with link targets bounded to `MAX_LINK_TARGET_BYTES` (4096).

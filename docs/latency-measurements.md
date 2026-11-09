@@ -642,3 +642,22 @@ measured above:
 - Reusing a verified roster across invocations would remove most of the
   discovery and read cost. That is a design change: the snapshot must be
   revalidated against content changes.
+
+## 2026-11-08, linked skill folders (sr-winpar.32)
+
+Same host, isolated folders and roster as above, release build, offline, two
+passes of n = 15. Discovery now follows a link directly in a skills root one
+hop, so the personal root's 53 linked skills are read rather than skipped, and
+the name proof no longer runs for this roster: its only remaining diagnostics
+are the absent project root and the unenumerated plugin and managed sources.
+
+| Offline measurement (release) | After sr-winpar.31 | After sr-winpar.32 |
+| --- | ---: | ---: |
+| `sr roster --json` (303 configured + 53 linked personal) | 256-260 ms p50 | 244-246 ms p50 |
+| `sr hook claude --offline` (whole local phase) | 437-459 ms p50 | 407-414 ms p50 |
+
+The roster now does more work (53 more skill files, each through a held link
+target) and still takes less time, because the name proof is gone. With no
+configured root at all, `sr roster` and `sr doctor` report 53 skills (46
+advisory, 7 manual-only) where they reported none. The exact-cache and network
+targets remain unmet and were not re-measured.
