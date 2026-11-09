@@ -307,7 +307,24 @@ exactly, and `sr ledger init` and `status` succeeded, so the linked engine is
 | Linux (WSL2 `openclaw`, Ubuntu 24.04.4, kernel 6.18.58.1, same toolchain) fmt, check, clippy, both Python checks | Pass |
 | Linux `cargo test --locked --no-fail-fast`, first run | 1,831 passed, 2 failed, 11 ignored; the guest clock stepped 46.8 s during the run. The two (`hook_contract` `an_idle_notification_turn_is_skipped_unless_trusted_config_ranks_it`, `shadow_hook_unique_events_across_turns_and_unix_timestamps`) pass alone 3 of 3, and the whole `hook_contract` suite passes 3 of 3 with no step |
 | Linux full run, repeated | 1,832 passed, 1 failed, 11 ignored, 13.3 s of steps: `stale_leader_superseded_cannot_overwrite_newer_cache_or_complete_lease`, the wall-clock lease test sr-winpar.18 explains. The `hook_contract` pair passed |
-| `ubs --diff` / `ubs --staged` | **Not run: `ubs` is installed neither on Windows nor in the WSL distro.** Named blocker, not a pass |
+| `ubs` on the epic's change set | Run after the gate, below: no critical finding on any line the epic added |
+
+`ubs` (Ultimate Bug Scanner v5.5.26, the release's `ubs` script, SHA-256
+`db9ce86687ca6992109583329c3e77decd4990122bc6d11840f8c2ff443fcdd5`, matching the
+release `SHA256SUMS`, installed for the WSL `openclaw` user only, without its
+installer, hooks or profile edits) scanned the epic's change set: the 188 files
+changed since `e87241e`, at `3c24e1b`, whose code is that of `6be669a`, with
+`ubs --files=...`. The working tree was clean, so `--diff` alone would have
+scanned nothing. It reported 21 critical, 8,096 warning and 2,475 info findings
+over 171 scannable files (exit 1). None of the 21 critical findings is on a line
+the epic added (`git blame` against `e87241e..HEAD`). On review they are test
+canaries and synthetic tokens (`AKIAIOSFODNN7EXAMPLE`, loopback-stub tokens),
+stage-name comparisons (`"wide"`, `"rerank"`), the `TrustedExecutable` spawn, and
+non-secret identifiers (test fixture folder names, the breaker's probe-ownership
+id). Of the 1,020 findings on lines the epic added, none is critical. 545 are test
+assertions. The 16 path-traversal warnings outside tests join constant or
+generated file names, or names read from a folder `sr` holds and has checked.
+The rest are performance or style notes. No change was needed.
 
 The Linux failures move between runs and track WSL2's stepped wall clock
 (sr-winpar.18). That cause is proven for the lease test. For the two hook tests it
