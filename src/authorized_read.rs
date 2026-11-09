@@ -221,7 +221,9 @@ impl AuthorizedRoot {
         let resolved = Walk::new(&roots, 0)?.resolve(components, Want::Directory)?;
         Ok(Self {
             identity: sys::identity(&resolved.stat),
-            directory: resolved.descriptor,
+            // The walk held this directory's ancestors only while resolving;
+            // a root outlives that walk, so hold them again with it.
+            directory: sys::with_ancestors(resolved.descriptor)?,
             absolute: resolved.absolute,
             linked_folders: false,
         })
@@ -792,6 +794,11 @@ mod sys {
     pub(super) fn into_file(descriptor: OwnedFd) -> File {
         File::from(descriptor)
     }
+
+    /// Descriptor-relative opens never re-resolve ancestors on Unix.
+    pub(super) fn with_ancestors(descriptor: OwnedFd) -> Result<OwnedFd, ReadError> {
+        Ok(descriptor)
+    }
 }
 
 /// Windows has no `openat`, so each held directory carries the path it was
@@ -801,6 +808,14 @@ mod sys {
 /// next child therefore still names a child of the object that was checked.
 /// Final components are opened with `FILE_FLAG_OPEN_REPARSE_POINT`, so a link
 /// is inspected rather than followed, mirroring `O_NOFOLLOW`.
+///
+/// A root (and a linked skill folder) is held by its final path, which has no
+/// links left in it, and every ancestor of that path is held as well, from the
+/// volume root down (sr-winpar.14). Child paths are re-resolved from the volume
+/// root on every open, so the walk is only as stable as the whole chain: with
+/// each ancestor held without `FILE_SHARE_DELETE`, none can be renamed or
+/// replaced while the root is held. Ancestors are opened for traverse access
+/// only, which every user who can reach the root already has.
 #[cfg(windows)]
 mod sys {
     use super::{FileIdentity, FileKind, Opened, ReadError};
@@ -809,12 +824,18 @@ mod sys {
     use std::io;
     use std::os::windows::fs::OpenOptionsExt;
     use std::path::{Component, Path, PathBuf, Prefix};
+    use std::sync::Arc;
 
     const FILE_SHARE_READ: u32 = 0x1;
     const FILE_SHARE_WRITE: u32 = 0x2;
     const FILE_SHARE_DELETE: u32 = 0x4;
     const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
     const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+    // FILE_TRAVERSE counts as read access for sharing, so a handle holding it
+    // without FILE_SHARE_DELETE refuses another opener's DELETE (rename).
+    const FILE_TRAVERSE: u32 = 0x20;
+    const FILE_READ_ATTRIBUTES: u32 = 0x80;
+    const SYNCHRONIZE: u32 = 0x0010_0000;
     const ERROR_PATH_NOT_FOUND: i32 = 3;
     const ERROR_INVALID_NAME: i32 = 123;
     const ERROR_DIRECTORY: i32 = 267;
@@ -825,6 +846,9 @@ mod sys {
     pub(crate) struct Descriptor {
         file: File,
         path: PathBuf,
+        /// Held ancestors of a root's final path; empty below a root. Shared
+        /// by clones, so the chain stays held while any clone exists.
+        ancestors: Arc<Vec<File>>,
     }
 
     impl Descriptor {
@@ -832,7 +856,16 @@ mod sys {
             Ok(Self {
                 file: self.file.try_clone()?,
                 path: self.path.clone(),
+                ancestors: Arc::clone(&self.ancestors),
             })
+        }
+
+        fn child(file: File, path: PathBuf) -> Self {
+            Self {
+                file,
+                path,
+                ancestors: Arc::default(),
+            }
         }
 
         pub(crate) fn path(&self) -> &Path {
@@ -958,15 +991,76 @@ mod sys {
     }
 
     pub(super) fn open_root(path: &Path) -> Result<(Descriptor, Stat), ReadError> {
-        let file = open(path, true, true).map_err(|error| map_io(&error))?;
-        let stat = stat(&file)?;
+        hold_directory(path)
+    }
+
+    /// Open `path` following links, then hold the directory it reached by
+    /// its final path together with every ancestor of that path. The final
+    /// path is opened without following a reparse point and must be the
+    /// directory first reached (volume serial and file index); an ancestor
+    /// that is a link, or that cannot be traversed, fails the open.
+    fn hold_directory(path: &Path) -> Result<(Descriptor, Stat), ReadError> {
+        let followed = open(path, true, true).map_err(|error| map_io(&error))?;
+        let reached = stat(&followed)?;
+        if reached.kind != FileKind::Directory {
+            return Err(ReadError::NotADirectory);
+        }
+        let target = std::fs::canonicalize(path).map_err(|error| map_io(&error))?;
+        let ancestors = hold_ancestors(&target)?;
+        let held = open(&target, false, true).map_err(|error| map_io(&error))?;
+        let held_stat = stat(&held)?;
+        drop(followed);
+        if held_stat.kind != FileKind::Directory || held_stat.identity != reached.identity {
+            return Err(ReadError::Io);
+        }
         Ok((
             Descriptor {
-                file,
-                path: path.to_path_buf(),
+                file: held,
+                path: target,
+                ancestors: Arc::new(ancestors),
             },
-            stat,
+            held_stat,
         ))
+    }
+
+    /// Hold the ancestors of a directory opened by a walk, so it can serve as
+    /// a root once the walk's own stack is gone. Its path must still name the
+    /// held directory once the chain is held.
+    pub(super) fn with_ancestors(descriptor: Descriptor) -> Result<Descriptor, ReadError> {
+        let ancestors = hold_ancestors(&descriptor.path)?;
+        let check = open(&descriptor.path, false, true).map_err(|error| map_io(&error))?;
+        if stat(&check)?.identity != stat(&descriptor.file)?.identity {
+            return Err(ReadError::Io);
+        }
+        Ok(Descriptor {
+            ancestors: Arc::new(ancestors),
+            ..descriptor
+        })
+    }
+
+    /// Hold each proper ancestor of a final path, parent before child, so a
+    /// child is always opened below an ancestor that can no longer move.
+    fn hold_ancestors(target: &Path) -> Result<Vec<File>, ReadError> {
+        let mut held = Vec::new();
+        let mut prefix = PathBuf::new();
+        let mut components = target.components().peekable();
+        while let Some(component) = components.next() {
+            prefix.push(component.as_os_str());
+            if matches!(component, Component::Prefix(_)) || components.peek().is_none() {
+                continue;
+            }
+            let file = OpenOptions::new()
+                .access_mode(FILE_TRAVERSE | FILE_READ_ATTRIBUTES | SYNCHRONIZE)
+                .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+                .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
+                .open(&prefix)
+                .map_err(|error| map_io(&error))?;
+            if stat(&file)?.kind != FileKind::Directory {
+                return Err(ReadError::Io);
+            }
+            held.push(file);
+        }
+        Ok(held)
     }
 
     pub(super) fn open_child(
@@ -993,17 +1087,15 @@ mod sys {
             if held_stat.kind != FileKind::Directory || held_stat.identity != stat.identity {
                 return Err(ReadError::Io);
             }
-            return Ok(Opened::Object(Descriptor { file: held, path }, held_stat));
+            return Ok(Opened::Object(Descriptor::child(held, path), held_stat));
         }
-        Ok(Opened::Object(Descriptor { file, path }, stat))
+        Ok(Opened::Object(Descriptor::child(file, path), stat))
     }
 
     /// Follow `name` (a symbolic link or junction) to the directory it reaches
     /// and hold that directory by its own final path, not through the link:
     /// later children are opened by path, so a held link could be retargeted
-    /// between opens. The final path is opened without following a reparse
-    /// point, held without `FILE_SHARE_DELETE`, and must be the very directory
-    /// the link reached (volume serial and file index).
+    /// between opens. It is held like a root, ancestors included.
     pub(super) fn open_linked_dir(
         directory: &Descriptor,
         name: &OsStr,
@@ -1011,26 +1103,7 @@ mod sys {
         if !valid_component(name) {
             return Err(ReadError::InvalidRelativePath);
         }
-        let link = directory.path.join(name);
-        let followed = open(&link, true, true).map_err(|error| map_io(&error))?;
-        let reached = stat(&followed)?;
-        if reached.kind != FileKind::Directory {
-            return Err(ReadError::NotADirectory);
-        }
-        let target = std::fs::canonicalize(&link).map_err(|error| map_io(&error))?;
-        let held = open(&target, false, true).map_err(|error| map_io(&error))?;
-        let held_stat = stat(&held)?;
-        drop(followed);
-        if held_stat.kind != FileKind::Directory || held_stat.identity != reached.identity {
-            return Err(ReadError::Io);
-        }
-        Ok((
-            Descriptor {
-                file: held,
-                path: target,
-            },
-            held_stat,
-        ))
+        hold_directory(&directory.path.join(name))
     }
 
     /// Read a link target. Junction and symlink targets are often stored in

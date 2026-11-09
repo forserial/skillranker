@@ -60,10 +60,12 @@ fn read_err(roots: &AuthorizedRoots, relative: &str) -> ReadError {
 }
 
 fn junction(link: &Path, target: &Path) {
+    // `mklink` reads `/` as an option switch.
+    let native = |path: &Path| path.to_string_lossy().replace('/', r"\");
     let status = Command::new("cmd")
         .args(["/C", "mklink", "/J"])
-        .arg(link)
-        .arg(target)
+        .arg(native(link))
+        .arg(native(target))
         .output()
         .expect("run mklink");
     assert!(status.status.success(), "mklink /J failed: {status:?}");
@@ -373,6 +375,85 @@ fn a_held_root_cannot_be_renamed_or_replaced() {
     fs::rename(&tree, parent.join("moved")).expect("released once the walk ends");
 }
 
+/// sr-winpar.14: Win32 re-resolves every child path from the volume root, so a
+/// held root is only stable if its ancestors are too. Each ancestor of the
+/// root's final path is held without `FILE_SHARE_DELETE` while the root is.
+#[test]
+fn ancestors_of_a_held_root_cannot_be_renamed_while_it_is_held() {
+    let parent = temp_tree("ancestors");
+    let tree = parent.join("a").join("b").join("root");
+    write(&tree.join("a.md"), "original");
+
+    let root = AuthorizedRoot::open_absolute(&tree).unwrap();
+    let clone = root.try_clone().unwrap();
+    drop(root);
+    for ancestor in [parent.join("a"), parent.join("a").join("b")] {
+        let error = fs::rename(&ancestor, ancestor.with_extension("moved"))
+            .expect_err("an ancestor of a held root cannot move");
+        assert!(
+            matches!(error.raw_os_error(), Some(5 | 32)),
+            "access denied or sharing violation, got {error:?}"
+        );
+    }
+    // Siblings and children of ancestors stay free to change.
+    write(&parent.join("a").join("sibling.md"), "free");
+    fs::rename(
+        parent.join("a").join("sibling.md"),
+        parent.join("a").join("renamed.md"),
+    )
+    .unwrap();
+    assert_eq!(
+        read(&AuthorizedRoots::single(clone.try_clone().unwrap()), "a.md")
+            .unwrap()
+            .bytes(),
+        b"original"
+    );
+    drop(clone);
+    fs::rename(parent.join("a"), parent.join("a-moved")).expect("released with the last clone");
+}
+
+/// A root named through a junction is held by its final path: retargeting the
+/// junction afterwards cannot redirect reads below the root.
+#[test]
+fn a_root_reached_through_a_junction_is_held_by_its_final_path() {
+    let tree = temp_tree("junctioned-ancestor");
+    write(&tree.join("real/a/root/a.md"), "original");
+    write(&tree.join("other/a/root/a.md"), "replacement");
+    junction(&tree.join("via"), &tree.join("real/a"));
+
+    let named = tree.join("via").join("root");
+    let roots = roots_of(&named);
+    assert_eq!(roots.get(0).unwrap().absolute_path(), named.as_path());
+    // The junction is not an ancestor of the final path, so it may move...
+    fs::rename(tree.join("via"), tree.join("via-retained")).unwrap();
+    junction(&tree.join("via"), &tree.join("other/a"));
+    // ...but the held root still reads the folder it first reached.
+    assert_eq!(read(&roots, "a.md").unwrap().bytes(), b"original");
+    assert_eq!(
+        read(&roots_of(&named), "a.md").unwrap().bytes(),
+        b"replacement"
+    );
+    // The final path's own ancestors are held.
+    assert!(fs::rename(tree.join("real/a"), tree.join("real/moved")).is_err());
+}
+
+/// A linked skill folder (sr-winpar.32) is held like a root, ancestors included.
+#[test]
+fn a_linked_folder_holds_the_ancestors_of_the_folder_it_reaches() {
+    let tree = temp_tree("linked-ancestors");
+    write(&tree.join("store/deep/skill/SKILL.md"), "linked");
+    fs::create_dir_all(tree.join("root")).unwrap();
+    junction(&tree.join("root/linked"), &tree.join("store/deep/skill"));
+    let root = AuthorizedRoot::open_absolute(&tree.join("root"))
+        .unwrap()
+        .with_linked_folders();
+    let folder = root.open_linked_folder("linked".as_ref()).unwrap();
+    drop(root);
+    assert!(fs::rename(tree.join("store/deep"), tree.join("store/moved")).is_err());
+    drop(folder);
+    fs::rename(tree.join("store/deep"), tree.join("store/moved")).expect("released");
+}
+
 #[test]
 fn a_workspace_relative_root_is_held_like_every_other_directory() {
     let tree = temp_tree("held-relative");
@@ -383,6 +464,8 @@ fn a_workspace_relative_root_is_held_like_every_other_directory() {
         .unwrap();
     drop(root);
     assert!(fs::rename(tree.join("project/skills"), tree.join("project/moved")).is_err());
+    // The workspace root is gone, but the relative root holds its own chain.
+    assert!(fs::rename(tree.join("project"), tree.join("renamed-project")).is_err());
     assert_eq!(
         read(&AuthorizedRoots::single(skills), "a.md")
             .unwrap()

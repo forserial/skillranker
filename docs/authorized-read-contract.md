@@ -62,6 +62,23 @@ that final path, so retargeting the link cannot redirect them.
 `open_linked_folder` returns the held folder as its own root, named by the
 link's path. The hop counts toward `MAX_SYMLINK_HOPS`.
 
+### Windows: roots hold their ancestors
+
+Windows has no `openat`: every child is opened by a path that Win32 resolves
+again from the volume root. So a root, a workspace-relative root and a linked
+folder are each held by their **final path** (no links left in it, opened
+without following a reparse point and proven to be the directory first
+reached), and every ancestor of that path is held too, from the volume root
+down, without `FILE_SHARE_DELETE` (sr-winpar.14). While any clone of the root
+exists, none of those folders can be renamed, deleted or replaced, so the path
+of the next child still names a child of the checked directory. Ancestors are
+opened for traverse access only; an ancestor that cannot be traversed, or that
+is a link, fails the open. The cost is about one open per path component, and
+for as long as `sr` holds a root (at most its deadline for a hook), other
+programs cannot rename those ancestor folders. Their contents stay free to
+change. A link *above* the root, such as a junction in the configured path,
+may be retargeted; the held root keeps reading the folder it first reached.
+
 Cycles terminate by bound rather than by bookkeeping: at most
 `MAX_SYMLINK_HOPS` (16) hops and `MAX_RESOLUTION_STEPS` (512) component openings
 per request, with link targets bounded to `MAX_LINK_TARGET_BYTES` (4096).

@@ -229,6 +229,11 @@ can run out and report `Budget`, as on any loaded host.
   cleanup reserve. See the residual limits for what a stalled writer leaves.
 - **Main-thread stack.** `build.rs` links `sr.exe` with an 8 MiB stack, matching
   Linux and macOS. The 1 MiB Windows default overflows in `sr eval`.
+- **Held roots.** A walk root is held by its final path with every ancestor
+  of that path, from the volume root down, held without delete sharing, so no
+  ancestor can be renamed or replaced while `sr` reads below it
+  (sr-winpar.14; see the authorized-read contract). Other programs cannot
+  rename those ancestor folders for that time.
 - **Skill IDs.** Logical keys hash `/` separators on Windows, so discovery and
   roster manifests assign equal IDs.
 - **Building from source.** Cargo's checkout of the pinned `asupersync` needs
@@ -239,8 +244,6 @@ can run out and report `Budget`, as on any loaded host.
 
 ### Residual limits
 
-- The root of a walk is opened by its trusted absolute path; renaming one of
-  its ancestors is not prevented by the held handles.
 - A stdin helper thread stalled in its read cannot be cancelled. It holds only
   stdin and at most one chunk, publishes nothing, and ends with the process.
   AGENTS.md's no-detached-workers rule is relaxed for this one leaf, because

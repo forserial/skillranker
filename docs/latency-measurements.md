@@ -661,3 +661,20 @@ target) and still takes less time, because the name proof is gone. With no
 configured root at all, `sr roster` and `sr doctor` report 53 skills (46
 advisory, 7 manual-only) where they reported none. The exact-cache and network
 targets remain unmet and were not re-measured.
+
+## 2026-11-08, held root ancestors (sr-winpar.14)
+
+Same setup, release build, offline, two passes of n = 15. Every root and every
+linked skill folder is now held by its final path with all its ancestors
+(about eight opens for a path under the user profile, plus the final-path
+lookup). The 53 linked personal skills pay that twice: once in discovery and
+once when each skill file is read.
+
+| Offline measurement (release) | After sr-winpar.32 | After sr-winpar.14 |
+| --- | ---: | ---: |
+| `sr roster --json` (303 configured + 53 linked personal) | 244-246 ms p50 | 278-290 ms p50 |
+| `sr hook claude --offline` (whole local phase) | 407-414 ms p50 | 457-464 ms p50 |
+
+Most of the added 40-50 ms is the per-linked-folder ancestor chain. Linked
+folders that share a parent (here all 53 live in one store folder) could share
+one held chain per root; that is not done yet.

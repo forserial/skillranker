@@ -106,6 +106,11 @@
 
 ### Fixed
 
+- Windows: a folder `sr` reads below can no longer be redirected by renaming
+  one of its parent folders mid-read. Each root (and each linked skill folder)
+  is held by its final path together with every ancestor of that path, from the
+  drive root down, while `sr` uses it (sr-winpar.14). Other programs cannot
+  rename those parent folders during that time; their contents are unaffected.
 - Skills installed as links are found. A link directly in a skills folder that
   reaches a directory (what a skills manager creates for each skill, and what
   Claude Code loads) is now that folder's skill, named after the link and
