@@ -188,7 +188,8 @@ its `.sha256` from the release, verify the checksum, and put `sr.exe` on your
 `PATH`. Windows keeps the response cache, ledger and request allowance under
 `%LOCALAPPDATA%\skillranker` in folders only you and SYSTEM can open, and writes
 exports, replay cases, settings backups and policy files owner-only. cass
-sessions (`--session`) are not available on Windows; see the
+sessions (`--session`) use `cass.exe` from `%USERPROFILE%\.local\bin`, where
+cass's own installer puts it; see the
 [platform boundary](docs/platform-boundary.md#windows) for the remaining
 differences.
 
