@@ -71,14 +71,15 @@ use crate::runtime::{EntryClock, ProcessInvocation, admit_publication};
 use crate::scoring::{Input as ScoringInput, Ranking, Weights, rank};
 use std::sync::{Arc, Mutex};
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 mod cass_source;
 // `platform_support::CASS_SESSIONS` reports which cass source this build has.
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 const _: () = assert!(crate::platform_support::CASS_SESSIONS);
-/// cass is a Unix subprocess adapter; on other platforms `--session` is an
-/// unsupported source mode, reported before any process is started.
-#[cfg(not(unix))]
+/// cass is a subprocess adapter for Unix and Windows (sr-winpar.11); elsewhere
+/// `--session` is an unsupported source mode, reported before any process
+/// is started.
+#[cfg(not(any(unix, windows)))]
 mod cass_source {
     // See `platform_support::CASS_SESSIONS` (sr-winpar.11).
     const _: () = assert!(!crate::platform_support::CASS_SESSIONS);

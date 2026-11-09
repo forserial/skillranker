@@ -7,7 +7,7 @@
 //! export is projected into normalized events. No durable session identity is
 //! claimed, so the cache and lease namespace stays private to this run.
 use super::{PipelineFailure, failure};
-use crate::context::cass::{CassAdapter, CassError, MAX_LISTING, default_config};
+use crate::context::cass::{CassAdapter, CassError, MAX_LISTING, default_config, same_local_path};
 use crate::context::source::SourcePolicy;
 use crate::context::{CurrentRequest, EventKind, NormalizedContext, PrivateText, Role};
 use crate::identity::HarnessId;
@@ -27,9 +27,17 @@ pub(super) async fn read(
     clock: &EntryClock,
 ) -> Result<NormalizedContext, PipelineFailure> {
     let data_home = std::env::var_os("XDG_DATA_HOME").map(std::path::PathBuf::from);
+    // cass's Windows default data directory lives under %APPDATA%.
+    let app_data = std::env::var_os("APPDATA").map(std::path::PathBuf::from);
     let database = std::env::var_os("CASS_DB_PATH").map(std::path::PathBuf::from);
-    let config = default_config(home, data_home.as_deref(), database.as_deref(), workspace)
-        .map_err(cass_failure)?;
+    let config = default_config(
+        home,
+        data_home.as_deref(),
+        app_data.as_deref(),
+        database.as_deref(),
+        workspace,
+    )
+    .map_err(cass_failure)?;
     let adapter = CassAdapter::probe(config, policy, cx, clock)
         .await
         .map_err(cass_failure)?;
@@ -45,7 +53,7 @@ pub(super) async fn read(
     let Some(entry) = listing
         .sessions
         .into_iter()
-        .find(|session| session.selection.path() == selected.as_path())
+        .find(|session| same_local_path(session.selection.path(), &selected))
     else {
         return Err(failure(
             ErrorKind::MissingSession,

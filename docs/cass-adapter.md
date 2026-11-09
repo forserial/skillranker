@@ -18,6 +18,23 @@ from the local installation and trusted environment, never transcript text.
 - the digest is BLAKE3 over the executable's bytes, streamed and capped at
   512 MiB.
 
+On Windows (sr-winpar.11) the executable is `%USERPROFILE%\.local\bin\cass.exe`
+only: that is where cass's own `install.ps1` puts it, no machine-wide location is
+documented, and the user decided to trust it (recorded on sr-cd14). The database
+is `CASS_DB_PATH`, else `coding-agent-search\agent_search.db` under
+`XDG_DATA_HOME` (which cass honors on Windows too), else cass's own default,
+`%APPDATA%\coding-agent-search\coding-agent-search\data\agent_search.db` (what
+`cass robot-docs paths` reports). cass starts in `sr`'s current directory,
+because the Windows exact-image spawn cannot set another; every path it receives
+is absolute. Its environment is `SystemRoot` alone. cass lists Windows session
+paths in verbatim form (`\\?\C:\...`); a selected path matches when the two
+differ only in that prefix. `tests/cass_windows.rs` runs the real cass
+(`SKILLRANKER_TEST_CASS_EXE`) against a synthetic session indexed with
+`cass index --watch-once` from a fixture `CLAUDE_CONFIG_DIR`. Verified with the
+v0.10.0 `cass-windows-amd64.zip` release (zip SHA-256
+`e7c4f1f3d2f566b215f467df0f7ac0e2b15004adeba9d1d6213c2c2e25c52ab2`, `cass.exe`
+SHA-256 `d5d0b40e146c9655f3dac3d3be15f92236ff039a6ec945ad73a00dad03249777`).
+
 `sr rank --session PATH` uses it. The selected path must appear in cass's
 listing for the exact workspace, whose agent names the harness (`claude`
 becomes `claude_code`). The export is then projected into normalized events.

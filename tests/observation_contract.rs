@@ -2640,7 +2640,7 @@ fn split_observation_failure_does_not_claim_a_load() {
     native_observe_journey(true, true);
 }
 
-// Selects a cass session, which runs only on Unix (sr-winpar.11).
+// Selects a cass session through a /bin/sh fake cass, which Windows cannot run.
 #[cfg(unix)]
 #[test]
 fn test_observe_cli_cass_and_normalized_same_ids_cannot_move_native_cursor() {

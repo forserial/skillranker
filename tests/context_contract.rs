@@ -2987,7 +2987,6 @@ fn native_jsonl_incremental() {
     assert_eq!(snap3.events[0].event_id.as_ref().unwrap().as_str(), "e5");
 }
 
-#[cfg(unix)]
 #[test]
 fn cass_adapter() {
     use skillranker::context::cass::{ArchiveSelection, validate_capabilities};

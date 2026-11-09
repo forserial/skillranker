@@ -43,6 +43,9 @@ impl fmt::Display for CassError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
             Self::UnsupportedSourceMode => "cass is unavailable in this source mode; supply a direct transcript or normalized input",
+            Self::NotInstalled if cfg!(windows) => {
+                "cass is not installed as %USERPROFILE%\\.local\\bin\\cass.exe"
+            }
             Self::NotInstalled => "cass is not installed in ~/.local/bin, ~/.cargo/bin, /usr/local/bin or /usr/bin",
             Self::InvalidRequest => "invalid trusted cass request",
             Self::UnsupportedProducer => "cass version or capabilities are not qualified",
@@ -83,44 +86,31 @@ impl fmt::Debug for CassConfig {
 /// Configuration without setup:
 /// - the executable is the first regular `cass` file in `~/.local/bin`,
 ///   `~/.cargo/bin`, `/usr/local/bin` or `/usr/bin`, trusted within that
-///   directory;
+///   directory. On Windows it is `%USERPROFILE%\.local\bin\cass.exe` only,
+///   where cass's own installer puts it (the user's decision for
+///   sr-winpar.11; no machine-wide location is documented);
 /// - the database is `database` when given (from `CASS_DB_PATH`), else cass's
 ///   own default under the data directory (`$XDG_DATA_HOME` or
 ///   `~/.local/share`, preferring `coding-agent-search/agent_search.db` when
-///   present as a regular file and falling back to `cass/cass.db`);
+///   present as a regular file and falling back to `cass/cass.db`). On
+///   Windows cass also honors `XDG_DATA_HOME`
+///   (`coding-agent-search\agent_search.db` below it); otherwise its default
+///   is `%APPDATA%\coding-agent-search\coding-agent-search\data\agent_search.db`
+///   (`app_data` is `%APPDATA%`; it is ignored elsewhere);
 /// - the digest is BLAKE3 over the executable's bytes, streamed and bounded.
 pub fn default_config(
     home: Option<&Path>,
     data_home: Option<&Path>,
+    app_data: Option<&Path>,
     database: Option<&Path>,
     workspace: &Path,
 ) -> Result<CassConfig, CassError> {
     const MAX_EXECUTABLE_BYTES: u64 = 512 * 1024 * 1024;
-    let mut bins: Vec<PathBuf> = home
-        .map(|home| vec![home.join(".local/bin"), home.join(".cargo/bin")])
-        .unwrap_or_default();
-    bins.extend([PathBuf::from("/usr/local/bin"), PathBuf::from("/usr/bin")]);
-    let (path, bin) = bins
-        .iter()
-        .map(|bin| (bin.join("cass"), bin))
-        .find(|(path, _)| path.is_file())
-        .ok_or(CassError::NotInstalled)?;
-    let executable = TrustedExecutable::resolve(&path, std::slice::from_ref(bin))?;
+    let (path, bin) = executable_location(home)?;
+    let executable = TrustedExecutable::resolve(&path, std::slice::from_ref(&bin))?;
     let database = match database.filter(|path| path.is_absolute()) {
         Some(path) => path.to_path_buf(),
-        None => {
-            let base = data_home
-                .filter(|path| path.is_absolute())
-                .map(Path::to_path_buf)
-                .or_else(|| home.map(|home| home.join(".local/share")))
-                .ok_or(CassError::InvalidRequest)?;
-            let agent_search = base.join("coding-agent-search/agent_search.db");
-            if agent_search.is_file() {
-                agent_search
-            } else {
-                base.join("cass/cass.db")
-            }
-        }
+        None => default_database(home, data_home, app_data)?,
     };
     let mut hasher = blake3::Hasher::new();
     let file = std::fs::File::open(&path).map_err(|_| CassError::InvalidRequest)?;
@@ -134,12 +124,119 @@ pub fn default_config(
     }
     let binary_digest = ContentHash::parse(hasher.finalize().to_hex().to_string())
         .map_err(|_| CassError::InvalidRequest)?;
+    // The Windows exact-image spawn cannot set a working directory, so cass
+    // starts in sr's own; every path it is given is absolute.
+    #[cfg(windows)]
+    let directory = {
+        let _ = workspace;
+        std::env::current_dir().map_err(|_| CassError::InvalidRequest)?
+    };
+    #[cfg(not(windows))]
+    let directory = workspace.to_path_buf();
     Ok(CassConfig {
         executable,
-        directory: workspace.to_path_buf(),
+        directory,
         database,
         binary_digest,
     })
+}
+
+#[cfg(not(windows))]
+fn executable_location(home: Option<&Path>) -> Result<(PathBuf, PathBuf), CassError> {
+    let mut bins: Vec<PathBuf> = home
+        .map(|home| vec![home.join(".local/bin"), home.join(".cargo/bin")])
+        .unwrap_or_default();
+    bins.extend([PathBuf::from("/usr/local/bin"), PathBuf::from("/usr/bin")]);
+    bins.into_iter()
+        .map(|bin| (bin.join("cass"), bin))
+        .find(|(path, _)| path.is_file())
+        .ok_or(CassError::NotInstalled)
+}
+
+#[cfg(windows)]
+fn executable_location(home: Option<&Path>) -> Result<(PathBuf, PathBuf), CassError> {
+    let bin = home
+        .filter(|home| home.is_absolute())
+        .map(|home| home.join(".local").join("bin"))
+        .ok_or(CassError::NotInstalled)?;
+    let path = bin.join("cass.exe");
+    if path.is_file() {
+        Ok((path, bin))
+    } else {
+        Err(CassError::NotInstalled)
+    }
+}
+
+#[cfg(not(windows))]
+fn default_database(
+    home: Option<&Path>,
+    data_home: Option<&Path>,
+    _app_data: Option<&Path>,
+) -> Result<PathBuf, CassError> {
+    let base = data_home
+        .filter(|path| path.is_absolute())
+        .map(Path::to_path_buf)
+        .or_else(|| home.map(|home| home.join(".local/share")))
+        .ok_or(CassError::InvalidRequest)?;
+    let agent_search = base.join("coding-agent-search/agent_search.db");
+    Ok(if agent_search.is_file() {
+        agent_search
+    } else {
+        base.join("cass/cass.db")
+    })
+}
+
+#[cfg(windows)]
+fn default_database(
+    _home: Option<&Path>,
+    data_home: Option<&Path>,
+    app_data: Option<&Path>,
+) -> Result<PathBuf, CassError> {
+    if let Some(base) = data_home.filter(|path| path.is_absolute()) {
+        return Ok(base.join("coding-agent-search").join("agent_search.db"));
+    }
+    app_data
+        .filter(|path| path.is_absolute())
+        .map(|base| {
+            base.join("coding-agent-search")
+                .join("coding-agent-search")
+                .join("data")
+                .join("agent_search.db")
+        })
+        .ok_or(CassError::InvalidRequest)
+}
+
+/// Whether two local paths name the same location as cass and sr spell them.
+/// cass reports Windows paths in verbatim form (`\\?\C:\...`) where callers
+/// usually write `C:\...`; only that one prefix is set aside. Every other
+/// difference, including letter case outside the drive, is a different path.
+pub fn same_local_path(left: &Path, right: &Path) -> bool {
+    #[cfg(windows)]
+    {
+        plain_drive_path(left) == plain_drive_path(right)
+    }
+    #[cfg(not(windows))]
+    {
+        left == right
+    }
+}
+
+#[cfg(windows)]
+fn plain_drive_path(path: &Path) -> PathBuf {
+    use std::path::{Component, Prefix};
+    let mut components = path.components();
+    if let Some(Component::Prefix(prefix)) = components.next()
+        && let Prefix::VerbatimDisk(drive) = prefix.kind()
+    {
+        let mut plain = PathBuf::from(format!("{}:\\", char::from(drive)));
+        for component in components {
+            if component != Component::RootDir {
+                plain.push(component);
+            }
+        }
+        return plain;
+    }
+    path.to_path_buf()
 }
 
 pub struct CassAdapter {
@@ -620,7 +717,7 @@ pub fn decode_listing(
             .get("workspace")
             .and_then(Value::as_str)
             .ok_or(CassError::InvalidResponse)?;
-        if Path::new(found) != workspace {
+        if !same_local_path(Path::new(found), workspace) {
             other_workspace += 1;
             continue;
         }
@@ -850,4 +947,49 @@ fn optional_tool_id(value: Option<&Value>) -> Result<Option<ToolCallId>, CassErr
                 .map_err(|_| CassError::InvalidResponse)
         })
         .transpose()
+}
+
+#[cfg(all(test, windows))]
+mod windows_tests {
+    use super::*;
+
+    #[test]
+    fn only_the_verbatim_drive_prefix_is_set_aside() {
+        assert!(same_local_path(
+            Path::new(r"\\?\C:\a\b"),
+            Path::new(r"C:\a\b")
+        ));
+        assert!(same_local_path(Path::new(r"\\?\c:\a"), Path::new(r"C:\a")));
+        assert!(same_local_path(Path::new(r"C:\a"), Path::new(r"C:\a")));
+        assert!(!same_local_path(
+            Path::new(r"\\?\C:\a\b"),
+            Path::new(r"C:\a\B")
+        ));
+        assert!(!same_local_path(Path::new(r"C:\a"), Path::new(r"D:\a")));
+        assert!(!same_local_path(
+            Path::new(r"\\?\UNC\server\share\a"),
+            Path::new(r"\\server\share\a")
+        ));
+    }
+
+    #[test]
+    fn the_default_database_follows_cass_on_windows() {
+        assert_eq!(
+            default_database(
+                None,
+                Some(Path::new(r"C:\xdg")),
+                Some(Path::new(r"C:\roam"))
+            )
+            .unwrap(),
+            Path::new(r"C:\xdg\coding-agent-search\agent_search.db")
+        );
+        assert_eq!(
+            default_database(None, None, Some(Path::new(r"C:\roam"))).unwrap(),
+            Path::new(r"C:\roam\coding-agent-search\coding-agent-search\data\agent_search.db")
+        );
+        assert_eq!(
+            default_database(None, Some(Path::new("relative")), None),
+            Err(CassError::InvalidRequest)
+        );
+    }
 }

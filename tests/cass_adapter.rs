@@ -616,7 +616,8 @@ fn default_config_prefers_coding_agent_search_db_and_falls_back_to_cass_db() {
         .unwrap();
 
     // Fallback when coding-agent-search/agent_search.db does not exist
-    let fallback_cfg = default_config(Some(&home), Some(&data_home), None, &workspace).unwrap();
+    let fallback_cfg =
+        default_config(Some(&home), Some(&data_home), None, None, &workspace).unwrap();
     assert_eq!(fallback_cfg.database, data_home.join("cass/cass.db"));
 
     // Prefer coding-agent-search/agent_search.db when it exists as a regular file
@@ -624,7 +625,8 @@ fn default_config_prefers_coding_agent_search_db_and_falls_back_to_cass_db() {
     fs::create_dir_all(&agent_search_dir).unwrap();
     let agent_search_db = agent_search_dir.join("agent_search.db");
     fs::write(&agent_search_db, b"sqlite").unwrap();
-    let preferred_cfg = default_config(Some(&home), Some(&data_home), None, &workspace).unwrap();
+    let preferred_cfg =
+        default_config(Some(&home), Some(&data_home), None, None, &workspace).unwrap();
     assert_eq!(preferred_cfg.database, agent_search_db);
 
     // Explicit database path (CASS_DB_PATH) overrides both defaults
@@ -632,6 +634,7 @@ fn default_config_prefers_coding_agent_search_db_and_falls_back_to_cass_db() {
     let explicit_cfg = default_config(
         Some(&home),
         Some(&data_home),
+        None,
         Some(&explicit_db),
         &workspace,
     )

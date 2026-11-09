@@ -88,13 +88,12 @@ claimed as passed by this document.
 ## Windows
 
 Windows builds compile the same library and binary. Ranking, roster
-discovery, Claude transcript and session reads, `doctor`, `capabilities`,
-`demo`, hook installation, the response cache, the ledger, the enforced
-request allowance, owner-only exports (roster snapshots and saved replay cases)
-and replay case reads work. Their owner-only stores and files follow
-[Windows private storage](windows-private-storage.md).
-A component not yet ported fails closed instead of being emulated; today that
-is only cass sessions:
+discovery, Claude transcript and session reads, cass sessions, `doctor`,
+`capabilities`, `demo`, hook installation, the response cache, the ledger, the
+enforced request allowance, owner-only exports (roster snapshots and saved
+replay cases) and replay case reads work. Their owner-only stores and files
+follow [Windows private storage](windows-private-storage.md). A component that
+cannot meet its policy fails closed instead of being emulated:
 
 | Component | Windows behavior |
 |---|---|
@@ -105,7 +104,7 @@ is only cass sessions:
 | Hook invocation counter | Recorded beside the ledger, as on Unix (sr-winpar.4) |
 | Shadow-mode hooks | As on Unix: rank and record when an initialized ledger can record; otherwise skip before any provider request with one stderr line saying why. Advisory mode ranks and publishes |
 | Owner-only exports, roster snapshots and replay case files | Work (sr-winpar.6): `sr roster --snapshot` and `sr rank --save-case` publish an owner-only file without replacing any existing or raced-in target, into an existing directory no one else can write; `sr replay` reads only an owner-only regular file |
-| cass sessions (`--session`) | Unsupported source mode. The owned-subprocess boundary it needs runs on Windows (see below); the cass adapter is not ported yet (sr-winpar.11) |
+| cass sessions (`--session`) | Work (sr-winpar.11) through a qualified `cass.exe` at `%USERPROFILE%\.local\bin\cass.exe` only, where cass's own installer puts it (the user's trust decision). The database is `CASS_DB_PATH`, else `coding-agent-search\agent_search.db` under `XDG_DATA_HOME`, else cass's default `%APPDATA%\coding-agent-search\coding-agent-search\data\agent_search.db`. cass starts in `sr`'s current directory with only `SystemRoot` in its environment; its verbatim `\\?\C:\...` session paths match their plain spelling. No cass there is an unsupported source mode naming that location |
 | Hook installer backups | Owner-only (sr-winpar.7), in `%LOCALAPPDATA%\skillranker\backups`; if the backup cannot be made owner-only, `install-hook`, `uninstall-hook` and `snooze --apply` fail before the settings change |
 | Calibration policy files | Owner-only (sr-winpar.23): `calibrate ... --apply` writes `config.toml`, policy revisions and backups, prior snapshots and monitor state through private folders and owner-only files, or fails with its storage error before writing |
 

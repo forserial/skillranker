@@ -51,8 +51,9 @@ pub const INSTALLER_BACKUPS: bool = cfg!(any(unix, windows));
 /// Owner-only policy files (`learning`): Unix, and Windows since
 /// sr-winpar.23.
 pub const POLICY_FILES: bool = cfg!(any(unix, windows));
-/// cass sessions (`pipeline::cass_source`) run only on Unix; sr-winpar.11.
-pub const CASS_SESSIONS: bool = cfg!(unix);
+/// cass sessions (`pipeline::cass_source`): Unix, and Windows since
+/// sr-winpar.11.
+pub const CASS_SESSIONS: bool = cfg!(any(unix, windows));
 /// Git `dirty_paths` (`context::signals`): Unix, and Windows since sr-winpar.10.
 pub const GIT_SIGNALS: bool = cfg!(any(unix, windows));
 

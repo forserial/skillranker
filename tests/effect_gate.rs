@@ -3,7 +3,7 @@
 //! reads and explicit resolution. Each prohibited effect has an observed
 //! positive twin.
 
-// The cass case and its fixtures are Unix-only (sr-winpar.11).
+// The cass case and its fixtures are Unix-only: the fake cass is a /bin/sh script.
 #![cfg_attr(not(unix), allow(unused_imports, dead_code))]
 
 mod support;
@@ -284,7 +284,7 @@ fn caps() -> serde_json::Value {
 }
 
 /// A qualified-looking cass that records every start in `marker`. A `/bin/sh`
-/// script, and cass runs only on Unix (sr-winpar.11).
+/// script, which Windows cannot run (it runs only exact `.exe` images).
 #[cfg(unix)]
 fn fake_cass(root: &Path, marker: &Path) -> CassConfig {
     let path = root.join("cass-fixture");
@@ -311,7 +311,7 @@ fn fake_cass(root: &Path, marker: &Path) -> CassConfig {
     }
 }
 
-// The fake cass is a /bin/sh script and cass runs only on Unix (sr-winpar.11).
+// The fake cass is a /bin/sh script; Windows runs only exact `.exe` images.
 #[cfg(unix)]
 #[test]
 fn unverified_children_start_only_when_the_gate_permits() {

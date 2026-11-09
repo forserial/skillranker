@@ -4,6 +4,10 @@
 
 ### Added
 
+- Windows: `sr rank --session` and `sr observe --session` read cass sessions
+  through a qualified `cass.exe` at `%USERPROFILE%\.local\bin\cass.exe`, with
+  cass's Windows database default under `%APPDATA%` (sr-winpar.11). Verified
+  against the real cass 0.10.0 Windows release.
 - Windows writes the snooze configuration (`sr\snoozes.toml`) owner-only, as
   Unix writes it 0600: `sr snooze --apply` creates missing folders privately
   and the file only you and SYSTEM can open.

@@ -4,7 +4,7 @@
 
 pub mod anchor;
 pub mod branch;
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 pub mod cass;
 pub mod discovery;
 pub mod jsonl;

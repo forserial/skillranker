@@ -1,4 +1,3 @@
-#![cfg(unix)]
 //! Phase P3 Acceptance Gate: Exact-Session Context and Privacy Foundation.
 //!
 //! Satisfies contract boundary `p3_acceptance_gate` (sr-roadmap-l1i.4.14)
@@ -393,18 +392,16 @@ fn all_p3_invariants_verified() {
     )
     .unwrap();
 
-    let hook_json = format!(
-        r#"{{
-            "hook_event_name": "UserPromptSubmit",
-            "prompt": "Authoritative prompt from stdin",
-            "prompt_id": "p-1",
-            "session_id": "sess-overlay",
-            "transcript_path": "{}",
-            "cwd": "{}"
-        }}"#,
-        transcript_file.display(),
-        authorized_root.display()
-    );
+    // Built as JSON, so Windows path separators are escaped.
+    let hook_json = json!({
+        "hook_event_name": "UserPromptSubmit",
+        "prompt": "Authoritative prompt from stdin",
+        "prompt_id": "p-1",
+        "session_id": "sess-overlay",
+        "transcript_path": transcript_file,
+        "cwd": authorized_root,
+    })
+    .to_string();
     let hook_input =
         ClaudeUserPromptSubmit::from_json(hook_json.as_bytes(), UnknownFieldPolicy::RetainAdditive)
             .unwrap();

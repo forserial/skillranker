@@ -278,7 +278,7 @@ fn windows_reports_every_unqualified_boundary_as_unavailable() {
     // ledger and hook invocation counter (sr-winpar.4); the enforced request
     // allowance (sr-winpar.5); owner-only exports and replay case reads
     // (sr-winpar.6); installer backups (sr-winpar.7); policy files
-    // (sr-winpar.23). cass sessions wait on sr-winpar.11. A component whose
+    // (sr-winpar.23); cass sessions (sr-winpar.11). A component whose
     // boundary exists but which is not ported says so.
     let ported = [
         "git-dirty-paths",
@@ -292,6 +292,7 @@ fn windows_reports_every_unqualified_boundary_as_unavailable() {
         "replay-case-read",
         "installer-backups",
         "policy-files",
+        "cass-sessions",
     ];
     for component in platform["components"].as_array().unwrap() {
         let expected = ported.contains(&component["name"].as_str().unwrap());

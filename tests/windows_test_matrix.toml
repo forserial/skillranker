@@ -223,22 +223,16 @@ issue = "permanent: Linux/macOS twin of windows_reports_every_unqualified_bounda
 file = "tests/cass_adapter.rs"
 item = "*"
 gate = "cfg(unix)"
-reason = "subprocess"
-issue = "sr-winpar.11"
+reason = "unix-fixture"
+issue = "permanent: its producers are /bin/sh fake cass scripts, and Windows runs only exact .exe images; the real Windows cass (discovery, qualification, listing, export, default database) is exercised by tests/cass_windows.rs"
 
 [[gate]]
 file = "tests/cass_session.rs"
 item = "*"
 gate = "cfg(unix)"
-reason = "subprocess"
-issue = "sr-winpar.11"
+reason = "platform-twin"
+issue = "permanent: the Windows twin is tests/cass_windows.rs, which ranks a session through a real qualified cass.exe (Windows cannot run the /bin/sh fake)"
 
-[[gate]]
-file = "tests/context_contract.rs"
-item = "cass_adapter"
-gate = "cfg(unix)"
-reason = "subprocess"
-issue = "sr-winpar.11"
 
 [[gate]]
 file = "tests/export_contract.rs"
@@ -247,12 +241,6 @@ gate = "cfg(any(target_os = \"linux\", target_os = \"macos\"))"
 reason = "platform-twin"
 issue = "permanent: Unix modes, umask and symlinks; the Windows twins are tests/export_windows_contract.rs"
 
-[[gate]]
-file = "tests/p3_gate.rs"
-item = "*"
-gate = "cfg(unix)"
-reason = "subprocess"
-issue = "sr-winpar.11"
 
 [[gate]]
 file = "tests/project_signals.rs"
@@ -361,8 +349,8 @@ issue = "permanent: Unix mode and owner metadata; the Windows owner and DACL pre
 file = "tests/effect_gate.rs"
 item = "unverified_children_start_only_when_the_gate_permits"
 gate = "cfg(unix)"
-reason = "subprocess"
-issue = "sr-winpar.11"
+reason = "unix-fixture"
+issue = "permanent: the fake cass is a /bin/sh script that records whether it started; Windows runs only exact .exe images"
 note = "a /bin/sh fake cass"
 
 [[gate]]
@@ -432,8 +420,8 @@ issue = "permanent: Windows has no FIFO or device special files; its non-regular
 file = "tests/observation_contract.rs"
 item = "test_observe_cli_cass_and_normalized_same_ids_cannot_move_native_cursor"
 gate = "cfg(unix)"
-reason = "subprocess"
-issue = "sr-winpar.11"
+reason = "unix-fixture"
+issue = "permanent: selects its cass session through a /bin/sh fake cass; Windows runs only exact .exe images, and tests/cass_windows.rs selects sessions through a real cass"
 note = "selects a cass session"
 
 [[gate]]
