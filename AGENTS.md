@@ -150,7 +150,8 @@ selected provider's setup.
 - Forbid unsafe code at crate roots. This workload does not justify SIMD islands
   or unsafe parsers. The one approved exception is the workspace package
   `crates/sr-win-sys` (sr-winpar.2): audited Win32 security-descriptor and volume
-  reads, under the audit rules in
+  reads, the private-store creation and rename calls, and (approved in
+  sr-winpar.15) `CancelSynchronousIo` for the stdin helper, under the audit rules in
   [Windows private storage](docs/windows-private-storage.md#mechanism-sr-winpar2).
   Do not add unsafe code anywhere else or widen that package's role.
 

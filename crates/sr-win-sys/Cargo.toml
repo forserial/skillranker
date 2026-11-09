@@ -3,7 +3,7 @@ name = "sr-win-sys"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.95"
-description = "Audited Win32 security-descriptor and volume reads for SkillRanker; the only package that may use unsafe code"
+description = "Audited Win32 security-descriptor, volume and stdin-cancellation calls for SkillRanker; the only package that may use unsafe code"
 license-file = "../../LICENSE"
 repository = "https://github.com/Dicklesworthstone/skillranker"
 publish = false
@@ -17,6 +17,7 @@ windows-sys = { version = "=0.61.2", features = [
     "Win32_Security",
     "Win32_Security_Authorization",
     "Win32_Storage_FileSystem",
+    "Win32_System_IO",
     "Win32_System_Threading",
 ] }
 

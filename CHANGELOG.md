@@ -106,6 +106,10 @@
 
 ### Fixed
 
+- Windows: a stalled stdin read no longer leaves a helper thread behind. When the
+  read ends for any reason, including the deadline with the writer still open,
+  the pending read is cancelled and the helper joined within 50 ms (sr-winpar.15;
+  `crates/sr-win-sys` gains `CancelSynchronousIo`, approved for this use).
 - Windows: a folder `sr` reads below can no longer be redirected by renaming
   one of its parent folders mid-read. Each root (and each linked skill folder)
   is held by its final path together with every ancestor of that path, from the

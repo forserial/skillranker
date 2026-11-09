@@ -20,6 +20,9 @@
 //! - Raw memory is only read as byte slices whose lengths Windows reported
 //!   (`GetLengthSid`, `ACE_HEADER.AceSize`); all interpretation happens in the
 //!   safe parsers in `sid` and `acl`.
+//! - The one thread call ([`cancel_synchronous_io`], sr-winpar.15) takes a
+//!   thread handle borrowed from its live owner (a `JoinHandle`) and only
+//!   asks Windows to abort that thread's pending synchronous read.
 //! - One unsafe operation per block, each with its SAFETY argument.
 
 use std::ffi::{OsString, c_void};
@@ -31,8 +34,8 @@ use std::path::Path;
 use std::ptr::null_mut;
 
 use windows_sys::Win32::Foundation::{
-    ERROR_INSUFFICIENT_BUFFER, GENERIC_READ, GENERIC_WRITE, GetLastError, HANDLE, HLOCAL,
-    INVALID_HANDLE_VALUE, LocalFree,
+    ERROR_INSUFFICIENT_BUFFER, ERROR_NOT_FOUND, GENERIC_READ, GENERIC_WRITE, GetLastError, HANDLE,
+    HLOCAL, INVALID_HANDLE_VALUE, LocalFree,
 };
 use windows_sys::Win32::Security::Authorization::{
     ConvertStringSecurityDescriptorToSecurityDescriptorW, GetSecurityInfo, SDDL_REVISION_1,
@@ -51,6 +54,7 @@ use windows_sys::Win32::Storage::FileSystem::{
     GetFinalPathNameByHandleW, GetVolumeInformationByHandleW, MOVEFILE_REPLACE_EXISTING,
     MOVEFILE_WRITE_THROUGH, MoveFileExW, VOLUME_NAME_DOS, VOLUME_NAME_GUID,
 };
+use windows_sys::Win32::System::IO::CancelSynchronousIo;
 use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
 
 use crate::acl::{Ace, Descriptor};
@@ -548,6 +552,26 @@ pub fn rename_no_replace(from: &Path, to: &Path) -> io::Result<()> {
         return Err(last_error());
     }
     Ok(())
+}
+
+/// Asks Windows to abort the synchronous I/O call `thread` is blocked in
+/// (`CancelSynchronousIo`); the call then fails in that thread with
+/// `ERROR_OPERATION_ABORTED`. `Ok(false)` means the thread had no pending
+/// synchronous call (`ERROR_NOT_FOUND`): it has not entered its read yet, or
+/// has left it, so a caller that needs the thread out of its read retries
+/// until the thread finishes. Used for the stdin helper (sr-winpar.15).
+pub fn cancel_synchronous_io(thread: &impl AsRawHandle) -> io::Result<bool> {
+    // SAFETY: the thread handle is borrowed from its live owner, which keeps it
+    // open for the duration of the call; CancelSynchronousIo only reads it.
+    if unsafe { CancelSynchronousIo(thread.as_raw_handle() as HANDLE) } != 0 {
+        return Ok(true);
+    }
+    let error = last_error();
+    if error.raw_os_error() == Some(ERROR_NOT_FOUND as i32) {
+        Ok(false)
+    } else {
+        Err(error)
+    }
 }
 
 #[cfg(test)]

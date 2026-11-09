@@ -638,30 +638,59 @@ pub fn read_stdin_platform_before_cleanup(
     read_on_helper_before_cleanup(clock, io::stdin(), max_bytes, buf)
 }
 
-/// Deadline-bounded read of a reader whose blocking `read` cannot be interrupted.
-/// The caller waits on a channel, so it never waits past the cleanup reserve. A
-/// stalled helper stays parked in its read holding only this reader, reads nothing
-/// further into memory than one chunk, and ends when the process exits.
+/// How the stdin helper thread ended once its caller returned.
+#[cfg(any(not(unix), test))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum HelperEnd {
+    /// The thread left its read and was joined.
+    Joined,
+    /// The thread was still blocked when the bound ran out and is detached.
+    Detached,
+}
+
+/// How long a returning caller waits for the helper to leave its read.
+#[cfg(any(not(unix), test))]
+const HELPER_STOP_BOUND_MS: u64 = 50;
+
+/// Deadline-bounded read of a reader whose blocking `read` has no readiness
+/// wait. The caller waits on a channel, so it never waits past the cleanup
+/// reserve. However the caller returns, the helper is then stopped: on Windows
+/// its pending read is cancelled (`CancelSynchronousIo`, sr-winpar.15) and the
+/// thread joined within a short bound. A reader that ignores cancellation
+/// leaves the helper parked in its read, holding only this reader and at most
+/// one chunk, until the process exits.
 #[cfg(any(not(unix), test))]
 fn read_on_helper_before_cleanup<R: Read + Send + 'static>(
+    clock: &EntryClock,
+    reader: R,
+    max_bytes: usize,
+    buf: &mut Vec<u8>,
+) -> Result<(), RuntimeError> {
+    read_on_helper(clock, reader, max_bytes, buf).0
+}
+
+#[cfg(any(not(unix), test))]
+fn read_on_helper<R: Read + Send + 'static>(
     clock: &EntryClock,
     mut reader: R,
     max_bytes: usize,
     buf: &mut Vec<u8>,
-) -> Result<(), RuntimeError> {
-    clock
-        .admit_new_work()
-        .map_err(|_| RuntimeError::StdinTimeout)?;
+) -> (Result<(), RuntimeError>, Option<HelperEnd>) {
+    if clock.admit_new_work().is_err() {
+        return (Err(RuntimeError::StdinTimeout), None);
+    }
     buf.clear();
 
     // One byte past the bound is enough to report an overflow.
     let readable = max_bytes.saturating_add(1);
     let (sender, receiver) = std::sync::mpsc::sync_channel::<io::Result<Vec<u8>>>(1);
-    std::thread::Builder::new()
+    let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let stopped = std::sync::Arc::clone(&stop);
+    let spawned = std::thread::Builder::new()
         .name("sr-stdin".to_owned())
         .spawn(move || {
             let mut total = 0_usize;
-            while total < readable {
+            while total < readable && !stopped.load(std::sync::atomic::Ordering::SeqCst) {
                 let mut chunk = vec![0_u8; (8 * 1024).min(readable - total)];
                 match reader.read(&mut chunk) {
                     Ok(0) => break,
@@ -680,9 +709,27 @@ fn read_on_helper_before_cleanup<R: Read + Send + 'static>(
                 }
             }
             // Dropping the sender is the end-of-input signal.
-        })
-        .map_err(|_| RuntimeError::StdinIo)?;
+        });
+    let Ok(helper) = spawned else {
+        return (Err(RuntimeError::StdinIo), None);
+    };
 
+    let result = receive_helper_chunks(clock, &receiver, max_bytes, buf);
+    // However the read ended, the helper must not outlive it: ask it to stop,
+    // let a blocked `send` fail, and cancel a blocked read.
+    stop.store(true, std::sync::atomic::Ordering::SeqCst);
+    drop(receiver);
+    let end = stop_helper(helper, clock);
+    (result, Some(end))
+}
+
+#[cfg(any(not(unix), test))]
+fn receive_helper_chunks(
+    clock: &EntryClock,
+    receiver: &std::sync::mpsc::Receiver<io::Result<Vec<u8>>>,
+    max_bytes: usize,
+    buf: &mut Vec<u8>,
+) -> Result<(), RuntimeError> {
     loop {
         clock
             .admit_new_work()
@@ -717,6 +764,29 @@ fn read_on_helper_before_cleanup<R: Read + Send + 'static>(
         }
         buf.extend_from_slice(&chunk);
     }
+}
+
+/// Join the helper once it leaves its read, cancelling a pending read on
+/// Windows until it does. Bounded by `HELPER_STOP_BOUND_MS` and by the time
+/// left before the invocation expires; past that the helper is detached.
+#[cfg(any(not(unix), test))]
+fn stop_helper(helper: std::thread::JoinHandle<()>, clock: &EntryClock) -> HelperEnd {
+    let bound = std::time::Duration::from_millis(
+        HELPER_STOP_BOUND_MS.min(clock.remaining_until_expiry().as_millis()),
+    );
+    let started = std::time::Instant::now();
+    while !helper.is_finished() {
+        // A thread not yet in its read reports nothing to cancel; it sees the
+        // stop flag next, or is cancelled on a later pass.
+        #[cfg(windows)]
+        let _ = sr_win_sys::windows::cancel_synchronous_io(&helper);
+        if started.elapsed() >= bound {
+            return HelperEnd::Detached;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    let _ = helper.join();
+    HelperEnd::Joined
 }
 
 pub const fn default_deadline_ms() -> u64 {
@@ -793,12 +863,83 @@ mod helper_read_tests {
         let (keeper, stalled) = std::sync::mpsc::channel();
         let started = Instant::now();
         let mut buf = Vec::new();
+        // A reader that ignores cancellation (this one waits on a channel, not
+        // in a system read) is the documented detached case.
         assert_eq!(
-            read_on_helper_before_cleanup(&clock, Stalled(stalled), 8, &mut buf),
-            Err(RuntimeError::StdinTimeout)
+            read_on_helper(&clock, Stalled(stalled), 8, &mut buf),
+            (Err(RuntimeError::StdinTimeout), Some(HelperEnd::Detached))
         );
         assert!(started.elapsed().as_millis() < u128::from(default_deadline_ms()));
         drop(keeper);
+    }
+
+    #[test]
+    fn ended_input_and_overflow_join_the_helper() {
+        let clock = EntryClock::capture().unwrap();
+        let mut buf = Vec::new();
+        assert_eq!(
+            read_on_helper(&clock, Cursor::new(b"1234".to_vec()), 8, &mut buf),
+            (Ok(()), Some(HelperEnd::Joined))
+        );
+        let large = vec![7_u8; 100 * 1024];
+        let (result, end) = read_on_helper(&clock, Cursor::new(large), 8 * 1024, &mut buf);
+        assert!(matches!(
+            result,
+            Err(RuntimeError::Deadline(LimitError::AboveLimit { .. }))
+        ));
+        assert_eq!(end, Some(HelperEnd::Joined));
+        assert_eq!(
+            read_on_helper(&clock, Failing, 8, &mut buf),
+            (Err(RuntimeError::StdinIo), Some(HelperEnd::Joined))
+        );
+    }
+
+    /// sr-winpar.15: a real pipe whose writer neither writes more nor closes.
+    /// The read is cancelled at the deadline and the helper joined, so no
+    /// thread outlives the invocation.
+    #[cfg(windows)]
+    #[test]
+    fn a_stalled_windows_pipe_read_is_cancelled_and_joined() {
+        use std::io::Write;
+        for prefix in [&b""[..], &b"partial"[..]] {
+            let (reader, mut writer) = std::io::pipe().unwrap();
+            writer.write_all(prefix).unwrap();
+            let clock = EntryClock::capture_with(
+                DurationMillis::new("total", 600, 30_000).unwrap(),
+                DurationMillis::new("cleanup", 200, 30_000).unwrap(),
+            )
+            .unwrap();
+            let started = Instant::now();
+            let mut buf = Vec::new();
+            assert_eq!(
+                read_on_helper(&clock, reader, 64, &mut buf),
+                (Err(RuntimeError::StdinTimeout), Some(HelperEnd::Joined))
+            );
+            assert!(
+                started.elapsed().as_millis() < 600,
+                "{:?}",
+                started.elapsed()
+            );
+            // The writer is still open: the helper ended by cancellation.
+            writer.write_all(b"late").unwrap_or(());
+            drop(writer);
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_windows_pipe_that_closes_is_read_to_its_end() {
+        use std::io::Write;
+        let (reader, mut writer) = std::io::pipe().unwrap();
+        writer.write_all(b"{\"ok\":true}").unwrap();
+        drop(writer);
+        let clock = EntryClock::capture().unwrap();
+        let mut buf = Vec::new();
+        assert_eq!(
+            read_on_helper(&clock, reader, 64, &mut buf),
+            (Ok(()), Some(HelperEnd::Joined))
+        );
+        assert_eq!(buf, b"{\"ok\":true}");
     }
 }
 

@@ -226,7 +226,10 @@ can run out and report `Budget`, as on any loaded host.
   open, so that failure would look like a quiet hook.
 - **Bounded stdin.** Windows pipes have no safe readiness wait. The read runs on a
   helper thread and the caller waits on a channel, so it still stops at the
-  cleanup reserve. See the residual limits for what a stalled writer leaves.
+  cleanup reserve. However the read ends (data, end of input, overflow, read
+  error or deadline), the helper is then stopped: its pending read is cancelled
+  with `CancelSynchronousIo` (the one call `crates/sr-win-sys` adds for this,
+  sr-winpar.15) and the thread is joined within 50 ms.
 - **Main-thread stack.** `build.rs` links `sr.exe` with an 8 MiB stack, matching
   Linux and macOS. The 1 MiB Windows default overflows in `sr eval`.
 - **Held roots.** A walk root is held by its final path with every ancestor
@@ -244,10 +247,11 @@ can run out and report `Budget`, as on any loaded host.
 
 ### Residual limits
 
-- A stdin helper thread stalled in its read cannot be cancelled. It holds only
-  stdin and at most one chunk, publishes nothing, and ends with the process.
-  AGENTS.md's no-detached-workers rule is relaxed for this one leaf, because
-  cancelling it would need `unsafe` code the crate forbids.
+- A stdin reader that ignores `CancelSynchronousIo` would leave the helper
+  parked in its read after the 50 ms bound, holding only stdin and at most one
+  chunk, publishing nothing, until the process ends. Pipes and files are
+  cancelled and joined (tested); a console stdin was not tested, and is not
+  how hooks run.
 - The cache, ledger, allowance, export, backup and policy-file
   implementations and their limits are recorded in
   [Windows private storage](windows-private-storage.md).

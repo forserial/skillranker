@@ -274,7 +274,10 @@ Audit rules for `crates/sr-win-sys`:
    denied.
 3. Calls take handles borrowed from a live `&File`, the process pseudo-handle, or
    an `OwnedHandle` the function owns; no handle outlives its owner or is closed
-   twice. No caller path is re-resolved.
+   twice. No caller path is re-resolved. The one thread call,
+   `cancel_synchronous_io` (sr-winpar.15, approved by the user), borrows the
+   thread handle of a live `JoinHandle` and only asks Windows to abort that
+   thread's pending synchronous read.
 4. Memory Windows allocates is freed by a guard after its bytes are copied out.
    Raw memory is read only as byte slices of lengths Windows reports
    (`GetLengthSid`, `AceSize`); all interpretation is in the safe `sid` and `acl`

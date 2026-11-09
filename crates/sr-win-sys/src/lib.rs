@@ -1,5 +1,6 @@
 //! Win32 security-descriptor and volume reads for SkillRanker's Windows
-//! storage port (sr-winpar.2).
+//! storage port (sr-winpar.2), plus the one thread call that cancels a stalled
+//! stdin read (sr-winpar.15).
 //!
 //! `sr` itself forbids unsafe code. This package is the one place that may call
 //! Win32, and only in [`windows`]: every call takes a borrowed, already-open

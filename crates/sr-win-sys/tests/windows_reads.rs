@@ -8,8 +8,8 @@ use std::process::Command;
 
 use sr_win_sys::acl::{CONTAINER_INHERIT, INHERITED, OBJECT_INHERIT};
 use sr_win_sys::windows::{
-    DRIVE_FIXED, FILE_FLAG_BACKUP_SEMANTICS, free_bytes_for_caller, security_of, token_user_sid,
-    volume_of,
+    DRIVE_FIXED, FILE_FLAG_BACKUP_SEMANTICS, cancel_synchronous_io, free_bytes_for_caller,
+    security_of, token_user_sid, volume_of,
 };
 use sr_win_sys::{AceKind, Sid};
 
@@ -243,4 +243,38 @@ fn rename_no_replace_publishes_once_and_never_replaces_any_existing_name() {
     assert_eq!(fs::read(&target).unwrap(), b"winner");
     assert_eq!(fs::read(&loser).unwrap(), b"loser");
     assert!(fs::symlink_metadata(&link).is_ok());
+}
+
+/// sr-winpar.15: a thread blocked reading a pipe whose writer stays open is
+/// released by `cancel_synchronous_io`, and its read fails as aborted rather
+/// than returning data or end of input. A thread with nothing pending reports
+/// `Ok(false)`.
+#[test]
+fn cancel_synchronous_io_releases_a_blocked_pipe_read() {
+    use std::io::Read;
+    const ERROR_OPERATION_ABORTED: i32 = 995;
+    let (mut reader, writer) = std::io::pipe().unwrap();
+    let blocked = std::thread::spawn(move || {
+        let mut byte = [0_u8; 1];
+        reader.read(&mut byte)
+    });
+    let started = std::time::Instant::now();
+    while !blocked.is_finished() {
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(5),
+            "the read was never cancelled"
+        );
+        cancel_synchronous_io(&blocked).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    let error = blocked.join().unwrap().unwrap_err();
+    assert_eq!(error.raw_os_error(), Some(ERROR_OPERATION_ABORTED));
+    drop(writer);
+
+    let idle = std::thread::spawn(|| std::thread::sleep(std::time::Duration::from_millis(200)));
+    assert!(
+        !cancel_synchronous_io(&idle).unwrap(),
+        "no pending synchronous I/O"
+    );
+    idle.join().unwrap();
 }

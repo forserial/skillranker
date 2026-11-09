@@ -13,7 +13,8 @@ name = "sr"
 path = "src/main.rs"
 
 # sr-win-sys holds the only unsafe code (audited Win32 security and volume
-# reads, sr-winpar.2); skillranker itself keeps forbidding unsafe code. Plain
+# reads, sr-winpar.2, and stdin read cancellation, sr-winpar.15); skillranker
+# itself keeps forbidding unsafe code. Plain
 # cargo commands at the root cover both packages.
 [workspace]
 members = [".", "crates/sr-win-sys"]
