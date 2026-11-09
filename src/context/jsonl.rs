@@ -20,6 +20,7 @@ use crate::limits::{
 use crate::runtime::{ProcessInvocation, RuntimeError};
 use asupersync::Cx;
 use serde_json::Value;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File};
 use std::io::{Read, Seek, SeekFrom};
 #[cfg(unix)]
@@ -131,6 +132,43 @@ pub struct SkippedRecord {
     pub kind: SkipKind,
 }
 
+/// What branch resolution needs from a native transcript beyond its
+/// conversation events. Kept apart from `events` so consumers that read
+/// conversation content see exactly what they saw before; only a caller that
+/// resolves lineage over the snapshot merges it in.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct NativeLineage {
+    /// Content-free nodes for harness-internal and oversized records. Current
+    /// Claude transcripts chain `parentUuid` through them, so without these
+    /// nodes the graph shatters into many one-event chains.
+    pub placeholders: Vec<NormalizedEvent>,
+    /// Provider response (`message.id`) each assistant record is a fragment
+    /// of. Concurrent tool calls of one response branch off as siblings; the
+    /// resolver needs this map to tell that layout from a real fork.
+    pub responses: BTreeMap<EventId, String>,
+    /// Records a subagent wrote (`isSidechain: true`).
+    pub sidechains: BTreeSet<EventId>,
+}
+
+impl NativeLineage {
+    /// The main-agent lineage graph: conversation events plus placeholders,
+    /// without subagent sidechains, whose leaves would otherwise be
+    /// indistinguishable from the main-chain tip.
+    pub fn main_chain(&self, events: &[NormalizedEvent]) -> Vec<NormalizedEvent> {
+        events
+            .iter()
+            .chain(&self.placeholders)
+            .filter(|event| {
+                event
+                    .event_id
+                    .as_ref()
+                    .is_none_or(|id| !self.sidechains.contains(id))
+            })
+            .cloned()
+            .collect()
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct JsonlSnapshot {
     pub cursor: JsonlCursor,
@@ -141,6 +179,7 @@ pub struct JsonlSnapshot {
     pub unread_backlog: bool,
     pub rebuilt: bool,
     pub skipped: Vec<SkippedRecord>,
+    pub lineage: NativeLineage,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -521,6 +560,7 @@ fn parse_window(
                     unread_backlog,
                     rebuilt,
                     skipped: Vec::new(),
+                    lineage: NativeLineage::default(),
                 });
             }
         }
@@ -528,6 +568,7 @@ fn parse_window(
 
     let mut events = Vec::new();
     let mut skipped = Vec::new();
+    let mut lineage = NativeLineage::default();
     let mut complete_end = start + offset as u64;
     let mut invocations = std::collections::BTreeSet::new();
     let mut results = Vec::new();
@@ -546,7 +587,13 @@ fn parse_window(
             offset -= nl + 1;
             break;
         }
-        match parse_line(line) {
+        let decoded = decode_line(line);
+        let parsed = decoded
+            .as_ref()
+            .map_err(|kind| *kind)
+            .and_then(event_from_decoded);
+        record_lineage(&mut lineage, line, &decoded, &parsed);
+        match parsed {
             Ok(event) => {
                 if let Some(tool) = event.tool.as_ref()
                     && let Some(id) = tool.call_id.as_ref()
@@ -597,25 +644,117 @@ fn parse_window(
         unread_backlog: unread_backlog || hit_record_cap,
         rebuilt,
         skipped,
+        lineage,
     })
 }
 
 pub fn parse_line(line: &[u8]) -> Result<NormalizedEvent, SkipKind> {
+    event_from_decoded(&decode_line(line)?)
+}
+
+/// Decode one bounded record without interpreting it.
+fn decode_line(line: &[u8]) -> Result<Value, SkipKind> {
     if line.len() > ONE_TRANSCRIPT_RECORD_BYTES.max() {
         return Err(SkipKind::Oversize);
     }
     if line.is_empty() {
         return Err(SkipKind::Corrupt);
     }
-    let value =
-        decode_json(line, ONE_TRANSCRIPT_RECORD_BYTES.max()).map_err(|error| match error {
-            AdapterError::DuplicateKey => SkipKind::DuplicateKey,
-            _ => SkipKind::Corrupt,
-        })?;
-    if is_unmodeled_record(&value) {
+    decode_json(line, ONE_TRANSCRIPT_RECORD_BYTES.max()).map_err(|error| match error {
+        AdapterError::DuplicateKey => SkipKind::DuplicateKey,
+        _ => SkipKind::Corrupt,
+    })
+}
+
+fn event_from_decoded(value: &Value) -> Result<NormalizedEvent, SkipKind> {
+    if is_unmodeled_record(value) {
         return Err(SkipKind::Unmodeled);
     }
-    event_from_value(&value).ok_or(SkipKind::Corrupt)
+    event_from_value(value).ok_or(SkipKind::Corrupt)
+}
+
+/// The lineage fields of a record whose content is not read. Every other
+/// field is skipped without being built, so reading this is bounded by the
+/// record's bytes, not by its structure. A repeated identity key is an error.
+/// Claude records carry both session key spellings, so each is read.
+#[derive(serde::Deserialize)]
+pub(crate) struct LineageIdentity {
+    pub(crate) uuid: Option<String>,
+    pub(crate) event_id: Option<String>,
+    #[serde(rename = "parentUuid")]
+    pub(crate) parent_uuid: Option<String>,
+    pub(crate) parent_id: Option<String>,
+    #[serde(rename = "sessionId")]
+    pub(crate) session_camel: Option<String>,
+    pub(crate) session_id: Option<String>,
+    #[serde(rename = "isSidechain")]
+    pub(crate) is_sidechain: Option<bool>,
+}
+
+/// A content-free system event that keeps a parent link intact.
+pub(crate) fn placeholder(event_id: EventId, parent_id: Option<EventId>) -> NormalizedEvent {
+    NormalizedEvent {
+        event_id: Some(event_id),
+        parent_id,
+        turn_id: None,
+        agent_id: None,
+        branch_id: None,
+        role: Role::System,
+        kind: EventKind::Message,
+        timestamp_unix_ms: None,
+        text: PrivateText::new(String::new()),
+        tool: None,
+    }
+}
+
+/// Add what one record contributes to lineage. Corrupt records and records
+/// without a valid identity contribute nothing: they are not graph nodes.
+fn record_lineage(
+    lineage: &mut NativeLineage,
+    line: &[u8],
+    decoded: &Result<Value, SkipKind>,
+    parsed: &Result<NormalizedEvent, SkipKind>,
+) {
+    let text = |value: &Value, key: &str| value.get(key).and_then(Value::as_str).map(str::to_owned);
+    let (event_id, parent_id, sidechain) = match (decoded, parsed) {
+        (Ok(value), Ok(event)) => {
+            if let Some(id) = &event.event_id {
+                if value.get("type").and_then(Value::as_str) == Some("assistant")
+                    && let Some(response) = value.pointer("/message/id").and_then(Value::as_str)
+                {
+                    lineage.responses.insert(id.clone(), response.to_owned());
+                }
+                if value.get("isSidechain").and_then(Value::as_bool) == Some(true) {
+                    lineage.sidechains.insert(id.clone());
+                }
+            }
+            return;
+        }
+        (Ok(value), Err(SkipKind::Unmodeled)) => (
+            text(value, "uuid").or_else(|| text(value, "event_id")),
+            text(value, "parentUuid").or_else(|| text(value, "parent_id")),
+            value.get("isSidechain").and_then(Value::as_bool) == Some(true),
+        ),
+        (Err(SkipKind::Oversize), _) => {
+            let Ok(identity) = serde_json::from_slice::<LineageIdentity>(line) else {
+                return;
+            };
+            (
+                identity.uuid.or(identity.event_id),
+                identity.parent_uuid.or(identity.parent_id),
+                identity.is_sidechain == Some(true),
+            )
+        }
+        _ => return,
+    };
+    let Some(event_id) = event_id.and_then(|v| EventId::new(v).ok()) else {
+        return;
+    };
+    if sidechain {
+        lineage.sidechains.insert(event_id.clone());
+    }
+    let parent_id = parent_id.and_then(|v| EventId::new(v).ok());
+    lineage.placeholders.push(placeholder(event_id, parent_id));
 }
 
 /// Record types this reader models as conversation events. A record whose

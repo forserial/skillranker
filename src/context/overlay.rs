@@ -20,8 +20,8 @@ use crate::authorized_read::{AuthorizedRoot, AuthorizedRoots, FileKind, ReadErro
 use crate::context::branch::{
     ActiveBranch, BranchResolutionTarget, resolve_active_branch_with_responses,
 };
-use crate::context::jsonl::{SkipKind, parse_line};
-use crate::context::{CurrentRequest, EventKind, NormalizedEvent, PrivateText, Role};
+use crate::context::jsonl::{LineageIdentity, SkipKind, parse_line, placeholder};
+use crate::context::{CurrentRequest, EventKind, NormalizedEvent, Role};
 use crate::identity::{BranchId, EventId, SessionId};
 use crate::limits::{
     NATIVE_TRANSCRIPT_TAIL_BYTES, NATIVE_TRANSCRIPT_TAIL_RECORDS, ONE_TRANSCRIPT_RECORD_BYTES,
@@ -551,41 +551,6 @@ pub fn apply_claude_prompt_overlay_before(
         prompt_overlaid: true,
         deduplicated_by_event_id: matched_index.is_some(),
     })
-}
-
-/// The lineage fields of a record whose content is not read. Every other
-/// field is skipped without being built, so reading this is bounded by the
-/// record's bytes, not by its structure. A repeated identity key is an error.
-/// Claude records carry both session key spellings, so each is read and
-/// checked, as for any other record.
-#[derive(serde::Deserialize)]
-struct LineageIdentity {
-    uuid: Option<String>,
-    event_id: Option<String>,
-    #[serde(rename = "parentUuid")]
-    parent_uuid: Option<String>,
-    parent_id: Option<String>,
-    #[serde(rename = "sessionId")]
-    session_camel: Option<String>,
-    session_id: Option<String>,
-    #[serde(rename = "isSidechain")]
-    is_sidechain: Option<bool>,
-}
-
-/// A content-free system event that keeps a parent link intact.
-fn placeholder(event_id: EventId, parent_id: Option<EventId>) -> NormalizedEvent {
-    NormalizedEvent {
-        event_id: Some(event_id),
-        parent_id,
-        turn_id: None,
-        agent_id: None,
-        branch_id: None,
-        role: Role::System,
-        kind: EventKind::Message,
-        timestamp_unix_ms: None,
-        text: PrivateText::new(String::new()),
-        tool: None,
-    }
 }
 
 /// The wrapper Claude puts around a background task's completion message.

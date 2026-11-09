@@ -2666,7 +2666,12 @@ fn observe_owned(
     // Set by whichever ingestion path runs, so the command can say that it did not reach the end
     // of its input instead of implying it did.
     let mut unread_backlog = false;
-    let (normalized_context, bytes_scanned) = if let Some(context_path) = context_file {
+    // Native transcripts also yield the lineage the hook resolves over: harness-record placeholders,
+    // response identity and sidechains. Without it, concurrent tool calls of one response read as
+    // sibling forks and every real Claude session is unresolvable.
+    let (normalized_context, bytes_scanned, native_lineage) = if let Some(context_path) =
+        context_file
+    {
         let path = PathBuf::from(context_path);
         let input_workspace = workspace.clone();
         let bytes = crate::blocking::run_blocking_leaf(
@@ -2698,7 +2703,7 @@ fn observe_owned(
                 format!("Invalid normalized context: {e}"),
             )
         })?;
-        (ctx, bytes_len)
+        (ctx, bytes_len, None)
     } else if let (Some(transcript_str), Some(harness_str)) = (transcript_file, harness_opt) {
         let harness_id = crate::identity::HarnessId::new(harness_str)
             .map_err(|_| (2u8, "invalid-arguments", "Invalid harness ID".into()))?;
@@ -2795,6 +2800,7 @@ fn observe_owned(
         // there was more (AGENTS.md: expose truncation and partial coverage).
         unread_backlog = snapshot.unread_backlog;
         let bytes_scanned = snapshot.cursor.byte_offset;
+        let lineage = snapshot.lineage;
         let events = snapshot.events;
         let current = events.iter().rev().find(|e| {
             e.role == crate::context::Role::User && e.kind == crate::context::EventKind::Message
@@ -2821,7 +2827,7 @@ fn observe_owned(
             explicit_skill_references: Vec::new(),
             supplied_loads: Vec::new(),
         };
-        (ctx, bytes_scanned)
+        (ctx, bytes_scanned, Some(lineage))
     } else {
         return Err((
             3u8,
@@ -2859,8 +2865,17 @@ fn observe_owned(
         },
         target_agent_id: normalized_context.agent_id.clone(),
     };
-    let resolved_branch =
-        crate::context::branch::resolve_active_branch(&normalized_context.events, &branch_target);
+    let resolved_branch = match &native_lineage {
+        Some(lineage) => crate::context::branch::resolve_active_branch_with_responses(
+            &lineage.main_chain(&normalized_context.events),
+            &branch_target,
+            &lineage.responses,
+        ),
+        None => crate::context::branch::resolve_active_branch(
+            &normalized_context.events,
+            &branch_target,
+        ),
+    };
     let active_branch = resolved_branch.active_branch();
     // None means "inspect all events" to the load extractor. It is safe only
     // for an empty history, never an unresolved fork or invalid lineage.

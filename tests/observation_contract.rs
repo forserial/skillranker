@@ -794,6 +794,122 @@ fn observe_boundary_native_namespace_cannot_authorize_an_unresolved_fork() {
     }
 }
 
+/// Real Claude sessions are not linear: concurrent tool calls of one response
+/// branch off as siblings, harness records (attachments) sit in the parent
+/// chain, and subagents write sidechain records off the main chain. The hook
+/// resolves this layout; observe must resolve the same lineage instead of
+/// refusing every real session as an ambiguous fork.
+#[test]
+fn observe_boundary_native_claude_layout_resolves_like_the_hook() {
+    let fixture = ObserveBoundaryFixture::new();
+    fixture.skill("workspace/.claude/skills", "review");
+    let path = fixture.root.join("workspace/native-layout.jsonl");
+    let session = "native-layout";
+    let call = |id: &str, parent: &str, call_id: &str, name: &str, input: serde_json::Value| {
+        serde_json::json!({"type":"assistant","uuid":id,"parentUuid":parent,"sessionId":session,
+            "message":{"id":"msg-1","role":"assistant","content":[
+                {"type":"tool_use","id":call_id,"name":name,"input":input}]}})
+    };
+    let result = |id: &str, parent: &str, call_id: &str| {
+        serde_json::json!({"type":"tool_result","uuid":id,"parentUuid":parent,"sessionId":session,
+            "tool_use_id":call_id,"content":"ok","is_error":false})
+    };
+    let records = [
+        serde_json::json!({"cwd":fixture.root.join("workspace"),"sessionId":session}),
+        serde_json::json!({"type":"user","uuid":"request","sessionId":session,
+            "message":{"role":"user","content":"Review code"}}),
+        // One response, two concurrent calls: `b` continues the response while
+        // `a`'s answered result branches off beside it.
+        call(
+            "a",
+            "request",
+            "skill-call",
+            "Skill",
+            serde_json::json!({"skill":"review"}),
+        ),
+        call(
+            "b",
+            "a",
+            "read-call",
+            "Read",
+            serde_json::json!({"file_path":"x"}),
+        ),
+        result("result-a", "a", "skill-call"),
+        // The side branch carries another call of the same response.
+        call(
+            "c",
+            "result-a",
+            "grep-call",
+            "Grep",
+            serde_json::json!({"pattern":"x"}),
+        ),
+        result("result-b", "b", "read-call"),
+        result("result-c", "c", "grep-call"),
+        // A harness-internal record the chain runs through.
+        serde_json::json!({"type":"attachment","uuid":"attachment","parentUuid":"result-b",
+            "sessionId":session,"attachment":{"type":"todo"}}),
+        serde_json::json!({"type":"assistant","uuid":"reply","parentUuid":"attachment",
+            "sessionId":session,"message":{"id":"msg-2","role":"assistant",
+                "content":[{"type":"text","text":"Reviewed."}]}}),
+        // A subagent's record off the main chain.
+        serde_json::json!({"type":"assistant","uuid":"subagent","parentUuid":"request",
+            "isSidechain":true,"sessionId":session,"message":{"id":"msg-side","role":"assistant",
+                "content":[{"type":"text","text":"subagent work"}]}}),
+        serde_json::json!({"type":"user","uuid":"follow-up","parentUuid":"reply",
+            "sessionId":session,"message":{"role":"user","content":"Thanks"}}),
+    ];
+    let lines = records.iter().map(ToString::to_string).collect::<Vec<_>>();
+    fs::write(&path, lines.join("\n") + "\n").unwrap();
+    let output = fixture
+        .command()
+        .args(["observe", "--transcript"])
+        .arg(&path)
+        .args(["--harness", "claude_code", "--dir"])
+        .arg(fixture.root.join("ledger"))
+        .arg("--json")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["status"], "ok");
+    assert_eq!(value["agent_branch"], "main");
+    assert_eq!(value["last_event_id"], "follow-up");
+    assert_eq!(
+        value["observations_recorded"], 1,
+        "the Skill load on the concurrent side batch is on the resolved lineage"
+    );
+    assert_eq!(fixture.counts(), (1, 1));
+
+    // Response identity is what makes the side branch finished work: the same
+    // graph with `c` claiming another response is a genuine fork.
+    let mut forked = records.to_vec();
+    for record in &mut forked {
+        record["sessionId"] = serde_json::json!("native-forked");
+    }
+    let c = forked.iter_mut().find(|r| r["uuid"] == "c").unwrap();
+    c["message"]["id"] = serde_json::json!("msg-other");
+    let forked_path = fixture.root.join("workspace/native-forked.jsonl");
+    let forked = forked.iter().map(ToString::to_string).collect::<Vec<_>>();
+    fs::write(&forked_path, forked.join("\n") + "\n").unwrap();
+    let output = fixture
+        .command()
+        .args(["observe", "--transcript"])
+        .arg(&forked_path)
+        .args(["--harness", "claude_code", "--dir"])
+        .arg(fixture.root.join("ledger"))
+        .arg("--json")
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(3));
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["error"]["kind"], "ambiguous-branch");
+    assert_eq!(fixture.counts(), (1, 1));
+}
+
 #[test]
 fn observe_boundary_invalid_configuration_cannot_advance_the_cursor() {
     let mut results = Vec::new();
