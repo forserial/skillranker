@@ -116,6 +116,18 @@
 
 ### Fixed
 
+- Continued Claude sessions have a session identity again (sr-pru1). Claude
+  starts a continued session's transcript with the history it inherited, still
+  under the earlier session's ID; `sr` required every session ID in the first
+  64 KiB to match the file name, so the hook failed every turn with
+  `missing-session`, `observe` refused the transcript and discovery reported an
+  incomplete inventory. Inherited history may now precede the file's own
+  records, and when the first 64 KiB holds only inherited history, the file's
+  tail must end under its own ID. `observe` records only the session's own
+  loads; inherited ones belong to the earlier session's transcript.
+- `sr observe` reads native Claude transcripts: it resolves the active branch
+  with the hook's lineage (sr-3l1x), and a Skill result counts as loaded when
+  Claude's record-level `toolUseResult.success` reports success (sr-4no9).
 - Windows: a stalled stdin read no longer leaves a helper thread behind. When the
   read ends for any reason, including the deadline with the writer still open,
   the pending read is cancelled and the helper joined within 50 ms (sr-winpar.15;

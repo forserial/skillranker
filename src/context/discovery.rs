@@ -4,7 +4,9 @@
 //! The directory encoding is an unverified harness convention, and it changed
 //! between Claude versions, so it only narrows where to look. A transcript is a
 //! candidate only when its own bounded head records this workspace as its first
-//! working directory and carries its file name as a session identity. Other
+//! working directory and carries its file name as a session identity, or, for
+//! a continued session whose head is inherited history, when its bounded tail
+//! does. Other
 //! workspaces' directories are never listed, symlinks and special files are
 //! never opened. Candidate reads are bounded to their head and tail.
 
@@ -50,30 +52,46 @@ pub fn project_directories(workspace: &Path) -> Vec<String> {
 
 /// The session a transcript head attributes itself to: `stem` when the first
 /// recorded working directory is exactly `workspace` and a record carries
-/// `stem` as its session ID. Only complete lines count.
+/// `stem` as its session ID. Only complete lines count. A continued session's
+/// head names only the session it continued, so the head alone cannot
+/// attribute it; see [`transcript_session`].
 pub fn attribution(head: &[u8], stem: &str, workspace: &str) -> Option<SessionId> {
-    checked_attribution(head, stem, workspace, false)
-        .ok()
-        .flatten()
+    match checked_attribution(head, stem, workspace, false) {
+        Ok(Some(Head::Claimed(session))) => Some(session),
+        _ => None,
+    }
+}
+
+/// What a transcript head establishes about the file's own session.
+#[derive(Debug, PartialEq)]
+enum Head {
+    /// A head record carries the file's name as its session ID.
+    Claimed(SessionId),
+    /// Every session ID in the head belongs to another session. Claude starts
+    /// a continued session's file with the history it inherited, records that
+    /// keep the earlier session's ID, and writes the file's own ID only once
+    /// the new session records something. Only the file's tail can show that.
+    Inherited,
 }
 
 /// `Ok(None)` proves the file is not a candidate: it records another
-/// workspace, or, read `whole`, it claims this session but never recorded a
-/// working directory, so it holds no conversation turn to rank. `Err` means
-/// attribution is unresolved. Never turn unreadable or ambiguous evidence
-/// into an absent candidate.
+/// workspace, or, read `whole`, it never recorded a working directory or
+/// anything under its own session ID, so it holds no conversation turn to
+/// rank. `Err` means attribution is unresolved. Never turn unreadable or
+/// ambiguous evidence into an absent candidate.
 fn checked_attribution(
     head: &[u8],
     stem: &str,
     workspace: &str,
     whole: bool,
-) -> Result<Option<SessionId>, ()> {
+) -> Result<Option<Head>, ()> {
     if head.len() > HEAD_BYTES {
         return Err(());
     }
     let end = head.iter().rposition(|byte| *byte == b'\n').ok_or(())?;
     let mut in_workspace = false;
     let mut claimed = false;
+    let mut inherited = false;
     for line in head[..end].split(|byte| *byte == b'\n') {
         let Value::Object(record) =
             crate::adapter::decode_json(line, HEAD_BYTES).map_err(|_| ())?
@@ -88,22 +106,29 @@ fn checked_attribution(
             in_workspace = true;
         }
         if let Some(session) = record.get("sessionId") {
-            if session.as_str() != Some(stem) {
+            let session = session.as_str().ok_or(())?;
+            if session == stem {
+                claimed = true;
+            } else if claimed {
+                // Inherited history only ever precedes the file's own records.
                 return Err(());
+            } else {
+                inherited = true;
             }
-            claimed = true;
         }
     }
-    match (in_workspace, claimed) {
-        (true, true) => SessionId::new(stem).map(Some).map_err(|_| ()),
-        (false, true) if whole => Ok(None),
+    match (in_workspace, claimed, inherited) {
+        (true, true, _) => SessionId::new(stem)
+            .map(|session| Some(Head::Claimed(session)))
+            .map_err(|_| ()),
+        (true, false, true) if !whole => Ok(Some(Head::Inherited)),
+        (_, true, _) | (_, false, true) if whole => Ok(None),
         _ => Err(()),
     }
 }
 
-/// The last complete record's recorded `timestamp`, from a bounded tail read.
-/// Unknown when no complete record in the tail carries a valid one.
-fn last_recorded_ms(file: &mut std::fs::File, size: u64) -> Option<i64> {
+/// The complete records of a bounded tail read, oldest first.
+fn tail_records(file: &mut std::fs::File, size: u64) -> Option<Vec<Vec<u8>>> {
     let start = size.saturating_sub(TAIL_BYTES as u64);
     file.seek(SeekFrom::Start(start)).ok()?;
     let mut tail = Vec::with_capacity(TAIL_BYTES);
@@ -114,11 +139,19 @@ fn last_recorded_ms(file: &mut std::fs::File, size: u64) -> Option<i64> {
     let end = tail.iter().rposition(|byte| *byte == b'\n')?;
     // A tail that starts inside the file begins with a partial record.
     let skip = usize::from(start > 0);
-    tail[..end]
-        .split(|byte| *byte == b'\n')
-        .skip(skip)
-        .collect::<Vec<_>>()
-        .into_iter()
+    Some(
+        tail[..end]
+            .split(|byte| *byte == b'\n')
+            .skip(skip)
+            .map(<[u8]>::to_vec)
+            .collect(),
+    )
+}
+
+/// The last complete record's recorded `timestamp`, from a bounded tail read.
+/// Unknown when no complete record in the tail carries a valid one.
+fn last_recorded_ms(tail: &[Vec<u8>]) -> Option<i64> {
+    tail.iter()
         .rev()
         .find_map(|line| match crate::adapter::decode_json(line, TAIL_BYTES) {
             Ok(Value::Object(record)) => record
@@ -127,6 +160,30 @@ fn last_recorded_ms(file: &mut std::fs::File, size: u64) -> Option<i64> {
                 .and_then(parse_utc_ms),
             _ => None,
         })
+}
+
+/// Whether a continued session's tail proves the file is `stem`'s: some
+/// record carries `stem`, and none after it carries another session. The
+/// boundary between inherited and own records may fall inside the tail.
+/// Unreadable records and a tail without `stem` leave it unresolved.
+fn tail_claims(tail: &[Vec<u8>], stem: &str) -> Result<(), ()> {
+    let mut claimed = false;
+    for line in tail {
+        let Value::Object(record) =
+            crate::adapter::decode_json(line, TAIL_BYTES).map_err(|_| ())?
+        else {
+            return Err(());
+        };
+        if let Some(session) = record.get("sessionId") {
+            let session = session.as_str().ok_or(())?;
+            if session == stem {
+                claimed = true;
+            } else if claimed {
+                return Err(());
+            }
+        }
+    }
+    if claimed { Ok(()) } else { Err(()) }
 }
 
 /// Milliseconds since the Unix epoch for `YYYY-MM-DDTHH:MM:SS[.fraction]Z`.
@@ -342,10 +399,18 @@ fn probe(
         .map_err(|_| ())?;
     // Only a file read to its end can prove it holds no conversation turn.
     let whole = size <= HEAD_BYTES as u64 && head.len() as u64 == size;
-    let Some(session) = checked_attribution(&head, stem, workspace, whole)? else {
+    let Some(head) = checked_attribution(&head, stem, workspace, whole)? else {
         return Ok(None);
     };
-    let recorded = last_recorded_ms(&mut file, size);
+    let tail = tail_records(&mut file, size);
+    let session = match head {
+        Head::Claimed(session) => session,
+        Head::Inherited => {
+            tail_claims(tail.as_deref().ok_or(())?, stem)?;
+            SessionId::new(stem).map_err(|_| ())?
+        }
+    };
+    let recorded = tail.as_deref().and_then(last_recorded_ms);
     Ok(Some((session, recorded, identity)))
 }
 
@@ -488,6 +553,57 @@ mod tests {
         let unclaimed = line(serde_json::json!({"type": "ai-title"}));
         assert!(checked_attribution(unclaimed.as_bytes(), "s-1", WORKSPACE, true).is_err());
         assert!(checked_attribution(b"not json\n", "s-1", WORKSPACE, true).is_err());
+    }
+
+    #[test]
+    fn a_continued_session_head_is_inherited_history_not_a_conflict() {
+        // Claude starts a continued session's file with the earlier session's
+        // records, under that session's ID.
+        let inherited = line(serde_json::json!({"type": "bridge-session", "sessionId": "parent"}))
+            + &line(serde_json::json!({"cwd": WORKSPACE, "sessionId": "parent"}));
+        assert_eq!(
+            checked_attribution(inherited.as_bytes(), "child", WORKSPACE, false),
+            Ok(Some(Head::Inherited))
+        );
+        // The head alone never attributes it.
+        assert_eq!(attribution(inherited.as_bytes(), "child", WORKSPACE), None);
+        // Read whole, nothing was recorded under the file's own ID.
+        assert_eq!(
+            checked_attribution(inherited.as_bytes(), "child", WORKSPACE, true),
+            Ok(None)
+        );
+        // The boundary may fall inside the head.
+        let continued = inherited.clone() + &line(serde_json::json!({"sessionId": "child"}));
+        assert_eq!(
+            checked_attribution(continued.as_bytes(), "child", WORKSPACE, false),
+            Ok(Some(Head::Claimed(SessionId::new("child").unwrap())))
+        );
+        // Another session after the file's own records is still a conflict,
+        // and inherited history of another workspace is not a candidate.
+        let conflict = continued + &line(serde_json::json!({"sessionId": "parent"}));
+        assert!(checked_attribution(conflict.as_bytes(), "child", WORKSPACE, false).is_err());
+        let elsewhere =
+            line(serde_json::json!({"cwd": "/data/projects/other", "sessionId": "parent"}));
+        assert_eq!(
+            checked_attribution(elsewhere.as_bytes(), "child", WORKSPACE, false),
+            Ok(None)
+        );
+    }
+
+    #[test]
+    fn a_continued_session_tail_must_end_under_the_file_session() {
+        let record =
+            |session: &str| serde_json::to_vec(&serde_json::json!({"sessionId": session})).unwrap();
+        let untagged = br#"{"type":"cost-state"}"#.to_vec();
+        assert!(tail_claims(&[record("child"), untagged.clone()], "child").is_ok());
+        // The boundary between inherited and own records may be in the tail.
+        assert!(tail_claims(&[record("parent"), record("child")], "child").is_ok());
+        // Only inherited records, no session at all, another session after
+        // the file's own, or an unreadable record: unresolved.
+        assert!(tail_claims(&[record("parent")], "child").is_err());
+        assert!(tail_claims(&[untagged], "child").is_err());
+        assert!(tail_claims(&[record("child"), record("parent")], "child").is_err());
+        assert!(tail_claims(&[record("child"), b"not json".to_vec()], "child").is_err());
     }
 
     #[test]

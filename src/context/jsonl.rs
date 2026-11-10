@@ -148,9 +148,22 @@ pub struct NativeLineage {
     pub responses: BTreeMap<EventId, String>,
     /// Records a subagent wrote (`isSidechain: true`).
     pub sidechains: BTreeSet<EventId>,
+    /// The `sessionId` each conversation event's record carries. A continued
+    /// session's transcript begins with history inherited from the session it
+    /// continued, still under that session's ID; those events are context for
+    /// lineage, not this session's own activity.
+    pub sessions: BTreeMap<EventId, String>,
 }
 
 impl NativeLineage {
+    /// Whether `event` was recorded under a session other than `session`.
+    /// An event whose record names no session is not known to be inherited.
+    pub fn inherited(&self, event: &EventId, session: &str) -> bool {
+        self.sessions
+            .get(event)
+            .is_some_and(|recorded| recorded != session)
+    }
+
     /// The main-agent lineage graph: conversation events plus placeholders,
     /// without subagent sidechains, whose leaves would otherwise be
     /// indistinguishable from the main-chain tip.
@@ -726,6 +739,9 @@ fn record_lineage(
                 }
                 if value.get("isSidechain").and_then(Value::as_bool) == Some(true) {
                     lineage.sidechains.insert(id.clone());
+                }
+                if let Some(session) = value.get("sessionId").and_then(Value::as_str) {
+                    lineage.sessions.insert(id.clone(), session.to_owned());
                 }
             }
             return;

@@ -342,6 +342,51 @@ fn latest_requires_valid_calendar_recency_through_the_cli() {
 }
 
 #[test]
+fn a_continued_session_is_attributed_by_its_tail() {
+    let (workspace, projects, directory) = tree();
+    // The file begins with history inherited from `parent`, longer than the
+    // identity head, and only its tail is recorded under its own name.
+    let pad = "x".repeat(1024);
+    let inherited = record(&workspace, "parent")
+        + &(0..80)
+            .map(|_| {
+                serde_json::json!({"type":"cost-state","sessionId":"parent","pad":pad}).to_string()
+                    + "\n"
+            })
+            .collect::<String>();
+    assert!(inherited.len() > HEAD_BYTES);
+    std::fs::write(
+        directory.join("child.jsonl"),
+        inherited.clone() + &timed(&workspace, "child", "2026-09-19T12:00:00Z"),
+    )
+    .unwrap();
+    let inventory = inventory_of(&workspace, projects.clone());
+    assert!(inventory.complete);
+    assert_eq!(inventory.candidates.len(), 1);
+    let candidate = &inventory.candidates[0];
+    assert_eq!(
+        candidate.identity.session.as_ref().unwrap().as_str(),
+        "child"
+    );
+    assert!(candidate.last_activity_unix_ms.is_some());
+
+    // Without anything of its own in the tail, or with another session
+    // after its own records, the file's identity stays unresolved.
+    std::fs::write(directory.join("child.jsonl"), inherited.clone()).unwrap();
+    let inventory = inventory_of(&workspace, projects.clone());
+    assert!(inventory.candidates.is_empty());
+    assert!(!inventory.complete);
+    std::fs::write(
+        directory.join("child.jsonl"),
+        inherited + &record(&workspace, "child") + &record(&workspace, "parent"),
+    )
+    .unwrap();
+    let inventory = inventory_of(&workspace, projects);
+    assert!(inventory.candidates.is_empty());
+    assert!(!inventory.complete);
+}
+
+#[test]
 fn an_empty_stub_session_does_not_block_unique_discovery() {
     let (workspace, projects, directory) = tree();
     std::fs::write(directory.join("known.jsonl"), record(&workspace, "known")).unwrap();

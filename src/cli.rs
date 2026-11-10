@@ -3061,12 +3061,23 @@ fn observe_owned(
             })?
     };
 
-    let raw_observations = crate::context::tool::extract_load_observations(
+    let mut raw_observations = crate::context::tool::extract_load_observations(
         &normalized_context.events,
         &session_identity,
         &evidence_resolver,
         active_branch,
     );
+    // A continued session's transcript opens with the history it inherited,
+    // recorded under the earlier session's ID. Those loads belong to that
+    // session, which its own transcript reports; recording them here would
+    // count each one twice and attribute none of them.
+    if let Some(lineage) = &native_lineage {
+        raw_observations.retain(|obs| {
+            obs.event_id
+                .as_ref()
+                .is_none_or(|id| !lineage.inherited(id, &session_id))
+        });
+    }
 
     let now_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

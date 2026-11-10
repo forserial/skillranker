@@ -852,6 +852,122 @@ fn observe_boundary_claude_skill_outcome_decides_loaded_or_attempted() {
     }
 }
 
+/// A continued Claude session's file starts with the history it inherited,
+/// still under the earlier session's ID, and switches to its own ID only
+/// later -- past the 64 KiB identity head on a real transcript. Observe must
+/// attribute the file to its own session and record only its own loads: the
+/// inherited ones belong to the earlier session's transcript.
+#[test]
+fn observe_boundary_continued_session_records_only_its_own_loads() {
+    for padded in [false, true] {
+        let fixture = ObserveBoundaryFixture::new();
+        fixture.skill("workspace/.claude/skills", "review");
+        let (parent, own) = ("native-parent", "native-continued");
+        let path = fixture.root.join(format!("workspace/{own}.jsonl"));
+        let skill_call = |session: &str, request: &str, prefix: &str| {
+            [
+                serde_json::json!({"type":"user","uuid":request,"sessionId":session,
+                    "parentUuid":if prefix == "inherited" { serde_json::Value::Null }
+                        else { serde_json::json!("inherited-result") },
+                    "message":{"role":"user","content":"Review code"}}),
+                serde_json::json!({"type":"assistant","uuid":format!("{prefix}-call"),
+                    "parentUuid":request,"sessionId":session,
+                    "message":{"id":format!("msg-{prefix}"),"role":"assistant","content":[
+                        {"type":"tool_use","id":format!("{prefix}-skill"),"name":"Skill",
+                         "input":{"skill":"review"}}]}}),
+                serde_json::json!({"type":"user","uuid":format!("{prefix}-result"),
+                    "parentUuid":format!("{prefix}-call"),"sessionId":session,
+                    "toolUseResult":{"success":true,"commandName":"review"},
+                    "message":{"role":"user","content":[
+                        {"type":"tool_result","tool_use_id":format!("{prefix}-skill"),
+                         "content":"Launching skill: review"}]}}),
+            ]
+        };
+        let mut records = vec![
+            serde_json::json!({"type":"bridge-session","sessionId":parent}),
+            serde_json::json!({"cwd":fixture.root.join("workspace"),"sessionId":parent}),
+        ];
+        records.extend(skill_call(parent, "inherited-request", "inherited"));
+        if padded {
+            // Harness records without a uuid push the file's own records out
+            // of the identity head, as a long inherited history does.
+            let pad = "x".repeat(1024);
+            records
+                .extend((0..80).map(
+                    |_| serde_json::json!({"type":"cost-state","sessionId":parent,"pad":pad}),
+                ));
+        }
+        records.extend(skill_call(own, "own-request", "own"));
+        let lines = records.iter().map(ToString::to_string).collect::<Vec<_>>();
+        fs::write(&path, lines.join("\n") + "\n").unwrap();
+        assert_eq!(
+            fs::metadata(&path).unwrap().len() > 64 * 1024,
+            padded,
+            "the padded case must push the file's own records past the head"
+        );
+        let output = fixture
+            .command()
+            .args(["observe", "--transcript"])
+            .arg(&path)
+            .args(["--harness", "claude_code", "--dir"])
+            .arg(fixture.root.join("ledger"))
+            .arg("--json")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "padded={padded}: {}",
+            String::from_utf8_lossy(&output.stdout)
+        );
+        let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(value["session_id"], own, "padded={padded}");
+        assert_eq!(value["observations_recorded"], 1, "padded={padded}");
+        let connection = Connection::open(fixture.root.join("ledger").join(LEDGER_FILE)).unwrap();
+        let (session, key, state): (String, String, String) = connection
+            .query_row(
+                "SELECT session_id, source_event_key, evidence_state FROM observations",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(session, own, "padded={padded}");
+        assert!(key.contains(":own-call:"), "padded={padded}: {key}");
+        assert_eq!(state, "loaded", "padded={padded}");
+    }
+}
+
+/// A file whose records all carry another session's ID never recorded
+/// anything of its own; it cannot be attributed to the name it was given.
+#[test]
+fn observe_boundary_only_inherited_history_has_no_session_identity() {
+    let fixture = ObserveBoundaryFixture::new();
+    fixture.skill("workspace/.claude/skills", "review");
+    let path = fixture.root.join("workspace/native-renamed.jsonl");
+    let pad = "x".repeat(1024);
+    let mut records =
+        vec![serde_json::json!({"cwd":fixture.root.join("workspace"),"sessionId":"native-parent"})];
+    records.extend(
+        (0..80).map(
+            |_| serde_json::json!({"type":"cost-state","sessionId":"native-parent","pad":pad}),
+        ),
+    );
+    let lines = records.iter().map(ToString::to_string).collect::<Vec<_>>();
+    fs::write(&path, lines.join("\n") + "\n").unwrap();
+    let output = fixture
+        .command()
+        .args(["observe", "--transcript"])
+        .arg(&path)
+        .args(["--harness", "claude_code", "--dir"])
+        .arg(fixture.root.join("ledger"))
+        .arg("--json")
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(3));
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["error"]["kind"], "missing-session");
+    assert_eq!(fixture.counts().0, 0);
+}
+
 /// Real Claude sessions are not linear: concurrent tool calls of one response
 /// branch off as siblings, harness records (attachments) sit in the parent
 /// chain, and subagents write sidechain records off the main chain. The hook
