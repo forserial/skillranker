@@ -27,8 +27,8 @@ use std::io::{Read, Seek, SeekFrom};
 use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 
-// Identity validation and attribution changed: rebuild prior cursor state.
-pub const PARSER_VERSION: u32 = 3;
+// Tool result status now reads Claude's record-level outcome: rebuild prior cursor state.
+pub const PARSER_VERSION: u32 = 4;
 
 /// How far an observation read rewinds behind its own watermark.
 ///
@@ -855,7 +855,7 @@ fn event_from_value(value: &Value) -> Option<NormalizedEvent> {
         });
     }
 
-    let parsed = match parse_native_content(object, default_role, default_kind) {
+    let mut parsed = match parse_native_content(object, default_role, default_kind) {
         Some(parsed) => parsed,
         // System-typed records without message content are harness metadata
         // (turn duration, API status, boundaries): keep an empty system
@@ -885,6 +885,11 @@ fn event_from_value(value: &Value) -> Option<NormalizedEvent> {
         },
         None => return None,
     };
+    if parsed.kind == EventKind::ToolResult
+        && let Some(tool) = parsed.tool.as_mut()
+    {
+        tool.status = with_record_outcome(tool.status, object);
+    }
     // A user message the user did not submit is context, never the request.
     let role = if parsed.role == Role::User
         && parsed.kind == EventKind::Message
@@ -950,6 +955,27 @@ fn injected_by_provenance(object: &serde_json::Map<String, Value>) -> bool {
         || flagged("isCompactSummary")
         || object.get("promptSource").and_then(Value::as_str) == Some("system")
         || origin.is_some_and(|kind| kind != "human")
+}
+
+/// Claude often omits `is_error` on a successful result block, but some tools
+/// (Skill among them) record an explicit `toolUseResult.success` boolean on the
+/// record. That boolean settles an unknown block status. It never overrides an
+/// explicit block flag; when the two disagree the outcome is unknown, because
+/// neither side can be trusted over the other. Anything else is not evidence.
+fn with_record_outcome(status: ToolStatus, object: &serde_json::Map<String, Value>) -> ToolStatus {
+    let success = object
+        .get("toolUseResult")
+        .and_then(Value::as_object)
+        .and_then(|outcome| outcome.get("success"))
+        .and_then(Value::as_bool);
+    match (status, success) {
+        (ToolStatus::Unknown, Some(true)) => ToolStatus::Succeeded,
+        (ToolStatus::Unknown, Some(false)) => ToolStatus::Failed,
+        (ToolStatus::Succeeded, Some(false)) | (ToolStatus::Failed, Some(true)) => {
+            ToolStatus::Unknown
+        }
+        (status, _) => status,
+    }
 }
 
 fn map_native_type(native_type: &str) -> (Role, EventKind) {

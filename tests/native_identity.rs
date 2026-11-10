@@ -30,6 +30,51 @@ fn malformed_native_identities_are_not_silently_missing() {
     }
 }
 
+/// Claude omits `is_error` on many successful result blocks; the record-level
+/// `toolUseResult.success` boolean settles only an unknown block status.
+#[test]
+fn record_level_outcome_settles_only_an_unknown_result_status() {
+    use skillranker::context::ToolStatus;
+    let status = |is_error: Option<bool>, outcome: Option<serde_json::Value>| {
+        let mut block = json!({"type":"tool_result","tool_use_id":"call-1",
+            "content":"Launching skill: review"});
+        if let Some(flag) = is_error {
+            block["is_error"] = json!(flag);
+        }
+        let mut record = json!({"type":"user","uuid":"result","parentUuid":"call",
+            "message":{"role":"user","content":[block]}});
+        if let Some(outcome) = outcome {
+            record["toolUseResult"] = outcome;
+        }
+        parse(record).unwrap().tool.unwrap().status
+    };
+    let success = |value: bool| Some(json!({"success": value, "commandName": "review"}));
+    // The real Claude Skill shape: no block flag, explicit record outcome.
+    assert_eq!(status(None, success(true)), ToolStatus::Succeeded);
+    assert_eq!(status(None, success(false)), ToolStatus::Failed);
+    // No usable record outcome leaves the block's own evidence alone.
+    assert_eq!(status(None, None), ToolStatus::Unknown);
+    assert_eq!(
+        status(None, Some(json!("Error: tool failed"))),
+        ToolStatus::Unknown
+    );
+    assert_eq!(
+        status(None, Some(json!({"stdout":"ok"}))),
+        ToolStatus::Unknown
+    );
+    assert_eq!(
+        status(None, Some(json!({"success":"true"}))),
+        ToolStatus::Unknown
+    );
+    // An explicit block flag is kept when the record agrees or is silent.
+    assert_eq!(status(Some(false), success(true)), ToolStatus::Succeeded);
+    assert_eq!(status(Some(true), success(false)), ToolStatus::Failed);
+    assert_eq!(status(Some(true), None), ToolStatus::Failed);
+    // Conflicting evidence is neither success nor failure.
+    assert_eq!(status(Some(true), success(true)), ToolStatus::Unknown);
+    assert_eq!(status(Some(false), success(false)), ToolStatus::Unknown);
+}
+
 #[test]
 fn branch_and_agent_selectors_resolve_the_declared_native_leaf() {
     let a = parse(

@@ -794,6 +794,64 @@ fn observe_boundary_native_namespace_cannot_authorize_an_unresolved_fork() {
     }
 }
 
+/// A real Claude Skill result carries no `is_error`; its record-level
+/// `toolUseResult.success` is the evidence. Success is a load; an explicit
+/// failure, or no outcome at all, stays an attempt.
+#[test]
+fn observe_boundary_claude_skill_outcome_decides_loaded_or_attempted() {
+    for (outcome, expected) in [
+        (Some(true), "loaded"),
+        (Some(false), "attempted"),
+        (None, "attempted"),
+    ] {
+        let fixture = ObserveBoundaryFixture::new();
+        fixture.skill("workspace/.claude/skills", "review");
+        let path = fixture.root.join("workspace/native-skill.jsonl");
+        let session = "native-skill";
+        let mut result = serde_json::json!({"type":"user","uuid":"result","parentUuid":"call",
+            "sessionId":session,"message":{"role":"user","content":[
+                {"type":"tool_result","tool_use_id":"skill-call",
+                 "content":"Launching skill: review"}]}});
+        if let Some(success) = outcome {
+            result["toolUseResult"] =
+                serde_json::json!({"success": success, "commandName": "review"});
+        }
+        let records = [
+            serde_json::json!({"cwd":fixture.root.join("workspace"),"sessionId":session}),
+            serde_json::json!({"type":"user","uuid":"request","sessionId":session,
+                "message":{"role":"user","content":"Review code"}}),
+            serde_json::json!({"type":"assistant","uuid":"call","parentUuid":"request",
+                "sessionId":session,"message":{"id":"msg-1","role":"assistant","content":[
+                    {"type":"tool_use","id":"skill-call","name":"Skill",
+                     "input":{"skill":"review"}}]}}),
+            result,
+        ];
+        let lines = records.iter().map(ToString::to_string).collect::<Vec<_>>();
+        fs::write(&path, lines.join("\n") + "\n").unwrap();
+        let output = fixture
+            .command()
+            .args(["observe", "--transcript"])
+            .arg(&path)
+            .args(["--harness", "claude_code", "--dir"])
+            .arg(fixture.root.join("ledger"))
+            .arg("--json")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{outcome:?}: {}",
+            String::from_utf8_lossy(&output.stdout)
+        );
+        let connection = Connection::open(fixture.root.join("ledger").join(LEDGER_FILE)).unwrap();
+        let state: String = connection
+            .query_row("SELECT evidence_state FROM observations", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(state, expected, "{outcome:?}");
+    }
+}
+
 /// Real Claude sessions are not linear: concurrent tool calls of one response
 /// branch off as siblings, harness records (attachments) sit in the parent
 /// chain, and subagents write sidechain records off the main chain. The hook
